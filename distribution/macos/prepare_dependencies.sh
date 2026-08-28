@@ -31,7 +31,11 @@ if [[ ! -d "$deps/SDL3.framework" ]]; then
     mkdir -p "$mount"
     hdiutil attach -nobrowse -readonly -mountpoint "$mount" "$sdl_dmg" >/dev/null
     trap 'hdiutil detach "$mount" >/dev/null 2>&1 || true' EXIT
-    framework="$(find "$mount" -name SDL3.framework -type d -maxdepth 3 | head -n 1)"
+    framework="$mount/SDL3.framework"
+    if [[ ! -d "$framework" ]]; then
+        framework="$(find "$mount" -maxdepth 3 -name SDL3.framework -type d \
+            ! -path '*.xcframework/*' | head -n 1)"
+    fi
     [[ -n "$framework" ]] || { echo 'SDL3.framework was not found in the DMG' >&2; exit 1; }
     cp -R "$framework" "$deps/SDL3.framework"
     hdiutil detach "$mount" >/dev/null
