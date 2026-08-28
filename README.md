@@ -12,6 +12,11 @@ configuration, and other player-owned files are never part of the update
 manifest. Release building, publishing, rollback behavior, and smoke tests are documented in
 [`docs/distribution.md`](docs/distribution.md).
 
+Player installations default to
+`%LOCALAPPDATA%\Programs\Minecraft D Edition` and contain no GitHub publishing
+access. Development and releases use the separate Admin checkout at
+`C:\Minecraft D Edition_Admin`.
+
 ## Layout
 
 - `assets/minecraft/` mirrors Minecraft Java Edition's client-resource namespace.

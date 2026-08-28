@@ -26,6 +26,17 @@ The updater never manages `saves/`, `screenshots/`, `data/options.txt`,
 
 If GitHub is temporarily unreachable, the installed game starts normally. A
 failed download or hash mismatch is applied to nothing and displays an error.
+The default player installation is
+`%LOCALAPPDATA%\Programs\Minecraft D Edition`. It contains no Git checkout,
+GitHub credentials, source code, or release-publishing tools.
+
+## Admin development checkout
+
+Development and publishing use a separate checkout conventionally located at
+`C:\Minecraft D Edition_Admin`. This is the folder to open in an editor or
+Codex when changing the game. It holds the `.git` directory and publishing
+scripts; player installations do not. GitHub CLI authentication belongs to the
+Windows developer account and is never copied into an installer or update.
 
 ## Build a release
 
@@ -35,11 +46,10 @@ Install Inno Setup 6, then run:
 .\tools\build_distribution.ps1 -Version 'Test-YYYY.MM.DD.N'
 ```
 
-This performs a release game build and produces:
+This performs a release game build, marks the shipped executable as a Windows
+GUI application so it does not open a terminal, and produces:
 
 - `dist/Minecraft.D.Edition.Setup.exe`, the small GitHub-backed web installer;
-- `dist/Minecraft.D.Edition.OfflineSetup.exe`, an optional full offline installer;
-- `dist/Minecraft.D.Edition.Portable.zip` for portable installs;
 - `dist/updates/mde-update-pointer-v1.txt` for fast version checks;
 - `dist/updates/mde-update-manifest-v1.txt` with per-file SHA-256 hashes; and
 - content-addressed `dist/updates/mde-shard-*.zip` differential payloads.
@@ -50,6 +60,9 @@ executable currently costs about 4 MB to update. Unchanged large textures and
 sounds are not downloaded.
 Give every published build a new version string; reusing a version prevents
 installed launchers from recognizing the change.
+
+Pass `-BuildOfflineInstaller` and/or `-BuildPortable` only when those optional
+packages are needed. They are deliberately omitted from normal public builds.
 
 Run both distribution smoke tests before publishing:
 
@@ -71,9 +84,10 @@ gh auth login
 .\tools\publish_test_release.ps1
 ```
 
-The publisher uploads all new shards first, then the manifest, the tiny pointer,
-and finally the public web installer. This order prevents new installations
-from observing an incomplete release. Obsolete content-addressed shards and the
+The publisher reuses matching content-addressed shards already on GitHub. It
+uploads only changed shards first, then the manifest, the tiny pointer, and
+finally the public web installer. This order prevents new installations from
+observing an incomplete release. Obsolete content-addressed shards and the
 legacy monolithic ZIP are removed only after the new feed is live.
 
 GitHub CLI must be installed and authenticated on any workstation expected to

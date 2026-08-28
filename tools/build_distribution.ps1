@@ -3,7 +3,9 @@ param(
     [string]$Version = (Get-Date).ToUniversalTime().ToString('yyyy.MM.dd.HHmmss'),
     [ValidateRange(1, 512)][int]$ChunkCount = 128,
     [switch]$SkipGameBuild,
-    [switch]$SkipInstaller
+    [switch]$SkipInstaller,
+    [switch]$BuildPortable,
+    [switch]$BuildOfflineInstaller
 )
 
 $ErrorActionPreference = 'Stop'
@@ -20,6 +22,11 @@ if (-not $SkipGameBuild) {
     }
     finally { Pop-Location }
 }
+
+# Release copies are GUI-subsystem applications. Development builds remain
+# console applications so command-line diagnostics still work in Admin.
+& (Join-Path $ProjectRoot 'tools\Set-MdeWindowsGuiSubsystem.ps1') `
+    -Path (Join-Path $ProjectRoot 'Minecraft D Edition.exe')
 
 & (Join-Path $ProjectRoot 'updater\build_launcher.ps1') -ProjectRoot $ProjectRoot
 
@@ -59,10 +66,12 @@ Copy-Item -LiteralPath (Join-Path $ProjectRoot 'data\eos.example.json') `
 Copy-Item -LiteralPath (Join-Path $updates 'mde-update-manifest-v1.txt') `
     -Destination (Join-Path $runtime '.mde-installed-manifest.txt')
 
-Add-Type -AssemblyName System.IO.Compression.FileSystem
-$portable = Join-Path $dist 'Minecraft.D.Edition.Portable.zip'
-[IO.Compression.ZipFile]::CreateFromDirectory($runtime, $portable,
-    [IO.Compression.CompressionLevel]::Optimal, $false)
+if ($BuildPortable) {
+    Add-Type -AssemblyName System.IO.Compression.FileSystem
+    $portable = Join-Path $dist 'Minecraft.D.Edition.Portable.zip'
+    [IO.Compression.ZipFile]::CreateFromDirectory($runtime, $portable,
+        [IO.Compression.CompressionLevel]::Optimal, $false)
+}
 
 if (-not $SkipInstaller) {
     $isccCommand = Get-Command iscc.exe -ErrorAction SilentlyContinue
@@ -78,8 +87,10 @@ if (-not $SkipInstaller) {
         throw 'Inno Setup 6 is required to build the installer. Use -SkipInstaller only for update-payload testing.'
     }
     $env:MDE_VERSION = $Version
-    & $isccPath (Join-Path $ProjectRoot 'installer\MinecraftDEdition.iss')
-    if ($LASTEXITCODE -ne 0) { throw "Installer build failed with exit code $LASTEXITCODE" }
+    if ($BuildOfflineInstaller) {
+        & $isccPath (Join-Path $ProjectRoot 'installer\MinecraftDEdition.iss')
+        if ($LASTEXITCODE -ne 0) { throw "Offline installer build failed with exit code $LASTEXITCODE" }
+    }
     & $isccPath (Join-Path $ProjectRoot 'installer\MinecraftDEditionWeb.iss')
     if ($LASTEXITCODE -ne 0) { throw "Web installer build failed with exit code $LASTEXITCODE" }
 }

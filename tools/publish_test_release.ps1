@@ -25,11 +25,23 @@ $repository = 'MinecraftDEdition/Minecraft-D-Edition'
 $newShards = @(Get-ChildItem -LiteralPath $updates -Filter 'mde-shard-*.zip' -File)
 if ($newShards.Count -eq 0) { throw 'No update shards were produced.' }
 
+$existingJson = & gh api "repos/$repository/releases/tags/$Tag"
+if ($LASTEXITCODE -ne 0) { throw 'Could not inspect the existing release assets.' }
+$existing = $existingJson | ConvertFrom-Json
+$existingNames = [Collections.Generic.HashSet[string]]::new(
+    [StringComparer]::OrdinalIgnoreCase)
+foreach ($asset in $existing.assets) { [void]$existingNames.Add($asset.name) }
+$shardsToUpload = @($newShards | Where-Object {
+    -not $existingNames.Contains($_.Name)
+})
+
 # Upload content-addressed shards first. The pointer is deliberately after the
 # manifest, and the public web installer is last, so new users cannot observe
 # references to absent assets.
-foreach ($asset in $newShards) {
-    & gh release upload $Tag $asset.FullName --repo $repository --clobber
+Write-Host ("Reusing {0} unchanged shards; uploading {1} changed shards." -f `
+    ($newShards.Count - $shardsToUpload.Count), $shardsToUpload.Count)
+foreach ($asset in $shardsToUpload) {
+    & gh release upload $Tag $asset.FullName --repo $repository
     if ($LASTEXITCODE -ne 0) { throw "Failed to upload $($asset.Name)" }
 }
 & gh release upload $Tag $manifest --repo $repository --clobber
