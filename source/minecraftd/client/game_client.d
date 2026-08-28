@@ -1104,7 +1104,10 @@ private:
         }
         if(endpoint.localPort!=0&&endpoint.eosUserId==eos.localUserId())
             return new GameConnection(playerName,"127.0.0.1",endpoint.localPort);
-        return new GameConnection(eos, playerName, endpoint);
+        version (MCD_EOS)
+            return new GameConnection(eos, playerName, endpoint);
+        else
+            throw new Exception("EOS multiplayer is not included in this build");
     }
 
     static void launchLocalClients(int requestedCount)

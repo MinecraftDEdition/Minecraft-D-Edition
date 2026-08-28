@@ -97,12 +97,18 @@ final class GameWindow
         return true;
     }
 
-    bool down(int key) const { return mcdPlatformKeyDown(context, key) != 0; }
+    bool down(int key) const
+    {
+        return mcdPlatformKeyDown(cast(void*) context, key) != 0;
+    }
     bool pressed(int key) const
     {
-        return mcdPlatformKeyPressed(context, key) != 0;
+        return mcdPlatformKeyPressed(cast(void*) context, key) != 0;
     }
-    int firstPressedKey() const { return mcdPlatformFirstPressedKey(context); }
+    int firstPressedKey() const
+    {
+        return mcdPlatformFirstPressedKey(cast(void*) context);
+    }
     int consumeWheelSteps() { return mcdPlatformConsumeWheel(context); }
 
     wstring consumeTextInput()
@@ -165,7 +171,7 @@ final class GameWindow
 
     bool shortcutDown() const
     {
-        return mcdPlatformShortcutDown(context) != 0;
+        return mcdPlatformShortcutDown(cast(void*) context) != 0;
     }
 
 private:
@@ -174,4 +180,3 @@ private:
         mcdPlatformWindowSize(context, &width, &height);
     }
 }
-
