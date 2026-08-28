@@ -59,6 +59,25 @@ Copy-Item -LiteralPath (Join-Path $ProjectRoot 'data\minecraft') `
     -Destination (Join-Path $runtime 'data') -Recurse
 Copy-Item -LiteralPath (Join-Path $ProjectRoot 'data\eos.example.json') `
     -Destination (Join-Path $runtime 'data\eos.example.json')
+$eosLocalConfig = Join-Path $ProjectRoot 'data\eos.local.json'
+if (-not (Test-Path -LiteralPath $eosLocalConfig -PathType Leaf)) {
+    throw 'A private data\eos.local.json is required to build a multiplayer release.'
+}
+try {
+    $eosConfig = Get-Content -LiteralPath $eosLocalConfig -Raw | ConvertFrom-Json
+    foreach ($field in @('productId','sandboxId','deploymentId','clientId','clientSecret')) {
+        if ([String]::IsNullOrWhiteSpace([string]$eosConfig.$field)) {
+            throw "EOS configuration is missing $field."
+        }
+    }
+}
+catch {
+    throw "The private EOS configuration is invalid: $($_.Exception.Message)"
+}
+# The raw developer file remains ignored by Git. A release-only client copy is
+# managed by the updater, while eos.local.json remains an optional local override.
+Copy-Item -LiteralPath $eosLocalConfig `
+    -Destination (Join-Path $runtime 'data\eos.client.json')
 
 # Deflate output differs between Windows PowerShell's .NET Framework and modern
 # .NET. Always use PowerShell 7 so unchanged content keeps the same shard hash.

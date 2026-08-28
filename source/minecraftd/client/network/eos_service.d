@@ -69,10 +69,14 @@ final class EosService
     {
         try
         {
-            const configPath = buildPath(getcwd(), "data", "eos.local.json");
+            const localConfigPath = buildPath(getcwd(), "data", "eos.local.json");
+            const clientConfigPath = buildPath(getcwd(), "data", "eos.client.json");
+            const configPath = exists(localConfigPath)
+                ? localConfigPath : clientConfigPath;
             if (!exists(configPath))
             {
-                startupError = "EOS is not configured (data/eos.local.json is missing)";
+                startupError = "EOS is not configured (data/eos.local.json and "
+                    ~ "data/eos.client.json are missing)";
                 return;
             }
             const root = parseJSON(readText(configPath));

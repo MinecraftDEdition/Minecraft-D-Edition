@@ -23,6 +23,9 @@ the launcher, which obtains the real runtime files from GitHub Releases. It:
 The updater never manages `saves/`, `screenshots/`, `data/options.txt`,
 `data/eos.local.json`, `data/eos-cache/`, `data/server_entry.txt`, or
 `data/window_state.txt`. Uninstalling also leaves player-created files behind.
+The release-managed `data/eos.client.json` supplies restricted EOS client
+configuration to ordinary installations; an Admin's ignored `eos.local.json`
+overrides it for development.
 
 If GitHub is temporarily unreachable, the installed game starts normally. A
 failed download or hash mismatch is applied to nothing and displays an error.

@@ -28,6 +28,7 @@ third_party/eos/EOS-SDK-*/
 EOSSDK-Win64-Shipping.dll
 native/eos_abi_bridge.obj
 data/eos.local.json
+data/eos.client.json
 data/eos-cache/
 data/options.txt
 data/server_entry.txt

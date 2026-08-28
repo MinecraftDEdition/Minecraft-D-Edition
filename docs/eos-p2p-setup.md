@@ -45,6 +45,14 @@ relay infrastructure rather than a direct or accidental LAN route.
 Do not paste product credentials into chat, screenshots, documentation, or
 source files. `data/eos.local.json` is intentionally ignored by Git.
 
+Release builds validate that private Admin file and copy it only into the
+generated runtime as `data/eos.client.json`. The game prefers an untracked
+`eos.local.json` when one exists, then falls back to the packaged client
+configuration. Neither credential file is committed to Git source history.
+Because a client configuration shipped to players can be recovered, its EOS
+client policy must grant only the minimum Connect and P2P actions required by
+the game.
+
 ## Implemented player flow
 
 1. On first online use, the game authenticates the local player through EOS
