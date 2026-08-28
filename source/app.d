@@ -5,7 +5,6 @@ version (Windows):
 import core.sys.windows.windows : MessageBoxW, MB_OK, MB_ICONERROR;
 import core.thread : Thread;
 import core.time : msecs;
-import std.stdio : stderr, stdout;
 import std.file : write;
 import std.utf : toUTF16z;
 
@@ -28,10 +27,11 @@ int main(string[] arguments)
             }
             if (eos.ready)
             {
-                stdout.writeln("EOS Connect login succeeded; P2P is ready.");
+                write("eos-smoke-test.log",
+                    "EOS Connect login succeeded; P2P is ready.\n");
                 return 0;
             }
-            stderr.writeln(eos.error);
+            write("eos-smoke-test.log", eos.error ~ "\n");
             return 1;
         }
         auto client = new GameClient();
@@ -54,7 +54,6 @@ int main(string[] arguments)
     catch (Throwable failure)
     {
         const message = failure.toString();
-        stderr.writeln(message);
         // Keep a persistent diagnostic for failures launched outside a console.
         write("last-error.log", message);
         MessageBoxW(null, message.toUTF16z(), "Minecraft D Edition"w.ptr, MB_OK | MB_ICONERROR);
