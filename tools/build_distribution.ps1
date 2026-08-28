@@ -60,9 +60,19 @@ Copy-Item -LiteralPath (Join-Path $ProjectRoot 'data\minecraft') `
 Copy-Item -LiteralPath (Join-Path $ProjectRoot 'data\eos.example.json') `
     -Destination (Join-Path $runtime 'data\eos.example.json')
 
-& (Join-Path $ProjectRoot 'tools\New-MdeUpdatePackage.ps1') `
+# Deflate output differs between Windows PowerShell's .NET Framework and modern
+# .NET. Always use PowerShell 7 so unchanged content keeps the same shard hash.
+$pwshCommand = Get-Command pwsh.exe -ErrorAction SilentlyContinue
+if (-not $pwshCommand) {
+    throw 'PowerShell 7 (pwsh.exe) is required for stable differential release shards.'
+}
+& $pwshCommand.Source -NoProfile -ExecutionPolicy Bypass `
+    -File (Join-Path $ProjectRoot 'tools\New-MdeUpdatePackage.ps1') `
     -RuntimeRoot $runtime -OutputRoot $updates -Version $Version `
     -ChunkCount $ChunkCount
+if ($LASTEXITCODE -ne 0) {
+    throw "Update-package build failed with exit code $LASTEXITCODE"
+}
 Copy-Item -LiteralPath (Join-Path $updates 'mde-update-manifest-v1.txt') `
     -Destination (Join-Path $runtime '.mde-installed-manifest.txt')
 

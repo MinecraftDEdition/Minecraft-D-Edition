@@ -40,7 +40,7 @@ Windows developer account and is never copied into an installer or update.
 
 ## Build a release
 
-Install Inno Setup 6, then run:
+Install PowerShell 7 and Inno Setup 6, then run:
 
 ```powershell
 .\tools\build_distribution.ps1 -Version 'Test-YYYY.MM.DD.N'
@@ -57,7 +57,9 @@ GUI application so it does not open a terminal, and produces:
 The public release publisher uploads the web installer and update feed, not the
 offline or portable packages. The 128-way stable path sharding means a changed
 executable currently costs about 4 MB to update. Unchanged large textures and
-sounds are not downloaded.
+sounds are not downloaded. The build script deliberately runs shard compression
+under PowerShell 7 so rebuilding identical files produces reusable archive
+hashes instead of a false full update.
 Give every published build a new version string; reusing a version prevents
 installed launchers from recognizing the change.
 
