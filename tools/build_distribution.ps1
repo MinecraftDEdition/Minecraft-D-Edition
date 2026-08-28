@@ -8,6 +8,8 @@ param(
     [switch]$BuildOfflineInstaller
 )
 
+# Windows distribution entry point. macOS and Linux packages have independent
+# build/sign/update pipelines under distribution/<platform>.
 $ErrorActionPreference = 'Stop'
 $ProjectRoot = [IO.Path]::GetFullPath($ProjectRoot).TrimEnd('\')
 $dist = Join-Path $ProjectRoot 'dist'
@@ -28,7 +30,8 @@ if (-not $SkipGameBuild) {
 & (Join-Path $ProjectRoot 'tools\Set-MdeWindowsGuiSubsystem.ps1') `
     -Path (Join-Path $ProjectRoot 'Minecraft D Edition.exe')
 
-& (Join-Path $ProjectRoot 'updater\build_launcher.ps1') -ProjectRoot $ProjectRoot
+& (Join-Path $ProjectRoot 'distribution\windows\launcher\build_launcher.ps1') `
+    -ProjectRoot $ProjectRoot
 
 if (Test-Path -LiteralPath $dist) {
     $resolvedDist = [IO.Path]::GetFullPath($dist)
@@ -54,6 +57,7 @@ foreach ($relative in $requiredFiles) {
 }
 
 Copy-Item -LiteralPath (Join-Path $ProjectRoot 'assets') -Destination $runtime -Recurse
+Copy-Item -LiteralPath (Join-Path $ProjectRoot 'shaders') -Destination $runtime -Recurse
 New-Item -ItemType Directory -Path (Join-Path $runtime 'data') | Out-Null
 Copy-Item -LiteralPath (Join-Path $ProjectRoot 'data\minecraft') `
     -Destination (Join-Path $runtime 'data') -Recurse
@@ -117,10 +121,12 @@ if (-not $SkipInstaller) {
     }
     $env:MDE_VERSION = $Version
     if ($BuildOfflineInstaller) {
-        & $isccPath (Join-Path $ProjectRoot 'installer\MinecraftDEdition.iss')
+        & $isccPath (Join-Path $ProjectRoot `
+            'distribution\windows\installer\MinecraftDEdition.iss')
         if ($LASTEXITCODE -ne 0) { throw "Offline installer build failed with exit code $LASTEXITCODE" }
     }
-    & $isccPath (Join-Path $ProjectRoot 'installer\MinecraftDEditionWeb.iss')
+    & $isccPath (Join-Path $ProjectRoot `
+        'distribution\windows\installer\MinecraftDEditionWeb.iss')
     if ($LASTEXITCODE -ne 0) { throw "Web installer build failed with exit code $LASTEXITCODE" }
 }
 

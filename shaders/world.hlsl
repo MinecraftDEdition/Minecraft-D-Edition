@@ -1,3 +1,25 @@
+#ifdef VULKAN
+struct VulkanConstants
+{
+    float4 row0;
+    float4 row1;
+    float4 row2;
+    float4 row3;
+    float4 fogColor;
+    float4 fogCameraAndEnabled;
+    float4 fogDistances;
+};
+[[vk::push_constant]] VulkanConstants gConstants;
+#define gRow0 gConstants.row0
+#define gRow1 gConstants.row1
+#define gRow2 gConstants.row2
+#define gRow3 gConstants.row3
+#define gFogColor gConstants.fogColor
+#define gFogCameraAndEnabled gConstants.fogCameraAndEnabled
+#define gFogDistances gConstants.fogDistances
+[[vk::binding(0, 0)]] Texture2D gTexture;
+[[vk::binding(1, 0)]] SamplerState gSampler;
+#else
 cbuffer Transform : register(b0)
 {
     float4 gRow0;
@@ -15,6 +37,7 @@ cbuffer Fog : register(b1)
 
 Texture2D gTexture : register(t0);
 SamplerState gSampler : register(s0);
+#endif
 
 struct VertexInput
 {

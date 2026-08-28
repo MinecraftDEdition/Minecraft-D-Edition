@@ -1,14 +1,12 @@
 module minecraftd.client.game_client;
 
-version (Windows):
-
-import core.sys.windows.com : CoInitializeEx, CoUninitialize, COINIT_MULTITHREADED;
-import core.sys.windows.windows;
-import std.file : getcwd;
+version (Windows)
+    import core.sys.windows.com : CoInitializeEx, CoUninitialize,
+        COINIT_MULTITHREADED;
 import std.file : thisExePath;
 import std.math : fmin;
 import std.conv : to;
-import std.process : Config, spawnProcess;
+import std.process : Config, spawnProcess, thisProcessID;
 
 import minecraftd.client.player.local_player : LocalPlayer;
 import minecraftd.client.chat.chat_state : ChatState;
@@ -18,6 +16,7 @@ import minecraftd.client.network.eos_service : EosHostBridge, EosService,
     EosStatus;
 import minecraftd.client.network.multiplayer_client : MultiplayerClient;
 import minecraftd.client.render.game_renderer : GameRenderer;
+import minecraftd.client.render.graphics_device : GraphicsApi;
 import minecraftd.client.render.title_screen_renderer : TitleAction;
 import minecraftd.client.render.title_screen_renderer : MultiplayerMenuAction;
 import minecraftd.client.render.title_screen_renderer : WorldMenuAction;
@@ -30,7 +29,11 @@ import minecraftd.client.menu.pause_menu : PauseAction, PauseMenuState,
 import minecraftd.client.menu.death_screen : DeathAction, DeathScreenState;
 import minecraftd.client.menu.options_menu : OptionsAction, OptionsMenuState;
 import minecraftd.client.menu.inventory_menu:InventoryMenuState;
-import minecraftd.platform.windows.window : CursorShape, GameWindow;
+import minecraftd.platform.clock : monotonicMilliseconds, monotonicSeconds,
+    sleepMilliseconds;
+import minecraftd.platform.input;
+import minecraftd.platform.paths : platformPaths;
+import minecraftd.platform.window : CursorShape, GameWindow;
 import minecraftd.server.integrated_game_server : IntegratedGameServer;
 import minecraftd.world.world : World;
 import minecraftd.world.world_settings : WorldEntry, WorldType,
@@ -42,14 +45,18 @@ import std.socket : SocketOSException;
 
 final class GameClient
 {
-    void run(int localTestIndex = 0)
+    void run(int localTestIndex = 0, string rendererOverride = "")
     {
-        const comResult = CoInitializeEx(null, COINIT_MULTITHREADED);
-        if (FAILED(comResult))
-            throw new Exception("COM initialization failed");
-        scope (exit) CoUninitialize();
+        version (Windows)
+        {
+            const comResult = CoInitializeEx(null, COINIT_MULTITHREADED);
+            if (comResult < 0)
+                throw new Exception("COM initialization failed");
+            scope (exit) CoUninitialize();
+        }
 
-        auto options = new OptionsMenuState(getcwd());
+        const paths = platformPaths();
+        auto options = new OptionsMenuState(paths.userData);
         scope (exit) destroy(options);
         auto window = new GameWindow("Minecraft: D Edition",
             GameWindow.defaultWidth, GameWindow.defaultHeight, localTestIndex);
@@ -60,8 +67,13 @@ final class GameClient
         scope (exit) destroy(world);
         auto player = new LocalPlayer();
         scope (exit) destroy(player);
+        GraphicsApi graphicsApi = options.integer("graphicsApi", 0) == 1
+            ? GraphicsApi.vulkan : GraphicsApi.directX12;
+        version (OSX) graphicsApi = GraphicsApi.vulkan;
+        if (rendererOverride == "vulkan") graphicsApi = GraphicsApi.vulkan;
+        else if (rendererOverride == "dx12") graphicsApi = GraphicsApi.directX12;
         auto renderer = new GameRenderer(window.handle, window.width,
-            window.height, getcwd(), world, options);
+            window.height, paths.resources, world, options, graphicsApi);
         scope (exit) destroy(renderer);
         auto eos = new EosService("Steve");
         scope (exit) destroy(eos);
@@ -80,7 +92,7 @@ final class GameClient
         connectionEndpoint.valid = true;
         auto serverMenu = new MultiplayerMenuState();
         scope (exit) destroy(serverMenu);
-        auto worldMenu = new WorldMenuState(getcwd());
+        auto worldMenu = new WorldMenuState(paths.userData);
         scope (exit) destroy(worldMenu);
         bool multiplayerScreen = initialSession && localTestIndex > 0;
         initialSession = false;
@@ -137,7 +149,7 @@ final class GameClient
             }
             renderer.tickMenuMusic();
             const cursor = window.cursorPosition();
-            const menuTime = cast(float) GetTickCount() / 1000.0f;
+            const menuTime = cast(float) monotonicMilliseconds() / 1000.0f;
             if (options.active && !options.fromGame)
             {
                 const hovered = renderer.optionsActionAt(cursor.x,cursor.y);
@@ -185,7 +197,7 @@ final class GameClient
                     : (hovered == WorldMenuAction.none ? CursorShape.arrow : CursorShape.hand));
                 worldMenu.insertCharacters(window.consumeTextInput());
                 if (window.pressed(VK_BACK)) worldMenu.backspace();
-                if (window.down(VK_CONTROL) && window.pressed('V'))
+                if (window.shortcutDown() && window.pressed('V'))
                     worldMenu.insertCharacters(window.clipboardText());
                 if (window.pressed(VK_ESCAPE))
                 {
@@ -256,8 +268,8 @@ final class GameClient
                             else
                             {
                                 if (worldMenu.draft.seed == 0)
-                                    worldMenu.draft.seed = cast(long)GetTickCount()
-                                        ^ (cast(long)GetCurrentProcessId() << 32);
+                                    worldMenu.draft.seed = cast(long)monotonicMilliseconds()
+                                        ^ (cast(long)thisProcessID << 32);
                                 const entry = WorldEntry(worldMenu.draft,directory);
                                 startLocalWorld(entry);
                             }
@@ -287,7 +299,7 @@ final class GameClient
                     : (hovered == MultiplayerMenuAction.none
                         ? CursorShape.arrow : CursorShape.hand));
                 serverMenu.insertCharacters(window.consumeTextInput());
-                if (window.down(VK_CONTROL) && window.pressed('V'))
+                if (window.shortcutDown() && window.pressed('V'))
                     serverMenu.paste(window.clipboardText());
                 if (window.pressed(VK_TAB))
                     serverMenu.selectNextField();
@@ -427,10 +439,7 @@ final class GameClient
             if (integratedServer !is null) destroy(integratedServer);
         }
 
-        LARGE_INTEGER frequency;
-        LARGE_INTEGER previous;
-        QueryPerformanceFrequency(&frequency);
-        QueryPerformanceCounter(&previous);
+        double previous = monotonicSeconds();
         double accumulator = 0.0;
         double elapsed = 0.0;
         enum double tickSeconds = 1.0 / 20.0;
@@ -675,7 +684,7 @@ final class GameClient
                                     PlayerActionType.inventoryQuickMove,
                                     cast(ubyte)hovered);
                             else if(button==0&&inventoryMenu.doubleClick(
-                                hovered,button,GetTickCount()))
+                                hovered,button,monotonicMilliseconds()))
                                 multiplayer.requestInventoryAction(
                                     PlayerActionType.inventoryCollect,
                                     cast(ubyte)hovered);
@@ -862,7 +871,7 @@ final class GameClient
             if (controlsActive && jumpPressed
                 && player.gameMode == player.gameMode.creative)
             {
-                const now = GetTickCount();
+                const now = monotonicMilliseconds();
                 if (lastJumpTapMilliseconds != 0
                     && now - lastJumpTapMilliseconds <= 300)
                 {
@@ -872,7 +881,7 @@ final class GameClient
                 else
                     lastJumpTapMilliseconds = now;
             }
-            const mouse = controlsActive ? window.mouseDelta() : POINT(0, 0);
+            const mouse = controlsActive ? window.mouseDelta() : Point(0, 0);
             if (controlsActive)
                 player.look(cast(float) mouse.x * options.mouseSensitivity
                         * (options.invertMouseX ? -1.0f : 1.0f),
@@ -906,12 +915,8 @@ final class GameClient
                     player.selectedSlot += 9;
             }
 
-            LARGE_INTEGER current;
-            QueryPerformanceCounter(&current);
-            const frameSeconds = fmin(
-                cast(double) (current.QuadPart - previous.QuadPart) / frequency.QuadPart,
-                0.25,
-            );
+            const current = monotonicSeconds();
+            const frameSeconds = fmin(current - previous, 0.25);
             previous = current;
             // An open menu only freezes a genuinely singleplayer integrated
             // server. In multiplayer the client keeps ticking and sends neutral
@@ -1017,11 +1022,11 @@ final class GameClient
             }
 
             const menuCursor = pauseMenu.active
-                ? window.cursorPosition() : POINT(0,0);
+                ? window.cursorPosition() : Point(0,0);
             const deathCursor = deathScreen.active
-                ? window.cursorPosition() : POINT(0,0);
+                ? window.cursorPosition() : Point(0,0);
             const inventoryCursor=inventoryMenu.active
-                ?window.cursorPosition():POINT(0,0);
+                ?window.cursorPosition():Point(0,0);
             // A paused client has no next simulation tick to interpolate
             // toward. Render the current authoritative endpoint instead of
             // forcing alpha zero (the stale previous endpoint), which could
@@ -1034,15 +1039,14 @@ final class GameClient
                 integratedServer !is null, deathScreen,
                 deathCursor.x, deathCursor.y,inventoryMenu,
                 inventoryCursor.x,inventoryCursor.y);
-            LARGE_INTEGER frameFinished;
-            QueryPerformanceCounter(&frameFinished);
+            const frameFinished = monotonicSeconds();
             const maximumFps=options.integer("maxFps",120);
             if(maximumFps>0)
             {
-                const spent=cast(double)(frameFinished.QuadPart-current.QuadPart)
-                    /frequency.QuadPart;
+                const spent=frameFinished-current;
                 const remaining=1.0/maximumFps-spent;
-                if(remaining>=0.001)Sleep(cast(DWORD)(remaining*1000.0));
+                if(remaining>=0.001)
+                    sleepMilliseconds(cast(uint)(remaining*1000.0));
             }
         }
         window.setMouseCapture(false);

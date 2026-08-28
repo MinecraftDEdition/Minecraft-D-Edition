@@ -1,16 +1,39 @@
 module minecraftd.client.audio.sound_manager;
 
-version (Windows):
-
 import std.path : buildPath;
 import std.file : exists, readText;
 import std.json : JSONType, parseJSON;
-import std.utf : toUTF16z;
+version (Windows)
+    import std.utf : toUTF16z;
+else
+    import std.string : toStringz;
 import minecraftd.game.resources.resource_manager : ResourceManager;
-import minecraftd.platform.windows.dx12.abi_bridge : mdAudioCreate,
-    mdAudioDestroy, mdAudioMusicPlaying, mdAudioPlayMusicOgg, mdAudioPlayOgg,
-    mdAudioPlayOggAt, mdAudioSetListener,
-    mdAudioSetMusicPaused, mdAudioSetMusicVolume, mdAudioStopMusic;
+import minecraftd.platform.clock : monotonicMilliseconds;
+version (Windows)
+    import minecraftd.platform.windows.dx12.abi_bridge : mdAudioCreate,
+        mdAudioDestroy, mdAudioMusicPlaying, mdAudioPlayMusicOgg,
+        mdAudioPlayOgg, mdAudioPlayOggAt, mdAudioSetListener,
+        mdAudioSetMusicPaused, mdAudioSetMusicVolume, mdAudioStopMusic;
+else version (OSX)
+{
+    private extern(C) nothrow
+    {
+        void* mdAudioCreate();
+        void mdAudioDestroy(void* handle);
+        int mdAudioPlayOgg(void* handle, const(char)* path, float volume,
+            float pitch, float pan, int spatial);
+        int mdAudioPlayOggAt(void* handle, const(char)* path, float volume,
+            float pitch, float x, float y, float z,
+            float attenuationDistance);
+        void mdAudioSetListener(void* handle, float x, float y, float z,
+            float yaw, int directionalAudio);
+        int mdAudioPlayMusicOgg(void* handle, const(char)* path, float volume);
+        int mdAudioMusicPlaying(void* handle);
+        void mdAudioStopMusic(void* handle);
+        void mdAudioSetMusicVolume(void* handle, float volume);
+        void mdAudioSetMusicPaused(void* handle, int paused);
+    }
+}
 import minecraftd.world.block : BlockId, soundType;
 import minecraftd.world.world_settings : DimensionId;
 import minecraftd.common.math3d : Vec3, DEG_TO_RAD, clamp;
@@ -308,8 +331,7 @@ private:
 
     void tickMusic(MusicContext context, int frequencySetting, bool paused)
     {
-        import core.sys.windows.windows : GetTickCount;
-        const now = cast(uint) GetTickCount();
+        const now = monotonicMilliseconds();
         if (lastMusicMilliseconds == 0)
             lastMusicMilliseconds = now;
         const delta = now - lastMusicMilliseconds;
@@ -395,7 +417,7 @@ private:
         const path = buildPath(projectRoot, "assets", "minecraft", "sounds",
             selected.path);
         currentMusicTrackVolume = selected.volume;
-        if (mdAudioPlayMusicOgg(engine, path.toUTF16z(), adjustedMusicVolume()) > 0)
+        if (mdAudioPlayMusicOgg(engine, nativePath(path), adjustedMusicVolume()) > 0)
         {
             currentMusicEvent = definition.eventName;
             nextSongDelay = int.max;
@@ -451,7 +473,7 @@ private:
             return;
         const path = buildPath(projectRoot, "assets", "minecraft", "sounds",
             relativePath);
-        mdAudioPlayOgg(engine, path.toUTF16z(), adjusted, pitch, 0.0f,0);
+        mdAudioPlayOgg(engine, nativePath(path), adjusted, pitch, 0.0f,0);
     }
 
     void playAt(string relativePath, Vec3 position, float volume, float pitch,
@@ -463,8 +485,19 @@ private:
             return;
         const path = buildPath(projectRoot, "assets", "minecraft", "sounds",
             relativePath);
-        mdAudioPlayOggAt(engine, path.toUTF16z(),
+        mdAudioPlayOggAt(engine, nativePath(path),
             volume * masterVolume * categoryVolume, pitch,
             position.x, position.y, position.z, attenuationDistance);
     }
+
+    version (Windows)
+        static const(wchar)* nativePath(string path)
+        {
+            return path.toUTF16z();
+        }
+    else
+        static const(char)* nativePath(string path)
+        {
+            return path.toStringz();
+        }
 }

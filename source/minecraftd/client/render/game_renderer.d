@@ -1,7 +1,8 @@
 module minecraftd.client.render.game_renderer;
 
 import core.stdc.math : floorf, sinf;
-import core.sys.windows.windows : HWND;
+version (Windows)
+    import core.sys.windows.windows : HWND;
 
 import minecraftd.client.player.local_player : LocalPlayer;
 import minecraftd.client.chat.chat_state : ChatState;
@@ -22,6 +23,8 @@ import minecraftd.common.math3d : Mat4, Vec2, Vec3, clamp, forwardFromYawPitch, 
 import minecraftd.client.render.player_renderer : PlayerRenderer, SkinLayers;
 import minecraftd.client.render.sky_renderer : SkyRenderer;
 import minecraftd.client.render.texture_manager : ImageData, TextureManager;
+import minecraftd.client.render.graphics_device : GraphicsApi, GraphicsDevice,
+    TextureHandle;
 import minecraftd.client.render.title_screen_renderer : TitleAction,
     MultiplayerMenuAction, TitleScreenRenderer, TitleTextureSet,
     WorldMenuAction;
@@ -39,8 +42,9 @@ import minecraftd.game.resources.resource_manager : ResourceManager;
 import minecraftd.game.item.inventory : ItemId, ItemStack, placedBlock,
     sameHeldStack;
 import minecraftd.game.entity.player : Player;
-import minecraftd.platform.windows.dx12.device : Dx12Device;
-import minecraftd.platform.windows.dx12.gpu_resource : TextureHandle;
+version (Windows)
+    import minecraftd.platform.windows.dx12.device : Dx12Device;
+import minecraftd.platform.desktop.vulkan.device : VulkanDevice;
 import minecraftd.world.block : BlockId, bareHandDestroyProgress,
     isNetherPortal, isWater, isWaterSource;
 import minecraftd.world.world : BlockHit, World;
@@ -60,7 +64,7 @@ final class GameRenderer
 {
     private uint width;
     private uint height;
-    private Dx12Device graphics;
+    private GraphicsDevice graphics;
     private TextureManager images;
     private ResourceManager resources;
     private BlockRenderer blocks;
@@ -127,8 +131,8 @@ final class GameRenderer
     private int underwaterAmbienceTicks;
     private uint waterDisplayTicks;
 
-    this(HWND window, uint width, uint height, string projectRoot, World world,
-        OptionsMenuState options)
+    this(void* window, uint width, uint height, string projectRoot, World world,
+        OptionsMenuState options, GraphicsApi graphicsApi = GraphicsApi.directX12)
     {
         this.width = width;
         this.height = height;
@@ -136,12 +140,24 @@ final class GameRenderer
         this.options = options;
         resources = new ResourceManager(projectRoot);
         images = new TextureManager();
-        graphics = new Dx12Device(window, width, height);
+        final switch (graphicsApi)
+        {
+            case GraphicsApi.directX12:
+                version (Windows)
+                    graphics = new Dx12Device(cast(HWND) window, width, height);
+                else
+                    throw new Exception("DirectX 12 is available only on Windows");
+                break;
+            case GraphicsApi.vulkan:
+                graphics = new VulkanDevice(window, width, height, projectRoot);
+                break;
+        }
         blocks = new BlockRenderer(world);
         players = new PlayerRenderer();
         entityShadows = new EntityShadowRenderer(world);
         hud = new HudRenderer();
-        titleScreen = new TitleScreenRenderer();
+        titleScreen = new TitleScreenRenderer(graphicsApi == GraphicsApi.vulkan
+            ? "D + Vulkan" : "D + DirectX 12");
         pauseMenu = new PauseMenuRenderer();
         deathScreen = new DeathScreenRenderer();
         optionsMenu = new OptionsMenuRenderer();

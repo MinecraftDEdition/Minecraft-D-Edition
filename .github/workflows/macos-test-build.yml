@@ -1,0 +1,53 @@
+name: macOS test build
+
+on:
+  workflow_dispatch:
+    inputs:
+      version:
+        description: Test build version
+        required: false
+        default: mac-test
+  push:
+    branches:
+      - codex/macos-port
+
+permissions:
+  contents: read
+
+jobs:
+  build-apple-silicon:
+    runs-on: macos-15
+    timeout-minutes: 45
+    steps:
+      - uses: actions/checkout@v6
+
+      - name: Install LDC
+        run: brew install ldc
+
+      - name: Reconstruct shared release content
+        run: |
+          python3 tools/reconstruct_release_content.py \
+            --output distribution/macos/build/content
+
+      - name: Build app and DMG
+        env:
+          MDE_VERSION: ${{ inputs.version || 'mac-test' }}
+          MDE_BUILD_NUMBER: ${{ github.run_number }}
+          MDE_CONTENT_ROOT: ${{ github.workspace }}/distribution/macos/build/content
+        run: bash distribution/macos/build_macos.sh
+
+      - name: Inspect application
+        run: |
+          file 'distribution/macos/build/bundle/Minecraft D Edition.app/Contents/MacOS/Minecraft D Edition'
+          otool -L 'distribution/macos/build/bundle/Minecraft D Edition.app/Contents/MacOS/Minecraft D Edition'
+          codesign --verify --deep --strict --verbose=2 \
+            'distribution/macos/build/bundle/Minecraft D Edition.app'
+
+      - name: Upload Mac test installer
+        uses: actions/upload-artifact@v6
+        with:
+          name: Minecraft-D-Edition-macOS-arm64
+          path: distribution/macos/build/Minecraft.D.Edition-macOS-arm64.dmg
+          if-no-files-found: error
+          retention-days: 14
+

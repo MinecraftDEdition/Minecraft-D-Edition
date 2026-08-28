@@ -28,7 +28,7 @@ struct Vertex
         this.color = [color.r, color.g, color.b, color.a];
     }
 
-    static auto inputLayout()
+    version (Windows) static auto inputLayout()
     {
         import directx.d3d12 : D3D12_INPUT_ELEMENT_DESC, D3D12_INPUT_CLASSIFICATION_PER_VERTEX_DATA;
         import directx.dxgiformat : DXGI_FORMAT_R32G32B32_FLOAT, DXGI_FORMAT_R32G32_FLOAT, DXGI_FORMAT_R32G32B32A32_FLOAT;

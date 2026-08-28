@@ -1,3 +1,4 @@
+// Windows-only launcher and differential updater.
 using System;
 using System.Collections.Generic;
 using System.Diagnostics;

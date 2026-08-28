@@ -1,7 +1,5 @@
 module minecraftd.server.integrated_chat_server;
 
-version (Windows):
-
 import core.atomic : atomicLoad, atomicStore;
 import core.sync.mutex : Mutex;
 import core.thread : Thread;

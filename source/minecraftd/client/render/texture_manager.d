@@ -1,11 +1,25 @@
 module minecraftd.client.render.texture_manager;
 
-version (Windows):
+version (Windows)
+{
+    import core.sys.windows.com : CoCreateInstance, CLSCTX_INPROC_SERVER;
+    import core.sys.windows.windows : GENERIC_READ, FAILED;
+    import directx.wincodec;
+    import std.utf : toUTF16z;
+}
+else version (OSX)
+{
+    import core.stdc.stdlib : free;
+    import core.stdc.string : memcpy;
+    import std.string : fromStringz, toStringz;
 
-import core.sys.windows.com : CoCreateInstance, CLSCTX_INPROC_SERVER;
-import core.sys.windows.windows : GENERIC_READ, SUCCEEDED, FAILED;
-import directx.wincodec;
-import std.utf : toUTF16z;
+    private extern(C) nothrow
+    {
+        int mcdImageLoadPng(const(char)* path, ubyte** pixels, uint* width,
+            uint* height, char* error, uint errorCapacity);
+        void mcdImageFree(void* pixels);
+    }
+}
 
 struct ImageData
 {
@@ -16,10 +30,12 @@ struct ImageData
 
 final class TextureManager
 {
-    private IWICImagingFactory factory;
+    version (Windows) private IWICImagingFactory factory;
 
     this()
     {
+        version (Windows)
+        {
         const result = CoCreateInstance(
             &CLSID_WICImagingFactory,
             null,
@@ -29,15 +45,25 @@ final class TextureManager
         );
         if (FAILED(result) || factory is null)
             throw new Exception("Unable to create the Windows Imaging Component factory");
+        }
     }
 
     ~this()
     {
+        version (Windows)
+        {
         if (factory !is null)
             factory.Release();
+        }
     }
 
     ImageData loadPng(string path)
+    {
+        version (Windows) return loadPngWindows(path);
+        else version (OSX) return loadPngPortable(path);
+    }
+
+    version (Windows) private ImageData loadPngWindows(string path)
     {
         IWICBitmapDecoder decoder;
         IWICBitmapFrameDecode frame;
@@ -78,6 +104,22 @@ final class TextureManager
         image.rgba.length = stride * image.height;
         if (FAILED(converter.CopyPixels(null, stride, cast(uint) image.rgba.length, image.rgba.ptr)))
             throw new Exception("Unable to copy PNG pixels: " ~ path);
+        return image;
+    }
+
+    version (OSX) private ImageData loadPngPortable(string path)
+    {
+        ubyte* decoded;
+        ImageData image;
+        char[1024] error = 0;
+        if (!mcdImageLoadPng(path.toStringz(), &decoded, &image.width,
+                &image.height, error.ptr, cast(uint) error.length))
+            throw new Exception(error[0] ? fromStringz(error.ptr).idup
+                : "Unable to decode PNG: " ~ path);
+        scope (exit) mcdImageFree(decoded);
+        image.rgba.length = cast(size_t) image.width * image.height * 4;
+        if (image.rgba.length)
+            memcpy(image.rgba.ptr, decoded, image.rgba.length);
         return image;
     }
 

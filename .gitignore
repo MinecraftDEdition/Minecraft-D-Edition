@@ -20,6 +20,8 @@ native/minecraft_d_edition.ico
 native/app_icon.res
 native/app_icon.aps
 native/icon_preview.png
+# Generated SPIR-V is checked in because macOS release builders do not have to
+# install a Windows DXC toolchain merely to package the Vulkan renderer.
 
 # Epic Online Services SDK binaries are distributed under Epic's developer
 # agreement, and product credentials are specific to the owner's EOS product.

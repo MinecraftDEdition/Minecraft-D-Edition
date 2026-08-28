@@ -1,7 +1,5 @@
 module minecraftd.server.integrated_game_server;
 
-version (Windows):
-
 import core.atomic : atomicLoad, atomicStore;
 import core.stdc.math : atan2f, cosf, floorf, sinf;
 import core.sync.mutex : Mutex;

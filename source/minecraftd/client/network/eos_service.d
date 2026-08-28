@@ -1,16 +1,17 @@
 module minecraftd.client.network.eos_service;
 
-version (Windows):
-
+version (MCD_EOS)
+{
 import core.atomic : atomicLoad, atomicStore;
 import core.sync.mutex : Mutex;
 import core.thread : Thread;
-import std.file : exists, getcwd, mkdirRecurse, readText;
+import std.file : exists, mkdirRecurse, readText;
 import std.conv : to;
 import std.json : JSONType, JSONValue, parseJSON;
 import std.path : buildPath;
 import std.socket : InternetAddress, SocketOSException, SocketShutdown, TcpSocket;
 import std.string : fromStringz, toStringz;
+import minecraftd.platform.paths : platformPaths;
 
 private extern(C) nothrow
 {
@@ -69,8 +70,11 @@ final class EosService
     {
         try
         {
-            const localConfigPath = buildPath(getcwd(), "data", "eos.local.json");
-            const clientConfigPath = buildPath(getcwd(), "data", "eos.client.json");
+            const paths = platformPaths();
+            const localConfigPath = buildPath(paths.userData, "data",
+                "eos.local.json");
+            const clientConfigPath = buildPath(paths.resources, "data",
+                "eos.client.json");
             const configPath = exists(localConfigPath)
                 ? localConfigPath : clientConfigPath;
             if (!exists(configPath))
@@ -95,7 +99,7 @@ final class EosService
                     throw new Exception("'forceRelays' must be true or false");
                 forceRelaysEnabled = forceRelaysValue.boolean;
             }
-            const cacheDirectory = buildPath(getcwd(), "data", "eos-cache");
+            const cacheDirectory = buildPath(paths.cache, "eos");
             mkdirRecurse(cacheDirectory);
             char[512] nativeError = 0;
             context = mcd_eos_create(toStringz(productId), toStringz(sandboxId),
@@ -398,5 +402,43 @@ final class EosHostBridge
             destroy(*found);
             peers.remove(remote);
         }
+    }
+}
+}
+else
+{
+    enum EosStatus : int
+    {
+        initializing,
+        ready,
+        failed,
+    }
+
+    struct EosPacket
+    {
+        string remoteUserId;
+        string socketName;
+        ubyte channel;
+        ubyte[] data;
+    }
+
+    final class EosService
+    {
+        this(string displayName = "Steve") {}
+        void tick() {}
+        EosStatus status() { return EosStatus.failed; }
+        bool ready() { return false; }
+        string error() { return "EOS is not included in this test build"; }
+        string localUserId() { return ""; }
+    }
+
+    final class EosHostBridge
+    {
+        string invitation;
+        this(EosService eos, ushort localPort)
+        {
+            throw new Exception("EOS is not included in this test build");
+        }
+        void pump() {}
     }
 }

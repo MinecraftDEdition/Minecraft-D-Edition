@@ -72,6 +72,12 @@ private struct MenuRect
 final class TitleScreenRenderer
 {
     private string notice;
+    private string technology;
+
+    this(string technology)
+    {
+        this.technology = technology;
+    }
 
     void setNotice(string value)
     {
@@ -157,7 +163,6 @@ final class TitleScreenRenderer
         appendText(frame, "Minecraft: D Edition - fan-made prototype", 2,
             cast(int) logicalHeight - 10, logicalWidth, logicalHeight,
             font, fontTexture, Color(1, 1, 1, 1));
-        const technology = "D + DirectX 12";
         appendText(frame, technology,
             cast(int) logicalWidth - font.width(technology) - 2,
             cast(int) logicalHeight - 10, logicalWidth, logicalHeight,

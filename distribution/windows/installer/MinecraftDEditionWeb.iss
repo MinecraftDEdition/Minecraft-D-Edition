@@ -1,3 +1,4 @@
+; Windows GitHub-backed web installer. macOS uses a signed app bundle and DMG.
 #define MyAppName "Minecraft D Edition"
 #define MyAppPublisher "Minecraft D Edition"
 #define MyAppURL "https://github.com/MinecraftDEdition/Minecraft-D-Edition"
@@ -18,9 +19,9 @@ PrivilegesRequired=lowest
 PrivilegesRequiredOverridesAllowed=dialog
 ArchitecturesAllowed=x64compatible
 ArchitecturesInstallIn64BitMode=x64compatible
-OutputDir=..\dist
+OutputDir=..\..\..\dist
 OutputBaseFilename=Minecraft.D.Edition.Setup
-SetupIconFile=..\native\minecraft_d_edition.ico
+SetupIconFile=..\..\..\native\minecraft_d_edition.ico
 UninstallDisplayIcon={app}\Minecraft D Edition Launcher.exe
 Compression=lzma2/max
 SolidCompression=yes
@@ -40,7 +41,7 @@ Name: "english"; MessagesFile: "compiler:Default.isl"
 Name: "desktopicon"; Description: "Create a &desktop shortcut"; GroupDescription: "Additional shortcuts:"
 
 [Files]
-Source: "..\Minecraft D Edition Launcher.exe"; DestDir: "{app}"; Flags: ignoreversion
+Source: "..\..\..\Minecraft D Edition Launcher.exe"; DestDir: "{app}"; Flags: ignoreversion
 
 [Icons]
 Name: "{group}\Minecraft D Edition"; Filename: "{app}\Minecraft D Edition Launcher.exe"; WorkingDir: "{app}"

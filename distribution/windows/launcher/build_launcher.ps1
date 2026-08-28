@@ -1,6 +1,6 @@
 param(
-    [string]$ProjectRoot = (Split-Path -Parent $PSScriptRoot),
-    [string]$OutputPath = (Join-Path (Split-Path -Parent $PSScriptRoot) 'Minecraft D Edition Launcher.exe')
+    [string]$ProjectRoot = (Join-Path $PSScriptRoot '..\..\..'),
+    [string]$OutputPath = (Join-Path $PSScriptRoot '..\..\..\Minecraft D Edition Launcher.exe')
 )
 
 $ErrorActionPreference = 'Stop'

@@ -1,7 +1,5 @@
 module minecraftd.client.chat.chat_client;
 
-version (Windows):
-
 import core.atomic : atomicLoad, atomicStore;
 import core.sync.mutex : Mutex;
 import core.thread : Thread;

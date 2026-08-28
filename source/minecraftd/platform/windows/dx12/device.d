@@ -11,16 +11,16 @@ import directx.dxgi1_4;
 
 import minecraftd.client.render.mesh : DrawLayer, FrameMesh, Vertex;
 import minecraftd.client.render.texture_manager : ImageData;
+import minecraftd.client.render.graphics_device : GraphicsDevice, TextureHandle;
 import minecraftd.platform.windows.dx12.command_context : requireSuccess;
 import minecraftd.platform.windows.dx12.abi_bridge;
 import minecraftd.platform.windows.dx12.descriptor_heap : cpuHandle, gpuHandle;
-import minecraftd.platform.windows.dx12.gpu_resource : TextureHandle;
 import minecraftd.platform.windows.dx12.shader : compileWorldShaders;
 import minecraftd.platform.windows.dx12.swap_chain : backBufferCount, backBufferFormat, depthBufferFormat;
 
 /// Small, deliberately synchronous D3D12 renderer. The fence-per-frame policy is
 /// simple and correct for this first playable milestone; frame overlap comes next.
-final class Dx12Device
+final class Dx12Device : GraphicsDevice
 {
     // Vanilla's GUI and particle atlases already push this prototype past 64
     // individual SRVs; leave headroom for the upcoming blocks and controller UI.
@@ -108,7 +108,7 @@ final class Dx12Device
         if (factory !is null) factory.Release();
     }
 
-    TextureHandle uploadTexture(const ImageData image)
+    override TextureHandle uploadTexture(const ImageData image)
     {
         if (nextTexture >= maxTextures)
             throw new Exception("D3D12 texture descriptor heap is full");
@@ -181,9 +181,9 @@ final class Dx12Device
         return TextureHandle(nextTexture++);
     }
 
-    TextureHandle menuBlurTexture() const { return TextureHandle(blurTextureIndex); }
+    override TextureHandle menuBlurTexture() const { return TextureHandle(blurTextureIndex); }
 
-    void resize(uint resizedWidth, uint resizedHeight)
+    override void resize(uint resizedWidth, uint resizedHeight)
     {
         if (resizedWidth == 0 || resizedHeight == 0
             || (resizedWidth == width && resizedHeight == height))
@@ -221,7 +221,7 @@ final class Dx12Device
         createBlurCapture();
     }
 
-    void render(const FrameMesh frame)
+    override void render(const FrameMesh frame)
     {
         const byteCount = frame.vertices.length * Vertex.sizeof;
         if (frame.vertices.length > maxVertices)
@@ -301,7 +301,7 @@ final class Dx12Device
         frameIndex = swapChain.GetCurrentBackBufferIndex();
     }
 
-    void setVsync(bool enabled) { vsync = enabled; }
+    override void setVsync(bool enabled) { vsync = enabled; }
 
 private:
     void createPipeline()

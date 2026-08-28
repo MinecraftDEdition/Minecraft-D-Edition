@@ -380,6 +380,9 @@ final class OptionsMenuState
         {
             case OptionsAction.done: back(); return;
             case OptionsAction.fullscreen: fullscreen = !fullscreen; break;
+            case OptionsAction.graphicsApi:
+                setInt("graphicsApi", (integer("graphicsApi", 0) + 1) % 2);
+                break;
             case OptionsAction.viewBobbing: viewBobbing = !viewBobbing; break;
             case OptionsAction.clouds:
                 setInt("renderClouds",(integer("renderClouds",2)+1)%3);
@@ -417,8 +420,7 @@ final class OptionsMenuState
                  OptionsAction.xboxSettings, OptionsAction.showCredits,
                  OptionsAction.showAttribution, OptionsAction.showLicensing,
                  OptionsAction.selectedLanguage, OptionsAction.audioDevice,
-                 OptionsAction.fullscreenResolution, OptionsAction.exclusiveFullscreen,
-                 OptionsAction.graphicsApi: break;
+                 OptionsAction.fullscreenResolution, OptionsAction.exclusiveFullscreen: break;
             default:
                 if (isBindingAction(a))
                 {
@@ -547,7 +549,7 @@ private WidgetSpec[] widgetsFor(const OptionsMenuState state)
             add(OptionsAction.maxFramerate,2,0,false,WidgetKind.slider); add(OptionsAction.vsync,2,1);
             add(OptionsAction.inactivityFpsLimit,3,0,false,WidgetKind.button,false); add(OptionsAction.guiScale,3,1,false,WidgetKind.button,false);
             add(OptionsAction.fullscreen,4,0); add(OptionsAction.exclusiveFullscreen,4,1,false,WidgetKind.button,false);
-            add(OptionsAction.brightness,5,0,false,WidgetKind.slider); add(OptionsAction.graphicsApi,5,1,false,WidgetKind.button,false);
+            add(OptionsAction.brightness,5,0,false,WidgetKind.slider); add(OptionsAction.graphicsApi,5,1);
             heading("Quality & Performance",6); add(OptionsAction.graphicsPreset,7,0); add(OptionsAction.biomeBlend,7,1,false,WidgetKind.slider,false);
             add(OptionsAction.renderDistance,8,0,false,WidgetKind.slider,false); add(OptionsAction.chunkBuilder,8,1,false,WidgetKind.button,false);
             add(OptionsAction.simulationDistance,9,0,false,WidgetKind.slider,false); add(OptionsAction.smoothLighting,9,1);
@@ -746,7 +748,8 @@ private string label(OptionsAction a,const OptionsMenuState s)
         case OptionsAction.audioDevice:return "Device: System Default";
         case OptionsAction.fullscreenResolution:return "Fullscreen Resolution: Current";
         case OptionsAction.exclusiveFullscreen:return "Exclusive Fullscreen: OFF";
-        case OptionsAction.graphicsApi:return "Graphics API: DirectX 12";
+        case OptionsAction.graphicsApi:return s.integer("graphicsApi",0)==1
+            ? "Graphics API: Vulkan (restart)" : "Graphics API: DirectX 12 (restart)";
         case OptionsAction.maxFramerate:return "Max Framerate: "~to!string(s.integer("maxFps",120))~" fps";
         case OptionsAction.brightness:return percent("Brightness",s.number("gamma",.5f));
         case OptionsAction.biomeBlend:

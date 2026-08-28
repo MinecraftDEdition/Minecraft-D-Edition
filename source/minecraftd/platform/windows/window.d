@@ -368,6 +368,11 @@ final class GameWindow
         return toUTF8(source[0 .. length]);
     }
 
+    bool shortcutDown() const
+    {
+        return down(VK_CONTROL);
+    }
+
     void setMouseCapture(bool capture)
     {
         if (mouseCaptured == capture && handle !is null)

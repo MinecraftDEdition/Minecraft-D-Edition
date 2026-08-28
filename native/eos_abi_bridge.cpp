@@ -3,8 +3,14 @@
 #include <eos_connect.h>
 #include <eos_p2p.h>
 
+#if defined(_WIN32)
 #include <windows.h>
 #include <bcrypt.h>
+#define MCD_EOS_EXPORT __declspec(dllexport)
+#else
+#include <random>
+#define MCD_EOS_EXPORT __attribute__((visibility("default")))
+#endif
 
 #include <algorithm>
 #include <cstring>
@@ -148,14 +154,18 @@ namespace
         EOS_P2P_SocketId result{};
         result.ApiVersion = EOS_P2P_SOCKETID_API_LATEST;
         if (socketName)
-            strncpy_s(result.SocketName, socketName, _TRUNCATE);
+        {
+            std::strncpy(result.SocketName, socketName,
+                sizeof(result.SocketName) - 1);
+            result.SocketName[sizeof(result.SocketName) - 1] = '\0';
+        }
         return result;
     }
 }
 
 extern "C"
 {
-    __declspec(dllexport) void* mcd_eos_create(
+    MCD_EOS_EXPORT void* mcd_eos_create(
         const char* productId, const char* sandboxId, const char* deploymentId,
         const char* clientId, const char* clientSecret, const char* cacheDirectory,
         const char* displayName, char* errorBuffer, unsigned int errorCapacity)
@@ -219,12 +229,16 @@ extern "C"
 
         EOS_Connect_CreateDeviceIdOptions device{};
         device.ApiVersion = EOS_CONNECT_CREATEDEVICEID_API_LATEST;
+#if defined(_WIN32)
         device.DeviceModel = "Windows PC";
+#else
+        device.DeviceModel = "Mac";
+#endif
         EOS_Connect_CreateDeviceId(bridge->connect, &device, bridge.get(), onDeviceIdCreated);
         return bridge.release();
     }
 
-    __declspec(dllexport) void mcd_eos_destroy(void* context)
+    MCD_EOS_EXPORT void mcd_eos_destroy(void* context)
     {
         std::unique_ptr<EosBridge> bridge(static_cast<EosBridge*>(context));
         if (!bridge)
@@ -239,26 +253,26 @@ extern "C"
             EOS_Shutdown();
     }
 
-    __declspec(dllexport) void mcd_eos_tick(void* context)
+    MCD_EOS_EXPORT void mcd_eos_tick(void* context)
     {
         auto* bridge = static_cast<EosBridge*>(context);
         if (bridge && bridge->platform)
             EOS_Platform_Tick(bridge->platform);
     }
 
-    __declspec(dllexport) int mcd_eos_status(void* context)
+    MCD_EOS_EXPORT int mcd_eos_status(void* context)
     {
         auto* bridge = static_cast<EosBridge*>(context);
         return bridge ? static_cast<int>(bridge->status) : static_cast<int>(BridgeStatus::Failed);
     }
 
-    __declspec(dllexport) int mcd_eos_copy_error(void* context, char* output, unsigned int capacity)
+    MCD_EOS_EXPORT int mcd_eos_copy_error(void* context, char* output, unsigned int capacity)
     {
         auto* bridge = static_cast<EosBridge*>(context);
         return bridge && copyText(bridge->error, output, capacity) ? 1 : 0;
     }
 
-    __declspec(dllexport) int mcd_eos_copy_local_user_id(void* context, char* output, unsigned int capacity)
+    MCD_EOS_EXPORT int mcd_eos_copy_local_user_id(void* context, char* output, unsigned int capacity)
     {
         auto* bridge = static_cast<EosBridge*>(context);
         if (!bridge || bridge->status != BridgeStatus::Ready)
@@ -266,7 +280,7 @@ extern "C"
         return copyText(userIdString(bridge->localUser), output, capacity) ? 1 : 0;
     }
 
-    __declspec(dllexport) int mcd_eos_configure_socket(void* context,
+    MCD_EOS_EXPORT int mcd_eos_configure_socket(void* context,
         const char* socketName, int hosting, int forceRelays)
     {
         auto* bridge = static_cast<EosBridge*>(context);
@@ -308,7 +322,7 @@ extern "C"
             && bridge->closedNotification != EOS_INVALID_NOTIFICATIONID;
     }
 
-    __declspec(dllexport) int mcd_eos_send(void* context, const char* remoteUserId,
+    MCD_EOS_EXPORT int mcd_eos_send(void* context, const char* remoteUserId,
         const char* socketName, unsigned char channel, const void* data, unsigned int length)
     {
         auto* bridge = static_cast<EosBridge*>(context);
@@ -333,7 +347,7 @@ extern "C"
         return EOS_P2P_SendPacket(bridge->p2p, &options) == EOS_EResult::EOS_Success ? 1 : 0;
     }
 
-    __declspec(dllexport) int mcd_eos_receive(void* context,
+    MCD_EOS_EXPORT int mcd_eos_receive(void* context,
         char* remoteOutput, unsigned int remoteCapacity,
         char* socketOutput, unsigned int socketCapacity,
         unsigned char* channelOutput, void* dataOutput,
@@ -374,7 +388,7 @@ extern "C"
         return 1;
     }
 
-    __declspec(dllexport) int mcd_eos_poll_closed(void* context,
+    MCD_EOS_EXPORT int mcd_eos_poll_closed(void* context,
         char* remoteOutput, unsigned int remoteCapacity)
     {
         auto* bridge = static_cast<EosBridge*>(context);
@@ -385,7 +399,7 @@ extern "C"
         return copyText(remote, remoteOutput, remoteCapacity) ? 1 : -1;
     }
 
-    __declspec(dllexport) void mcd_eos_close_peer(void* context,
+    MCD_EOS_EXPORT void mcd_eos_close_peer(void* context,
         const char* remoteUserId, const char* socketName)
     {
         auto* bridge = static_cast<EosBridge*>(context);
@@ -403,16 +417,22 @@ extern "C"
         EOS_P2P_CloseConnection(bridge->p2p, &options);
     }
 
-    __declspec(dllexport) int mcd_eos_random_socket_name(char* output, unsigned int capacity)
+    MCD_EOS_EXPORT int mcd_eos_random_socket_name(char* output, unsigned int capacity)
     {
         static constexpr char alphabet[] =
             "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789-_";
         if (!output || capacity < 25)
             return 0;
         unsigned char randomBytes[24]{};
+#if defined(_WIN32)
         if (BCryptGenRandom(nullptr, randomBytes, sizeof(randomBytes),
                 BCRYPT_USE_SYSTEM_PREFERRED_RNG) != 0)
             return 0;
+#else
+        std::random_device random;
+        for (auto& value : randomBytes)
+            value = static_cast<unsigned char>(random());
+#endif
         for (size_t i = 0; i < sizeof(randomBytes); ++i)
             output[i] = alphabet[randomBytes[i] & 63];
         output[sizeof(randomBytes)] = '\0';

@@ -1,16 +1,26 @@
 # Minecraft D Edition
 
-An independent, Windows-first voxel game project written in D, with a DirectX 12 renderer.
+An independent voxel game project written in D. Windows currently supports
+interchangeable DirectX 12 and Vulkan renderers while the Vulkan path is being
+prepared for Linux and MoltenVK on macOS.
 
 ## Install and update
 
-Windows releases use a small per-user web installer and a lightweight launcher.
+Windows releases currently use a small per-user web installer and a lightweight launcher.
 The setup executable contains no game archive: the launcher obtains verified
 runtime files from the GitHub `Test` release, then downloads only the content
 shards containing changed files on future launches. Worlds, options, EOS
 configuration, and other player-owned files are never part of the update
 manifest. Release building, publishing, rollback behavior, and smoke tests are documented in
 [`docs/distribution.md`](docs/distribution.md).
+
+macOS and Linux will be distributed as their own native packages rather than
+including every operating system's executable in one installation. All desktop
+builds continue to share the game rules, assets, world format, and multiplayer
+protocol, so native packaging does not prevent cross-play. The target layout is
+documented in [`distribution/`](distribution/README.md), and the protocol
+compatibility boundary is documented in
+[`docs/cross-platform.md`](docs/cross-platform.md).
 
 Player installations default to
 `%LOCALAPPDATA%\Programs\Minecraft D Edition` and contain no GitHub publishing
@@ -21,10 +31,32 @@ access. Development and releases use the separate Admin checkout at
 
 - `assets/minecraft/` mirrors Minecraft Java Edition's client-resource namespace.
 - `data/minecraft/` mirrors the modern Java data-pack namespace.
-- `source/minecraftd/` separates shared game code from client, server, audio, networking, world, and Windows/DirectX 12 platform code.
+- `source/minecraftd/` separates shared game code from client, server, audio,
+  networking, world, and platform graphics code.
+- `distribution/windows/` contains the active Windows installer and updater;
+  `distribution/macos/` and `distribution/linux/` own their future native
+  packaging without duplicating game code.
 - `tools/` contains local asset-import utilities.
 - `tests/` is reserved for unit and integration tests.
 - `docs/` contains generated import manifests and project notes.
+
+## Renderer selection
+
+DirectX 12 remains the default Windows renderer. To test the independent
+Vulkan backend on Windows, start the same game executable with:
+
+```powershell
+.\Minecraft D Edition.exe --renderer=vulkan
+```
+
+Use `--renderer=dx12` to force DirectX 12. The **Graphics API** option under
+Video Settings also selects DirectX 12 or Vulkan for the next launch. Building
+the Vulkan backend currently requires the Vulkan SDK through `VULKAN_SDK`; the
+installed game only requires a working Vulkan graphics driver.
+
+The shared-backend boundary, supported render passes, current limitations, and
+planned Linux/macOS packaging are described in
+[`docs/renderer-backends.md`](docs/renderer-backends.md).
 
 Imported Minecraft assets are for local development only. They are not original project assets and should not be redistributed with the game without permission from their copyright owner.
 
