@@ -1,0 +1,8 @@
+{
+  "productId": "REPLACE_WITH_PRODUCT_ID",
+  "sandboxId": "REPLACE_WITH_SANDBOX_ID",
+  "deploymentId": "REPLACE_WITH_DEPLOYMENT_ID",
+  "clientId": "REPLACE_WITH_CLIENT_ID",
+  "clientSecret": "REPLACE_WITH_CLIENT_SECRET",
+  "forceRelays": false
+}

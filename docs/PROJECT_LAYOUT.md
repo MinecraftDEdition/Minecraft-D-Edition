@@ -1,0 +1,16 @@
+# Project layout
+
+The resource half follows Minecraft Java Edition's namespaced layout: client-facing resources live under `assets/<namespace>/`, while registries, recipes, loot tables, tags, and world-generation data live under `data/<namespace>/`.
+
+The code half uses normal D package paths under `source/minecraftd/`:
+
+- `client/`: window, input, frame loop, and presentation
+- `audio/`: sound registry, streaming, mixing, and XAudio2 integration
+- `common/`: reusable primitives and utilities
+- `game/`: gameplay state and systems shared by client/server
+- `network/`: protocol, serialization, and transport
+- `platform/windows/dx12/`: Win32, DXGI, D3D12, shaders, and GPU resource management
+- `server/`: integrated and dedicated server behavior
+- `world/`: chunks, blocks, entities, lighting, and generation
+
+The DirectX 12 layer is intentionally isolated so game and world code do not depend directly on Windows graphics APIs.

@@ -1,0 +1,66 @@
+.dub/
+build/
+dist/
+__pycache__/
+*.pyc
+*.exe
+*.lib
+*.obj
+*.pdb
+*.log
+*-debug.txt
+last-error.log
+.vs/
+.idea/
+.mde-installed-manifest.txt
+.mde-update/
+saves/
+screenshots/
+native/minecraft_d_edition.ico
+native/app_icon.res
+native/app_icon.aps
+native/icon_preview.png
+
+# Epic Online Services SDK binaries are distributed under Epic's developer
+# agreement, and product credentials are specific to the owner's EOS product.
+third_party/eos/SDK/
+third_party/eos/EOS-SDK-*/
+EOSSDK-Win64-Shipping.dll
+native/eos_abi_bridge.obj
+data/eos.local.json
+data/eos-cache/
+data/options.txt
+data/server_entry.txt
+data/window_state.txt
+
+# Locally imported, copyrighted Minecraft Java assets.
+assets/minecraft/sounds/**/*.ogg
+assets/minecraft/sounds.json
+docs/minecraft-sound-extraction-manifest.json
+
+# Locally imported Minecraft Java textures and their metadata.
+assets/minecraft/textures/**/*.png
+assets/minecraft/textures/**/*.png.mcmeta
+assets/minecraft/atlases/**/*.json
+docs/minecraft-texture-extraction-manifest.json
+
+# Remaining locally imported Minecraft Java client resources and game data.
+assets/icons/
+assets/pack.mcmeta
+assets/minecraft/gpu_warnlist.json
+assets/realms/
+assets/minecraft/blockstates/
+assets/minecraft/equipment/
+assets/minecraft/font/
+assets/minecraft/items/
+assets/minecraft/lang/
+assets/minecraft/models/
+assets/minecraft/particles/
+assets/minecraft/post_effect/
+assets/minecraft/regional_compliancies.json
+assets/minecraft/resourcepacks/
+assets/minecraft/shaders/
+assets/minecraft/texts/
+assets/minecraft/waypoint_style/
+data/minecraft/
+docs/minecraft-client-resource-extraction-manifest.json

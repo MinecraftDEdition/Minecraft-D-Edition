@@ -1,0 +1,533 @@
+module minecraftd.client.render.block_renderer;
+
+import minecraftd.client.render.mesh : Vertex, Color, appendQuad;
+import minecraftd.client.render.texture_manager : ImageData;
+import minecraftd.common.math3d : Vec2, Vec3, clamp;
+import minecraftd.world.block : BlockId, isOpaque, isWater, waterHeight;
+import minecraftd.world.chunk : Chunk;
+import minecraftd.world.world : World;
+
+struct BlockTextureSet
+{
+    uint grassTop;
+    uint grassSide;
+    uint dirt;
+    uint stone;
+    uint obsidian;
+    uint netherrack;
+    uint waterStill;
+    uint waterFlow;
+    uint netherPortal;
+    uint flintAndSteel;
+}
+
+/// Water is split by face role so the horizontal sheet has a deterministic
+/// draw order.  In particular, it must not depend on associative-array
+/// iteration order shared with the vertical flowing-water faces.
+struct WaterGeometry
+{
+    Vertex[] surface;
+    Vertex[] walls;
+    Vertex[] underside;
+}
+
+unittest
+{
+    auto testWorld=new World();
+    scope(exit)destroy(testWorld);
+    testWorld.setBlock(20,1,20,BlockId.waterSource);
+    auto renderer=new BlockRenderer(testWorld);
+    scope(exit)destroy(renderer);
+    const geometry=renderer.buildWater();
+    assert(geometry.surface.length==6);
+    assert(geometry.walls.length==24);
+    assert(geometry.underside.length==0); // hidden by the terrain below
+
+    // The old regression test only counted all water vertices together, so a
+    // mesh made entirely from walls could pass.  Verify that the top is a
+    // non-degenerate, upward-wound triangle at the fluid height.
+    const a=geometry.surface[0].position;
+    const b=geometry.surface[1].position;
+    const c=geometry.surface[2].position;
+    const abx=b[0]-a[0], abz=b[2]-a[2];
+    const acx=c[0]-a[0], acz=c[2]-a[2];
+    assert(abz*acx-abx*acz>0.5f);
+    assert(a[1]>1.0f);
+    assert(b[1]>1.0f);
+    assert(c[1]>1.0f);
+}
+
+enum Face : int { down, up, north, south, west, east }
+
+final class BlockRenderer
+{
+    private World world;
+    private bool smoothLighting = true;
+    private float brightness = 0.5f;
+
+    this(World world)
+    {
+        this.world = world;
+    }
+
+    void configure(bool smooth, float brightnessValue)
+    {
+        smoothLighting=smooth;
+        brightness=clamp(brightnessValue,0.0f,1.0f);
+    }
+
+    Vertex[][uint] build(const BlockTextureSet textures)
+    {
+        Vertex[][uint] byTexture;
+        foreach (y; 0 .. Chunk.height)
+        foreach (z; 0 .. Chunk.depth)
+        foreach (x; 0 .. Chunk.width)
+        {
+            const block = world.getBlock(x, y, z);
+            if (block == BlockId.air || isWater(block))
+                continue;
+            if (block == BlockId.netherPortalX
+                || block == BlockId.netherPortalZ)
+                continue;
+            foreach (faceValue; 0 .. 6)
+            {
+                const face = cast(Face) faceValue;
+                const normal = faceNormal(face);
+                if (isOpaque(world.getBlock(x + cast(int) normal.x, y + cast(int) normal.y, z + cast(int) normal.z)))
+                    continue;
+                const texture = textureFor(block, face, textures);
+                auto geometry = texture in byTexture;
+                if (geometry is null)
+                {
+                    byTexture[texture] = [];
+                    geometry = texture in byTexture;
+                }
+                const tint = block == BlockId.grass && face == Face.up
+                    ? Color(0.55f, 0.82f, 0.35f, 1.0f)
+                    : Color(1, 1, 1, 1);
+                appendBlockFace(*geometry, x, y, z, face, tint);
+            }
+        }
+        return byTexture;
+    }
+
+    Vertex[] buildPortals()
+    {
+        Vertex[] output;
+        foreach (y; 0 .. Chunk.height)
+        foreach (z; 0 .. Chunk.depth)
+        foreach (x; 0 .. Chunk.width)
+        {
+            const block = world.getBlock(x,y,z);
+            if (block == BlockId.netherPortalX
+                || block == BlockId.netherPortalZ)
+                appendPortal(output,x,y,z,block==BlockId.netherPortalX);
+        }
+        return output;
+    }
+
+    WaterGeometry buildWater()
+    {
+        WaterGeometry result;
+        foreach(y;0..Chunk.height)foreach(z;0..Chunk.depth)foreach(x;0..Chunk.width)
+        {
+            const block=world.getBlock(x,y,z);
+            if(!isWater(block))continue;
+            const fullAbove=isWater(world.getBlock(x,y+1,z));
+            const h00=fullAbove?1.0f:waterCornerHeight(x,y,z);
+            const h10=fullAbove?1.0f:waterCornerHeight(x+1,y,z);
+            const h11=fullAbove?1.0f:waterCornerHeight(x+1,y,z+1);
+            const h01=fullAbove?1.0f:waterCornerHeight(x,y,z+1);
+
+            // Build the horizontal sheet explicitly.  Besides making a
+            // missing surface impossible to hide behind valid wall geometry,
+            // this lets the renderer draw every top after every wall.
+            const above=world.getBlock(x,y+1,z);
+            if(!isWater(above)&&!isOpaque(above))
+                appendWaterFace(result.surface,x,y,z,Face.up,h00,h10,h11,h01);
+
+            foreach(faceValue;0..6)
+            {
+                const face=cast(Face)faceValue;
+                if(face==Face.up)continue;
+                const normal=faceNormal(face);
+                const neighbor=world.getBlock(x+cast(int)normal.x,
+                    y+cast(int)normal.y,z+cast(int)normal.z);
+                if(isWater(neighbor)||isOpaque(neighbor))continue;
+                if(face==Face.down)
+                    appendWaterFace(result.underside,x,y,z,face,h00,h10,h11,h01);
+                else
+                    appendWaterFace(result.walls,x,y,z,face,h00,h10,h11,h01);
+            }
+        }
+        return result;
+    }
+
+    /// Standalone six-faced block model used by dropped items and GUI icons.
+    Vertex[][uint] buildItem(BlockId block, const BlockTextureSet textures)
+    {
+        Vertex[][uint] byTexture;
+        foreach (faceValue; 0 .. 6)
+        {
+            const face = cast(Face) faceValue;
+            const texture = textureFor(block, face, textures);
+            auto geometry = texture in byTexture;
+            if (geometry is null)
+            {
+                byTexture[texture] = [];
+                geometry = texture in byTexture;
+            }
+            const tint = block == BlockId.grass && face == Face.up
+                ? Color(0.55f, 0.82f, 0.35f, 1.0f)
+                : Color(1, 1, 1, 1);
+            appendBlockFace(*geometry, 0, 0, 0, face, tint);
+        }
+        return byTexture;
+    }
+
+    /// Builds the thin, pixel-extruded model used by Java's item/generated
+    /// parent. The face remains recognisably a 2-D sprite, while exposed alpha
+    /// edges receive the one-pixel-deep sides visible when the item turns.
+    Vertex[][uint] buildGeneratedItem(uint texture, const ImageData image)
+    {
+        Vertex[][uint] result;
+        Vertex[] geometry;
+        if (image.width == 0 || image.height == 0
+            || image.rgba.length < image.width * image.height * 4)
+            return result;
+
+        enum float frontZ = 7.5f / 16.0f;
+        enum float backZ = 8.5f / 16.0f;
+        const front = Color(1,1,1,1);
+        const side = Color(0.82f,0.82f,0.82f,1);
+        appendQuad(geometry,Vec3(0,0,frontZ),Vec3(1,0,frontZ),
+            Vec3(1,1,frontZ),Vec3(0,1,frontZ),
+            Vec2(0,1),Vec2(1,1),Vec2(1,0),Vec2(0,0),
+            front,front,front,front);
+        appendQuad(geometry,Vec3(1,0,backZ),Vec3(0,0,backZ),
+            Vec3(0,1,backZ),Vec3(1,1,backZ),
+            Vec2(1,1),Vec2(0,1),Vec2(0,0),Vec2(1,0),
+            front,front,front,front);
+
+        bool opaque(int x,int y) const
+        {
+            if(x<0||y<0||x>=cast(int)image.width
+                ||y>=cast(int)image.height)return false;
+            return image.rgba[(cast(size_t)y*image.width+x)*4+3]>0;
+        }
+        foreach(y;0..cast(int)image.height)
+        foreach(x;0..cast(int)image.width)
+        {
+            if(!opaque(x,y))continue;
+            const x0=cast(float)x/image.width;
+            const x1=cast(float)(x+1)/image.width;
+            const y0=1.0f-cast(float)(y+1)/image.height;
+            const y1=1.0f-cast(float)y/image.height;
+            const uv=Vec2((cast(float)x+0.5f)/image.width,
+                (cast(float)y+0.5f)/image.height);
+            if(!opaque(x-1,y))
+                appendQuad(geometry,Vec3(x0,y0,backZ),Vec3(x0,y0,frontZ),
+                    Vec3(x0,y1,frontZ),Vec3(x0,y1,backZ),uv,uv,uv,uv,
+                    side,side,side,side);
+            if(!opaque(x+1,y))
+                appendQuad(geometry,Vec3(x1,y0,frontZ),Vec3(x1,y0,backZ),
+                    Vec3(x1,y1,backZ),Vec3(x1,y1,frontZ),uv,uv,uv,uv,
+                    side,side,side,side);
+            if(!opaque(x,y-1))
+                appendQuad(geometry,Vec3(x0,y1,frontZ),Vec3(x1,y1,frontZ),
+                    Vec3(x1,y1,backZ),Vec3(x0,y1,backZ),uv,uv,uv,uv,
+                    side,side,side,side);
+            if(!opaque(x,y+1))
+                appendQuad(geometry,Vec3(x0,y0,backZ),Vec3(x1,y0,backZ),
+                    Vec3(x1,y0,frontZ),Vec3(x0,y0,frontZ),uv,uv,uv,uv,
+                    side,side,side,side);
+        }
+        result[texture] = geometry;
+        return result;
+    }
+
+    /// Java renders the selected destroy stage over the target block's model.
+    /// Expand each face by a tiny amount to prevent depth fighting with the
+    /// base block while retaining normal world-depth occlusion.
+    Vertex[] buildDamageOverlay(int x, int y, int z)
+    {
+        Vertex[] output;
+        enum float epsilon = 0.002f;
+        foreach (faceValue; 0 .. 6)
+        {
+            const face = cast(Face) faceValue;
+            const before = output.length;
+            appendBlockFace(output, x, y, z, face, Color(1, 1, 1, 1));
+            const normal = faceNormal(face) * epsilon;
+            foreach (ref vertex; output[before .. $])
+            {
+                vertex.position[0] += normal.x;
+                vertex.position[1] += normal.y;
+                vertex.position[2] += normal.z;
+                vertex.color = [1.0f, 1.0f, 1.0f, 1.0f];
+            }
+        }
+        return output;
+    }
+
+    /// A slightly expanded twelve-edge box matching Java's targeted block
+    /// shape. Thin geometry is used instead of API line primitives so its
+    /// width and joins remain stable on every DirectX 12 driver.
+    Vertex[] buildOutline(int x,int y,int z)
+    {
+        Vertex[] output;
+        enum float expand=0.002f;
+        enum float halfWidth=0.003f;
+        const lo=Vec3(x-expand,y-expand,z-expand);
+        const hi=Vec3(x+1+expand,y+1+expand,z+1+expand);
+        foreach(yEdge;[lo.y,hi.y])foreach(zEdge;[lo.z,hi.z])
+            appendLineBox(output,Vec3(lo.x,yEdge,zEdge),Vec3(hi.x,yEdge,zEdge),
+                halfWidth);
+        foreach(xEdge;[lo.x,hi.x])foreach(zEdge;[lo.z,hi.z])
+            appendLineBox(output,Vec3(xEdge,lo.y,zEdge),Vec3(xEdge,hi.y,zEdge),
+                halfWidth);
+        foreach(xEdge;[lo.x,hi.x])foreach(yEdge;[lo.y,hi.y])
+            appendLineBox(output,Vec3(xEdge,yEdge,lo.z),Vec3(xEdge,yEdge,hi.z),
+                halfWidth);
+        return output;
+    }
+
+private:
+    static void appendLineBox(ref Vertex[] output,Vec3 a,Vec3 b,float radius)
+    {
+        auto minimum=Vec3(a.x<b.x?a.x:b.x,a.y<b.y?a.y:b.y,a.z<b.z?a.z:b.z);
+        auto maximum=Vec3(a.x>b.x?a.x:b.x,a.y>b.y?a.y:b.y,a.z>b.z?a.z:b.z);
+        if(maximum.x-minimum.x>radius)
+        {minimum.y-=radius;maximum.y+=radius;minimum.z-=radius;maximum.z+=radius;}
+        else if(maximum.y-minimum.y>radius)
+        {minimum.x-=radius;maximum.x+=radius;minimum.z-=radius;maximum.z+=radius;}
+        else
+        {minimum.x-=radius;maximum.x+=radius;minimum.y-=radius;maximum.y+=radius;}
+        const c=Color(0,0,0,0.72f);
+        const uv=Vec2(0,0);
+        void face(Vec3 p0,Vec3 p1,Vec3 p2,Vec3 p3)
+        {appendQuad(output,p0,p1,p2,p3,uv,uv,uv,uv,c,c,c,c);}
+        face(Vec3(minimum.x,minimum.y,minimum.z),Vec3(maximum.x,minimum.y,minimum.z),
+            Vec3(maximum.x,maximum.y,minimum.z),Vec3(minimum.x,maximum.y,minimum.z));
+        face(Vec3(maximum.x,minimum.y,maximum.z),Vec3(minimum.x,minimum.y,maximum.z),
+            Vec3(minimum.x,maximum.y,maximum.z),Vec3(maximum.x,maximum.y,maximum.z));
+        face(Vec3(minimum.x,minimum.y,maximum.z),Vec3(minimum.x,minimum.y,minimum.z),
+            Vec3(minimum.x,maximum.y,minimum.z),Vec3(minimum.x,maximum.y,maximum.z));
+        face(Vec3(maximum.x,minimum.y,minimum.z),Vec3(maximum.x,minimum.y,maximum.z),
+            Vec3(maximum.x,maximum.y,maximum.z),Vec3(maximum.x,maximum.y,minimum.z));
+        face(Vec3(minimum.x,maximum.y,minimum.z),Vec3(maximum.x,maximum.y,minimum.z),
+            Vec3(maximum.x,maximum.y,maximum.z),Vec3(minimum.x,maximum.y,maximum.z));
+        face(Vec3(minimum.x,minimum.y,maximum.z),Vec3(maximum.x,minimum.y,maximum.z),
+            Vec3(maximum.x,minimum.y,minimum.z),Vec3(minimum.x,minimum.y,minimum.z));
+    }
+
+    uint textureFor(BlockId block, Face face, const BlockTextureSet textures) const
+    {
+        final switch (block)
+        {
+            case BlockId.air: return textures.stone;
+            case BlockId.grass:
+                if (face == Face.up) return textures.grassTop;
+                if (face == Face.down) return textures.dirt;
+                return textures.grassSide;
+            case BlockId.dirt: return textures.dirt;
+            case BlockId.stone: return textures.stone;
+            case BlockId.obsidian: return textures.obsidian;
+            case BlockId.netherrack: return textures.netherrack;
+            case BlockId.netherPortalX, BlockId.netherPortalZ:
+                return textures.netherPortal;
+            case BlockId.waterSource, BlockId.waterFlow1, BlockId.waterFlow2,
+                 BlockId.waterFlow3, BlockId.waterFlow4, BlockId.waterFlow5,
+                 BlockId.waterFlow6, BlockId.waterFlow7, BlockId.waterFalling:
+                return textures.waterStill;
+        }
+    }
+
+    float waterCornerHeight(int cornerX,int y,int cornerZ) const
+    {
+        // D initializes an unassigned float to NaN.  Starting this accumulator
+        // without an explicit zero made every exposed water-top Y coordinate
+        // NaN, so the GPU discarded all horizontal triangles while the walls
+        // (whose bottom vertices use integer Y) remained partially visible.
+        float total=0.0f;
+        int weight=0;
+        foreach(dz;-1..1)foreach(dx;-1..1)
+        {
+            const x=cornerX+dx,z=cornerZ+dz;
+            if(isWater(world.getBlock(x,y+1,z)))return 1.0f;
+            const block=world.getBlock(x,y,z);
+            if(!isWater(block))continue;
+            const height=waterHeight(block);
+            const contribution=height>=8.0f/9.0f?10:1;
+            total+=height*contribution;
+            weight+=contribution;
+        }
+        return weight?total/weight:0.0f;
+    }
+
+    void appendWaterFace(ref Vertex[] output,int x,int y,int z,Face face,
+        float h00,float h10,float h11,float h01)
+    {
+        // The imported water sprite already carries Java's 180/255 alpha.
+        // Multiplying another .72 vertex alpha made the final surface only
+        // ~51% opaque and effectively erased it over bright terrain.
+        const tint=Color(0.247f,0.463f,0.894f,1.0f);
+        const bottom=cast(float)y;
+        Vec3 a,b,c,d;
+        final switch(face)
+        {
+            case Face.down: a=Vec3(x,y,z+1);b=Vec3(x+1,y,z+1);
+                c=Vec3(x+1,y,z);d=Vec3(x,y,z);break;
+            // Counter-clockwise from above: the geometric normal points up.
+            // The translucent pipeline disables culling, so this same sheet
+            // remains visible from underwater without a coplanar duplicate
+            // that would blend twice.
+            case Face.up: a=Vec3(x,y+h00,z);b=Vec3(x,y+h01,z+1);
+                c=Vec3(x+1,y+h11,z+1);d=Vec3(x+1,y+h10,z);break;
+            case Face.north:a=Vec3(x+1,bottom,z);b=Vec3(x,bottom,z);
+                c=Vec3(x,y+h00,z);d=Vec3(x+1,y+h10,z);break;
+            case Face.south:a=Vec3(x,bottom,z+1);b=Vec3(x+1,bottom,z+1);
+                c=Vec3(x+1,y+h11,z+1);d=Vec3(x,y+h01,z+1);break;
+            case Face.west:a=Vec3(x,bottom,z);b=Vec3(x,bottom,z+1);
+                c=Vec3(x,y+h01,z+1);d=Vec3(x,y+h00,z);break;
+            case Face.east:a=Vec3(x+1,bottom,z+1);b=Vec3(x+1,bottom,z);
+                c=Vec3(x+1,y+h10,z);d=Vec3(x+1,y+h11,z+1);break;
+        }
+        appendQuad(output,a,b,c,d,Vec2(0,1),Vec2(1,1),Vec2(1,0),Vec2(0,0),
+            tint,tint,tint,tint);
+    }
+
+    void appendPortal(ref Vertex[] output, int x, int y, int z, bool axisX)
+    {
+        const color = Color(1,1,1,0.78f);
+        const inset = 6.0f / 16.0f;
+        const farInset = 10.0f / 16.0f;
+        if (axisX)
+        {
+            appendQuad(output, Vec3(x,y,z+inset), Vec3(x+1,y,z+inset),
+                Vec3(x+1,y+1,z+inset), Vec3(x,y+1,z+inset),
+                Vec2(0,1),Vec2(1,1),Vec2(1,0),Vec2(0,0),
+                color,color,color,color);
+            appendQuad(output, Vec3(x+1,y,z+farInset), Vec3(x,y,z+farInset),
+                Vec3(x,y+1,z+farInset), Vec3(x+1,y+1,z+farInset),
+                Vec2(0,1),Vec2(1,1),Vec2(1,0),Vec2(0,0),
+                color,color,color,color);
+        }
+        else
+        {
+            appendQuad(output, Vec3(x+inset,y,z+1), Vec3(x+inset,y,z),
+                Vec3(x+inset,y+1,z), Vec3(x+inset,y+1,z+1),
+                Vec2(0,1),Vec2(1,1),Vec2(1,0),Vec2(0,0),
+                color,color,color,color);
+            appendQuad(output, Vec3(x+farInset,y,z), Vec3(x+farInset,y,z+1),
+                Vec3(x+farInset,y+1,z+1), Vec3(x+farInset,y+1,z),
+                Vec2(0,1),Vec2(1,1),Vec2(1,0),Vec2(0,0),
+                color,color,color,color);
+        }
+    }
+
+    Vec3 faceNormal(Face face) const
+    {
+        final switch (face)
+        {
+            case Face.down: return Vec3(0, -1, 0);
+            case Face.up: return Vec3(0, 1, 0);
+            case Face.north: return Vec3(0, 0, -1);
+            case Face.south: return Vec3(0, 0, 1);
+            case Face.west: return Vec3(-1, 0, 0);
+            case Face.east: return Vec3(1, 0, 0);
+        }
+    }
+
+    float faceShade(Face face) const
+    {
+        // Java Edition's CardinalLighting.DEFAULT values.
+        float base;
+        final switch (face)
+        {
+            case Face.down: base=0.5f;break;
+            case Face.up: base=1.0f;break;
+            case Face.north, Face.south: base=0.8f;break;
+            case Face.west, Face.east: base=0.6f;break;
+        }
+        return clamp(base+(brightness-0.5f)*0.8f,0.15f,1.0f);
+    }
+
+    float vertexAo(int x, int y, int z, Face face, int uSign, int vSign) const
+    {
+        if(!smoothLighting)return 1.0f;
+        const normal = faceNormal(face);
+        Vec3 tangentU;
+        Vec3 tangentV;
+        final switch (face)
+        {
+            case Face.down, Face.up:
+                tangentU = Vec3(1, 0, 0); tangentV = Vec3(0, 0, 1); break;
+            case Face.north, Face.south:
+                tangentU = Vec3(1, 0, 0); tangentV = Vec3(0, 1, 0); break;
+            case Face.west, Face.east:
+                tangentU = Vec3(0, 0, 1); tangentV = Vec3(0, 1, 0); break;
+        }
+
+        bool occupied(Vec3 offset)
+        {
+            return isOpaque(world.getBlock(
+                x + cast(int) offset.x,
+                y + cast(int) offset.y,
+                z + cast(int) offset.z,
+            ));
+        }
+
+        const sideU = occupied(normal + tangentU * cast(float) uSign);
+        const sideV = occupied(normal + tangentV * cast(float) vSign);
+        const corner = occupied(normal + tangentU * cast(float) uSign + tangentV * cast(float) vSign);
+        const occlusion = sideU && sideV ? 3 : cast(int) sideU + cast(int) sideV + cast(int) corner;
+        immutable float[4] ao = [1.0f, 0.8f, 0.6f, 0.5f];
+        return ao[occlusion];
+    }
+
+    void appendBlockFace(ref Vertex[] output, int x, int y, int z, Face face, Color tint)
+    {
+        const fx = cast(float) x;
+        const fy = cast(float) y;
+        const fz = cast(float) z;
+        Vec3[4] points;
+        int[4] uSigns;
+        int[4] vSigns;
+
+        final switch (face)
+        {
+            case Face.up:
+                points = [Vec3(fx,fy+1,fz), Vec3(fx,fy+1,fz+1), Vec3(fx+1,fy+1,fz+1), Vec3(fx+1,fy+1,fz)];
+                uSigns = [-1,-1,1,1]; vSigns = [-1,1,1,-1]; break;
+            case Face.down:
+                points = [Vec3(fx,fy,fz+1), Vec3(fx,fy,fz), Vec3(fx+1,fy,fz), Vec3(fx+1,fy,fz+1)];
+                uSigns = [-1,-1,1,1]; vSigns = [1,-1,-1,1]; break;
+            case Face.north:
+                points = [Vec3(fx+1,fy,fz), Vec3(fx,fy,fz), Vec3(fx,fy+1,fz), Vec3(fx+1,fy+1,fz)];
+                uSigns = [1,-1,-1,1]; vSigns = [-1,-1,1,1]; break;
+            case Face.south:
+                points = [Vec3(fx,fy,fz+1), Vec3(fx+1,fy,fz+1), Vec3(fx+1,fy+1,fz+1), Vec3(fx,fy+1,fz+1)];
+                uSigns = [-1,1,1,-1]; vSigns = [-1,-1,1,1]; break;
+            case Face.west:
+                points = [Vec3(fx,fy,fz), Vec3(fx,fy,fz+1), Vec3(fx,fy+1,fz+1), Vec3(fx,fy+1,fz)];
+                uSigns = [-1,1,1,-1]; vSigns = [-1,-1,1,1]; break;
+            case Face.east:
+                points = [Vec3(fx+1,fy,fz+1), Vec3(fx+1,fy,fz), Vec3(fx+1,fy+1,fz), Vec3(fx+1,fy+1,fz+1)];
+                uSigns = [1,-1,-1,1]; vSigns = [-1,-1,1,1]; break;
+        }
+
+        Color[4] colors;
+        foreach (i; 0 .. 4)
+        {
+            const amount = faceShade(face) * vertexAo(x, y, z, face, uSigns[i], vSigns[i]);
+            colors[i] = Color(tint.r * amount, tint.g * amount, tint.b * amount, tint.a);
+        }
+        appendQuad(
+            output,
+            points[0], points[1], points[2], points[3],
+            Vec2(0,1), Vec2(1,1), Vec2(1,0), Vec2(0,0),
+            colors[0], colors[1], colors[2], colors[3],
+        );
+    }
+}
