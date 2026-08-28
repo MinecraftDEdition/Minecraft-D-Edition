@@ -55,6 +55,7 @@ command -v ldc2 >/dev/null || { echo 'LDC is required to build macOS' >&2; exit 
 ldc2 -O3 -release -boundscheck=off -i -I"$repo/source" -J"$repo/shaders" \
     "${d_versions[@]}" "$repo/source/app.d" "${native_objects[@]}" \
     -of="$bin_out/Minecraft D Edition" \
+    -L-lc++ \
     -L-L"$deps/lib" -L-lMoltenVK \
     -L-F"$deps" -L-framework -LSDL3 \
     -L-framework -LCocoa -L-framework -LFoundation \
