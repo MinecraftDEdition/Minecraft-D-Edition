@@ -57,7 +57,9 @@ if [[ ! -f "$deps/lib/libMoltenVK.dylib" ]]; then
         exit 1
     }
     cp "$molten_lib" "$deps/lib/libMoltenVK.dylib"
-    cp -R "$(dirname "$(dirname "$molten_headers")")/vulkan" "$deps/include/vulkan"
+    molten_include="$(dirname "$(dirname "$molten_headers")")"
+    cp -R "$molten_include/vulkan" "$deps/include/vulkan"
+    cp -R "$molten_include/vk_video" "$deps/include/vk_video"
 fi
 
 miniaudio="$deps/include/miniaudio.h"
@@ -77,4 +79,3 @@ fi
 verify_sha256 594c2fe35d49488b4382dbfaec8f98366defca819d916ac95becf3e75f4200b3 "$stb_image"
 
 echo "macOS dependencies prepared in $deps"
-
