@@ -82,4 +82,29 @@ if [[ ! -f "$stb_image" ]]; then
 fi
 verify_sha256 594c2fe35d49488b4382dbfaec8f98366defca819d916ac95becf3e75f4200b3 "$stb_image"
 
+sparkle_tar="$downloads/Sparkle-2.9.2.tar.xz"
+if [[ ! -f "$sparkle_tar" ]]; then
+    curl --fail --location --retry 3 \
+        'https://github.com/sparkle-project/Sparkle/releases/download/2.9.2/Sparkle-2.9.2.tar.xz' \
+        --output "$sparkle_tar"
+fi
+verify_sha256 1cb340cbbef04c6c0d162078610c25e2221031d794a3449d89f2f56f4df77c95 "$sparkle_tar"
+if [[ ! -d "$deps/Sparkle.framework" || ! -x "$deps/bin/generate_appcast" ]]; then
+    sparkle_extract="$script_dir/build/sparkle"
+    rm -rf "$sparkle_extract"
+    mkdir -p "$sparkle_extract" "$deps/bin"
+    tar -xJf "$sparkle_tar" -C "$sparkle_extract"
+    sparkle_framework="$(find "$sparkle_extract" -maxdepth 3 -name Sparkle.framework -type d | head -n 1)"
+    sparkle_keys="$(find "$sparkle_extract" -maxdepth 4 -name generate_keys -type f -perm -111 | head -n 1)"
+    sparkle_appcast="$(find "$sparkle_extract" -maxdepth 4 -name generate_appcast -type f -perm -111 | head -n 1)"
+    [[ -n "$sparkle_framework" && -n "$sparkle_keys" && -n "$sparkle_appcast" ]] || {
+        echo 'Sparkle framework or publishing tools were not found' >&2
+        exit 1
+    }
+    rm -rf "$deps/Sparkle.framework"
+    cp -R "$sparkle_framework" "$deps/Sparkle.framework"
+    cp "$sparkle_keys" "$deps/bin/generate_keys"
+    cp "$sparkle_appcast" "$deps/bin/generate_appcast"
+fi
+
 echo "macOS dependencies prepared in $deps"

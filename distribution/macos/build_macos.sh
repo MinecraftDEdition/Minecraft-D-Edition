@@ -10,12 +10,17 @@ bin_out="$build/bin"
 bundle_out="$build/bundle"
 version="${MDE_VERSION:-0.0.0-test}"
 build_number="${MDE_BUILD_NUMBER:-1}"
+sparkle_public_key="${MDE_SPARKLE_PUBLIC_KEY:-}"
 arch="${MDE_MAC_ARCH:-$(uname -m)}"
 
 if [[ "$arch" != arm64 && "$arch" != x86_64 ]]; then
     echo "Unsupported Mac architecture: $arch" >&2
     exit 1
 fi
+[[ -n "$sparkle_public_key" ]] || {
+    echo 'MDE_SPARKLE_PUBLIC_KEY is required for a secure update-enabled build' >&2
+    exit 1
+}
 
 bash "$script_dir/prepare_dependencies.sh"
 mkdir -p "$native_out" "$bin_out" "$bundle_out"
@@ -32,12 +37,15 @@ common_cxx=(clang++ -std=c++17 -O2 -fvisibility=hidden
     -o "$native_out/audio_miniaudio_bridge.o"
 "${common_cxx[@]}" -c "$repo/native/macos/image_stb_bridge.cpp" \
     -o "$native_out/image_stb_bridge.o"
+"${common_cxx[@]}" -fobjc-arc -c "$repo/native/macos/update_sparkle_bridge.mm" \
+    -o "$native_out/update_sparkle_bridge.o"
 
 native_objects=(
     "$native_out/platform_sdl_bridge.o"
     "$native_out/vulkan_abi_bridge.o"
     "$native_out/audio_miniaudio_bridge.o"
     "$native_out/image_stb_bridge.o"
+    "$native_out/update_sparkle_bridge.o"
 )
 d_versions=(--d-version=CORRECT_ABI)
 eos_runtime=""
@@ -57,7 +65,7 @@ ldc2 -O3 -release -boundscheck=off -i -I"$repo/source" -J"$repo/shaders" \
     -of="$bin_out/Minecraft D Edition" \
     -L-lc++ \
     -L-L"$deps/lib" -L-lMoltenVK \
-    -L-F"$deps" -L-framework -LSDL3 \
+    -L-F"$deps" -L-framework -LSDL3 -L-framework -LSparkle \
     -L-framework -LCocoa -L-framework -LFoundation \
     -L-framework -LQuartzCore -L-framework -LMetal \
     -L-framework -LCoreGraphics -L-framework -LIOKit \
@@ -74,8 +82,10 @@ cp "$bin_out/Minecraft D Edition" "$app/Contents/MacOS/Minecraft D Edition"
 chmod +x "$app/Contents/MacOS/Minecraft D Edition"
 sed -e "s/@MDE_VERSION@/$version/g" \
     -e "s/@MDE_BUILD_NUMBER@/$build_number/g" \
+    -e "s|@MDE_SPARKLE_PUBLIC_KEY@|$sparkle_public_key|g" \
     "$script_dir/Info.plist.in" > "$app/Contents/Info.plist"
 cp -R "$deps/SDL3.framework" "$app/Contents/Frameworks/SDL3.framework"
+cp -R "$deps/Sparkle.framework" "$app/Contents/Frameworks/Sparkle.framework"
 cp "$deps/lib/libMoltenVK.dylib" "$app/Contents/Frameworks/libMoltenVK.dylib"
 if [[ -n "$eos_runtime" ]]; then
     cp "$eos_runtime" "$app/Contents/Frameworks/libEOSSDK-Mac-Shipping.dylib"

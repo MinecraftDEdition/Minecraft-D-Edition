@@ -6,13 +6,18 @@ on:
       version:
         description: Test build version
         required: false
-        default: mac-test
+        default: 0.1.0
+      publish_to_test:
+        description: Replace the macOS installer and update feed on the Test release
+        required: false
+        type: boolean
+        default: false
   push:
     branches:
       - codex/macos-port
 
 permissions:
-  contents: read
+  contents: write
 
 jobs:
   build-apple-silicon:
@@ -24,6 +29,23 @@ jobs:
       - name: Install LDC
         run: brew install ldc
 
+      - name: Prepare macOS dependencies
+        run: bash distribution/macos/prepare_dependencies.sh
+
+      - name: Configure secure update signing
+        env:
+          SPARKLE_PRIVATE_KEY: ${{ secrets.MACOS_SPARKLE_ED25519 }}
+        run: |
+          test -n "$SPARKLE_PRIVATE_KEY"
+          key_file="$RUNNER_TEMP/mde-sparkle-ed25519"
+          printf '%s' "$SPARKLE_PRIVATE_KEY" > "$key_file"
+          distribution/macos/build/deps/bin/generate_keys \
+            --account com.minecraftdedition.game -f "$key_file" >/dev/null
+          public_key="$(distribution/macos/build/deps/bin/generate_keys \
+            --account com.minecraftdedition.game -p)"
+          test -n "$public_key"
+          echo "MDE_SPARKLE_PUBLIC_KEY=$public_key" >> "$GITHUB_ENV"
+
       - name: Reconstruct shared release content
         run: |
           python3 tools/reconstruct_release_content.py \
@@ -31,10 +53,28 @@ jobs:
 
       - name: Build app and DMG
         env:
-          MDE_VERSION: ${{ inputs.version || 'mac-test' }}
+          MDE_VERSION: ${{ inputs.version || '0.1.0' }}
           MDE_BUILD_NUMBER: ${{ github.run_number }}
           MDE_CONTENT_ROOT: ${{ github.workspace }}/distribution/macos/build/content
         run: bash distribution/macos/build_macos.sh
+
+      - name: Smoke-test application launch
+        run: |
+          executable='distribution/macos/build/bundle/Minecraft D Edition.app/Contents/MacOS/Minecraft D Edition'
+          log="$RUNNER_TEMP/minecraft-d-edition-launch.log"
+          "$executable" >"$log" 2>&1 &
+          game_pid=$!
+          sleep 12
+          if kill -0 "$game_pid" 2>/dev/null; then
+            kill -TERM "$game_pid"
+            wait "$game_pid" || true
+          else
+            status=0
+            wait "$game_pid" || status=$?
+            cat "$log"
+            echo "The macOS game exited during its launch smoke test (status $status)." >&2
+            exit 1
+          fi
 
       - name: Inspect application
         run: |
@@ -43,11 +83,40 @@ jobs:
           codesign --verify --deep --strict --verbose=2 \
             'distribution/macos/build/bundle/Minecraft D Edition.app'
 
+      - name: Generate signed update feed
+        env:
+          SPARKLE_PRIVATE_KEY: ${{ secrets.MACOS_SPARKLE_ED25519 }}
+        run: |
+          release_dir='distribution/macos/build/release'
+          mkdir -p "$release_dir"
+          cp distribution/macos/build/Minecraft.D.Edition-macOS-arm64.dmg \
+            "$release_dir/Minecraft.D.Edition-macOS-arm64.dmg"
+          printf '%s\n' "$SPARKLE_PRIVATE_KEY" | \
+            distribution/macos/build/deps/bin/generate_appcast \
+              --ed-key-file - \
+              --download-url-prefix \
+                'https://github.com/MinecraftDEdition/Minecraft-D-Edition/releases/download/Test/' \
+              --maximum-deltas 0 \
+              -o "$release_dir/mde-macos-appcast.xml" \
+              "$release_dir"
+
       - name: Upload Mac test installer
         uses: actions/upload-artifact@v6
         with:
           name: Minecraft-D-Edition-macOS-arm64
-          path: distribution/macos/build/Minecraft.D.Edition-macOS-arm64.dmg
+          path: |
+            distribution/macos/build/release/Minecraft.D.Edition-macOS-arm64.dmg
+            distribution/macos/build/release/mde-macos-appcast.xml
           if-no-files-found: error
           retention-days: 14
 
+      - name: Publish Mac installer to Test release
+        if: ${{ github.event_name == 'workflow_dispatch' && inputs.publish_to_test }}
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          gh release upload Test \
+            distribution/macos/build/release/Minecraft.D.Edition-macOS-arm64.dmg \
+            distribution/macos/build/release/mde-macos-appcast.xml \
+            --clobber \
+            --repo "$GITHUB_REPOSITORY"

@@ -33,6 +33,7 @@ import minecraftd.platform.clock : monotonicMilliseconds, monotonicSeconds,
     sleepMilliseconds;
 import minecraftd.platform.input;
 import minecraftd.platform.paths : platformPaths;
+import minecraftd.platform.update : startUpdater;
 import minecraftd.platform.window : CursorShape, GameWindow;
 import minecraftd.server.integrated_game_server : IntegratedGameServer;
 import minecraftd.world.world : World;
@@ -61,6 +62,8 @@ final class GameClient
         auto window = new GameWindow("Minecraft: D Edition",
             GameWindow.defaultWidth, GameWindow.defaultHeight, localTestIndex);
         scope (exit) destroy(window);
+        if (localTestIndex == 0)
+            startUpdater();
         if (localTestIndex == 0)
             window.setFullscreen(options.fullscreen);
         auto world = new World();

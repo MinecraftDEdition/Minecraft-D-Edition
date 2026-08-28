@@ -14,6 +14,7 @@ last-error.log
 .idea/
 .mde-installed-manifest.txt
 .mde-update/
+distribution/macos/private/
 saves/
 screenshots/
 native/minecraft_d_edition.ico
