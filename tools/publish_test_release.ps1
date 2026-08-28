@@ -5,6 +5,27 @@ param(
 
 $ErrorActionPreference = 'Stop'
 $ProjectRoot = [IO.Path]::GetFullPath($ProjectRoot)
+$requiredAdminFolder = 'Minecraft D Edition_Admin'
+if ((Split-Path -Leaf $ProjectRoot) -cne $requiredAdminFolder) {
+    throw "Release publishing is restricted to the $requiredAdminFolder checkout. Current folder: $ProjectRoot"
+}
+
+$repository = 'MinecraftDEdition/Minecraft-D-Edition'
+$expectedRemote = "https://github.com/$repository.git"
+$gitTop = (& git -C $ProjectRoot rev-parse --show-toplevel 2>$null).Trim()
+if ($LASTEXITCODE -ne 0 -or
+    [IO.Path]::GetFullPath($gitTop) -ne $ProjectRoot.TrimEnd('\')) {
+    throw 'The Admin folder must be the root of a Git checkout.'
+}
+$origin = (& git -C $ProjectRoot remote get-url origin 2>$null).Trim()
+if ($LASTEXITCODE -ne 0 -or $origin -ne $expectedRemote) {
+    throw "Admin origin must be $expectedRemote"
+}
+$dirty = & git -C $ProjectRoot status --porcelain --untracked-files=normal
+if ($LASTEXITCODE -ne 0 -or $dirty) {
+    throw 'Commit or remove Admin source changes before publishing a release.'
+}
+
 $dist = Join-Path $ProjectRoot 'dist'
 $updates = Join-Path $dist 'updates'
 $manifest = Join-Path $updates 'mde-update-manifest-v1.txt'
@@ -21,7 +42,6 @@ if (-not (Get-Command gh.exe -ErrorAction SilentlyContinue)) {
 & gh auth status
 if ($LASTEXITCODE -ne 0) { throw 'GitHub CLI is not authenticated.' }
 
-$repository = 'MinecraftDEdition/Minecraft-D-Edition'
 $newShards = @(Get-ChildItem -LiteralPath $updates -Filter 'mde-shard-*.zip' -File)
 if ($newShards.Count -eq 0) { throw 'No update shards were produced.' }
 

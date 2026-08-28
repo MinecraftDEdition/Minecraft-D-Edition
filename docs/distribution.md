@@ -37,6 +37,9 @@ Development and publishing use a separate checkout conventionally located at
 Codex when changing the game. It holds the `.git` directory and publishing
 scripts; player installations do not. GitHub CLI authentication belongs to the
 Windows developer account and is never copied into an installer or update.
+The release publisher refuses to run outside that exact Admin folder, from a
+dirty checkout, or against a different Git remote. This prevents a copied
+player/runtime directory from becoming a release workstation.
 
 ## Build a release
 
