@@ -22,7 +22,7 @@ mkdir -p "$native_out" "$bin_out" "$bundle_out"
 
 common_cxx=(clang++ -std=c++17 -O2 -fvisibility=hidden
     -mmacosx-version-min=12.0 -arch "$arch"
-    -I"$deps/include" -I"$deps/SDL3.framework/Headers")
+    -I"$deps/include" -F"$deps")
 
 "${common_cxx[@]}" -c "$repo/native/macos/platform_sdl_bridge.cpp" \
     -o "$native_out/platform_sdl_bridge.o"
