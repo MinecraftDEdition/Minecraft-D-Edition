@@ -17,7 +17,7 @@ if [[ "$arch" != arm64 && "$arch" != x86_64 ]]; then
     exit 1
 fi
 
-"$script_dir/prepare_dependencies.sh"
+bash "$script_dir/prepare_dependencies.sh"
 mkdir -p "$native_out" "$bin_out" "$bundle_out"
 
 common_cxx=(clang++ -std=c++17 -O2 -fvisibility=hidden
@@ -116,4 +116,3 @@ hdiutil create -quiet -volname 'Minecraft D Edition' -srcfolder "$dmg_root" \
 
 echo "macOS app: $app"
 echo "macOS DMG: $dmg"
-
