@@ -1,4 +1,7 @@
 #include <SDL3/SDL.h>
+#include <SDL3/SDL_vulkan.h>
+
+#include <mach-o/dyld.h>
 
 #include <algorithm>
 #include <array>
@@ -6,6 +9,7 @@
 #include <cstring>
 #include <memory>
 #include <string>
+#include <vector>
 
 namespace {
 
@@ -44,6 +48,22 @@ struct WindowContext {
     bool captured = false;
     std::array<SDL_Cursor*, 4> cursors{};
 };
+
+std::string bundledVulkanLibrary() {
+    uint32_t capacity = 0;
+    _NSGetExecutablePath(nullptr, &capacity);
+    if (capacity == 0) return {};
+    std::vector<char> executable(capacity + 1, 0);
+    if (_NSGetExecutablePath(executable.data(), &capacity) != 0) return {};
+    std::string path(executable.data());
+    const auto executableSeparator = path.rfind('/');
+    if (executableSeparator == std::string::npos) return {};
+    path.resize(executableSeparator); // Contents/MacOS
+    const auto contentsSeparator = path.rfind('/');
+    if (contentsSeparator == std::string::npos) return {};
+    path.resize(contentsSeparator); // Contents
+    return path + "/Frameworks/libMoltenVK.dylib";
+}
 
 void copyError(char* output, uint32_t capacity, const char* text) {
     if (!output || capacity == 0) return;
@@ -115,6 +135,14 @@ void* mcdPlatformCreateWindow(const char* title, int width, int height,
         copyError(error, errorCapacity, SDL_GetError());
         return nullptr;
     }
+    const auto vulkanLibrary = bundledVulkanLibrary();
+    if (vulkanLibrary.empty()
+        || !SDL_Vulkan_LoadLibrary(vulkanLibrary.c_str())) {
+        copyError(error, errorCapacity, vulkanLibrary.empty()
+            ? "Unable to locate bundled MoltenVK" : SDL_GetError());
+        SDL_Quit();
+        return nullptr;
+    }
     auto context = std::make_unique<WindowContext>();
     SDL_WindowFlags flags = static_cast<SDL_WindowFlags>(SDL_WINDOW_VULKAN
         | SDL_WINDOW_RESIZABLE | SDL_WINDOW_HIGH_PIXEL_DENSITY);
@@ -122,6 +150,7 @@ void* mcdPlatformCreateWindow(const char* title, int width, int height,
         : "Minecraft D Edition", width, height, flags);
     if (!context->window) {
         copyError(error, errorCapacity, SDL_GetError());
+        SDL_Vulkan_UnloadLibrary();
         SDL_Quit();
         return nullptr;
     }
@@ -144,6 +173,7 @@ void mcdPlatformDestroyWindow(void* value) {
     for (auto* cursor : context->cursors)
         if (cursor) SDL_DestroyCursor(cursor);
     if (context->window) SDL_DestroyWindow(context->window);
+    SDL_Vulkan_UnloadLibrary();
     SDL_Quit();
 }
 
@@ -325,4 +355,3 @@ void mcdPlatformShowError(const char* title, const char* message) {
 }
 
 } // extern "C"
-

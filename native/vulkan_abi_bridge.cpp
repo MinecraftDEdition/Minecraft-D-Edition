@@ -865,6 +865,7 @@ struct Context {
         application.engineVersion = VK_MAKE_VERSION(0, 1, 0);
         application.apiVersion = VK_API_VERSION_1_1;
         std::vector<const char*> extensions;
+        bool enumeratePortability = false;
 #if defined(_WIN32)
         extensions = {VK_KHR_SURFACE_EXTENSION_NAME,
             VK_KHR_WIN32_SURFACE_EXTENSION_NAME};
@@ -875,20 +876,47 @@ struct Context {
         if (!sdlExtensions)
             throw std::runtime_error(std::string("SDL Vulkan extensions failed: ")
                 + SDL_GetError());
-        extensions.assign(sdlExtensions, sdlExtensions + sdlExtensionCount);
+        uint32_t availableExtensionCount = 0;
+        require(vkEnumerateInstanceExtensionProperties(nullptr,
+            &availableExtensionCount, nullptr),
+            "vkEnumerateInstanceExtensionProperties(count)");
+        std::vector<VkExtensionProperties> availableExtensions(
+            availableExtensionCount);
+        require(vkEnumerateInstanceExtensionProperties(nullptr,
+            &availableExtensionCount, availableExtensions.data()),
+            "vkEnumerateInstanceExtensionProperties");
+        const auto extensionAvailable = [&availableExtensions](const char* name) {
+            return std::any_of(availableExtensions.begin(),
+                availableExtensions.end(), [name](const auto& extension) {
+                    return std::strcmp(extension.extensionName, name) == 0;
+                });
+        };
+        for (uint32_t index = 0; index < sdlExtensionCount; ++index) {
+            if (!extensionAvailable(sdlExtensions[index])) {
+                std::string message = "Bundled MoltenVK is missing SDL-required "
+                    "instance extension: ";
+                message += sdlExtensions[index];
+                throw std::runtime_error(message);
+            }
+            extensions.push_back(sdlExtensions[index]);
+        }
         const char* portabilityEnumeration = "VK_KHR_portability_enumeration";
-        if (std::find_if(extensions.begin(), extensions.end(),
-                [portabilityEnumeration](const char* value) {
-                    return std::strcmp(value, portabilityEnumeration) == 0;
-                }) == extensions.end())
-            extensions.push_back(portabilityEnumeration);
+        if (extensionAvailable(portabilityEnumeration)) {
+            if (std::find_if(extensions.begin(), extensions.end(),
+                    [portabilityEnumeration](const char* value) {
+                        return std::strcmp(value, portabilityEnumeration) == 0;
+                    }) == extensions.end())
+                extensions.push_back(portabilityEnumeration);
+            enumeratePortability = true;
+        }
 #endif
         VkInstanceCreateInfo instanceInfo{VK_STRUCTURE_TYPE_INSTANCE_CREATE_INFO};
         instanceInfo.pApplicationInfo = &application;
         instanceInfo.enabledExtensionCount = static_cast<uint32_t>(extensions.size());
         instanceInfo.ppEnabledExtensionNames = extensions.data();
 #if defined(__APPLE__)
-        instanceInfo.flags |= VK_INSTANCE_CREATE_ENUMERATE_PORTABILITY_BIT_KHR;
+        if (enumeratePortability)
+            instanceInfo.flags |= VK_INSTANCE_CREATE_ENUMERATE_PORTABILITY_BIT_KHR;
 #endif
         require(vkCreateInstance(&instanceInfo, nullptr, &instance), "vkCreateInstance");
 #if defined(_WIN32)

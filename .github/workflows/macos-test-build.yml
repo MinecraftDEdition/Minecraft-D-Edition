@@ -62,9 +62,18 @@ jobs:
         run: |
           executable='distribution/macos/build/bundle/Minecraft D Edition.app/Contents/MacOS/Minecraft D Edition'
           log="$RUNNER_TEMP/minecraft-d-edition-launch.log"
+          error_log="$HOME/Library/Application Support/Minecraft D Edition/last-error.log"
+          rm -f "$error_log"
           "$executable" >"$log" 2>&1 &
           game_pid=$!
           sleep 12
+          if [[ -s "$error_log" ]]; then
+            cat "$error_log"
+            kill -TERM "$game_pid" 2>/dev/null || true
+            wait "$game_pid" || true
+            echo 'The macOS game reported a fatal startup error.' >&2
+            exit 1
+          fi
           if kill -0 "$game_pid" 2>/dev/null; then
             kill -TERM "$game_pid"
             wait "$game_pid" || true
