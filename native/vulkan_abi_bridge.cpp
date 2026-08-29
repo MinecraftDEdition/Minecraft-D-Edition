@@ -876,18 +876,19 @@ struct Context {
         if (!sdlExtensions)
             throw std::runtime_error(std::string("SDL Vulkan extensions failed: ")
                 + SDL_GetError());
-        uint32_t availableExtensionCount = 0;
+        uint32_t availableInstanceExtensionCount = 0;
         require(vkEnumerateInstanceExtensionProperties(nullptr,
-            &availableExtensionCount, nullptr),
+            &availableInstanceExtensionCount, nullptr),
             "vkEnumerateInstanceExtensionProperties(count)");
-        std::vector<VkExtensionProperties> availableExtensions(
-            availableExtensionCount);
+        std::vector<VkExtensionProperties> availableInstanceExtensions(
+            availableInstanceExtensionCount);
         require(vkEnumerateInstanceExtensionProperties(nullptr,
-            &availableExtensionCount, availableExtensions.data()),
+            &availableInstanceExtensionCount,
+            availableInstanceExtensions.data()),
             "vkEnumerateInstanceExtensionProperties");
-        const auto extensionAvailable = [&availableExtensions](const char* name) {
-            return std::any_of(availableExtensions.begin(),
-                availableExtensions.end(), [name](const auto& extension) {
+        const auto extensionAvailable = [&availableInstanceExtensions](const char* name) {
+            return std::any_of(availableInstanceExtensions.begin(),
+                availableInstanceExtensions.end(), [name](const auto& extension) {
                     return std::strcmp(extension.extensionName, name) == 0;
                 });
         };
