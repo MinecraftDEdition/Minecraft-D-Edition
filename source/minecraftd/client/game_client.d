@@ -78,8 +78,21 @@ final class GameClient
         auto renderer = new GameRenderer(window.handle, window.width,
             window.height, paths.resources, world, options, graphicsApi);
         scope (exit) destroy(renderer);
-        auto eos = new EosService("Steve");
-        scope (exit) destroy(eos);
+        EosService eos;
+        scope (exit) if (eos !is null) destroy(eos);
+
+        EosService ensureEos()
+        {
+            if (eos is null)
+                eos = new EosService("Steve");
+            return eos;
+        }
+
+        void tickEos()
+        {
+            if (eos !is null)
+                eos.tick();
+        }
 
         bool initialSession = true;
         while (window.running)
@@ -98,6 +111,8 @@ final class GameClient
         auto worldMenu = new WorldMenuState(paths.userData);
         scope (exit) destroy(worldMenu);
         bool multiplayerScreen = initialSession && localTestIndex > 0;
+        if (multiplayerScreen)
+            ensureEos();
         initialSession = false;
         bool worldScreen;
 
@@ -109,7 +124,7 @@ final class GameClient
                 integratedServer = new IntegratedGameServer(entry.settings,
                     entry.directory, (int percent) {
                         window.pumpMessages();
-                        eos.tick();
+                        tickEos();
                         renderer.renderLoadingScreen("Generating world", percent);
                     });
                 connectionPort = integratedServer.port;
@@ -136,7 +151,7 @@ final class GameClient
         while (window.running && gameConnection is null)
         {
             window.pumpMessages();
-            eos.tick();
+            tickEos();
             if (!window.running)
                 break;
             int resizedWidth;
@@ -381,6 +396,7 @@ final class GameClient
                         else worldMenu.screen = WorldMenuScreen.selection;
                         break;
                     case TitleAction.multiplayer:
+                        ensureEos();
                         multiplayerScreen = true;
                         serverMenu.error = "";
                         break;
@@ -414,7 +430,7 @@ final class GameClient
             && !multiplayer.loginComplete && loadingFrames++ < 600)
         {
             window.pumpMessages();
-            eos.tick();
+            tickEos();
             if (window.pressed(VK_ESCAPE)) break;
             int loadingWidth, loadingHeight;
             if (window.consumeResize(loadingWidth,loadingHeight))
@@ -513,7 +529,7 @@ final class GameClient
         while (window.running)
         {
             window.pumpMessages();
-            eos.tick();
+            tickEos();
             if (eosHostBridge !is null)
                 eosHostBridge.pump();
             if (!window.running)
@@ -748,6 +764,7 @@ final class GameClient
                         case PauseAction.publish:
                             if (integratedServer !is null)
                             {
+                                ensureEos();
                                 pauseMenu.notice = "";
                                 pauseMenu.screen = pauseMenu.published
                                     ? PauseScreen.serverInformation
