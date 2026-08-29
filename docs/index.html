@@ -9,69 +9,133 @@
   <link rel="stylesheet" href="site.css">
 </head>
 <body>
-  <header>
-    <nav class="shell" aria-label="Primary navigation">
-      <a class="brand" href="#top">Minecraft D Edition</a>
+  <a class="skip-link" href="#main">Skip to content</a>
+
+  <header class="site-header">
+    <nav class="nav-shell" aria-label="Primary navigation">
+      <a class="brand" href="#top" aria-label="Minecraft D Edition home">
+        <img class="brand-main" src="site-assets/minecraft-wordmark.png" alt="Minecraft">
+        <img class="brand-edition" src="site-assets/edition-wordmark.png" alt="D Edition">
+      </a>
       <div class="nav-links">
-        <a href="#downloads">Downloads</a>
-        <a href="#project">Project</a>
-        <a class="button" href="https://github.com/MinecraftDEdition/Minecraft-D-Edition">View source</a>
+        <a href="#game">Game</a>
+        <a href="#downloads">Download</a>
+        <a href="https://github.com/MinecraftDEdition/Minecraft-D-Edition">Source</a>
+        <a href="https://github.com/MinecraftDEdition/Minecraft-D-Edition/issues">Support</a>
+      </div>
+      <div class="nav-actions">
+        <a class="nav-download" href="#downloads">Get the Test build <span aria-hidden="true">›</span></a>
+        <a class="account-link" href="#accounts" aria-label="Learn about player accounts">
+          <span class="account-head" aria-hidden="true"></span>
+          Account
+        </a>
       </div>
     </nav>
   </header>
 
-  <main id="top">
-    <div class="shell hero">
-      <div>
-        <div class="eyebrow">Independent fan-made prototype</div>
-        <h1>Built block by block in D.</h1>
-        <p class="lead">A cross-platform voxel game project with native DirectX 12 and Vulkan rendering, integrated multiplayer, and automatic updates.</p>
-        <div class="actions">
-          <a class="button primary" href="#downloads">Download the Test build</a>
-          <a class="button" href="https://github.com/MinecraftDEdition/Minecraft-D-Edition/releases/tag/Test">Release notes</a>
+  <main id="main">
+    <section class="hero" id="top" aria-labelledby="hero-title">
+      <img class="hero-image" src="site-assets/title-screen.png" alt="Minecraft D Edition title screen running on DirectX 12">
+      <div class="hero-shade"></div>
+      <div class="hero-copy">
+        <span class="eyebrow">Independent fan-made prototype</span>
+        <h1 id="hero-title">A familiar world,<br>rebuilt in D.</h1>
+        <p>Explore, build, survive, and play across Windows and macOS with native rendering and cross-platform multiplayer.</p>
+        <div class="hero-actions">
+          <a class="block-button primary" href="#downloads">Download now <span aria-hidden="true">›</span></a>
+          <a class="block-button secondary" href="https://github.com/MinecraftDEdition/Minecraft-D-Edition/releases/tag/Test">See the Test release</a>
         </div>
       </div>
-      <div class="art" role="img" aria-label="Minecraft D Edition project artwork"></div>
-    </div>
+      <div class="hero-pips" aria-hidden="true"><span class="active"></span><span></span><span></span></div>
+    </section>
 
-    <section id="downloads">
-      <div class="shell">
-        <h2>Choose your platform</h2>
-        <p class="section-lead">The Test channel is under active development. Installers keep the game current while preserving player-owned worlds and settings.</p>
-        <div class="grid">
-          <article class="card">
-            <span class="tag">Windows</span>
-            <h3>DirectX 12 + Vulkan</h3>
-            <p>Native per-user installer with automatic, file-aware updates.</p>
-            <a href="https://github.com/MinecraftDEdition/Minecraft-D-Edition/releases/download/Test/Minecraft.D.Edition.Setup.exe">Download for Windows</a>
+    <section class="intro" id="game">
+      <div class="content-shell">
+        <p class="section-kicker">Discover D Edition</p>
+        <h2>One game. Native desktop builds.</h2>
+        <p class="section-intro">The same gameplay rules, worlds, assets, and network protocol are shared across platforms while every build keeps native windowing, input, audio, and graphics integration.</p>
+
+        <div class="feature-grid">
+          <article class="feature-card grass-card">
+            <span class="feature-number">01</span>
+            <div><h3>Built for performance</h3><p>DirectX 12 on Windows and Vulkan through MoltenVK on Apple silicon.</p></div>
           </article>
-          <article class="card">
-            <span class="tag">Apple silicon</span>
-            <h3>macOS + MoltenVK</h3>
-            <p>Native macOS application distributed as a DMG with signed update support.</p>
-            <a href="https://github.com/MinecraftDEdition/Minecraft-D-Edition/releases/download/Test/Minecraft.D.Edition-macOS-arm64.dmg">Download for macOS</a>
+          <article class="feature-card stone-card">
+            <span class="feature-number">02</span>
+            <div><h3>Cross-platform worlds</h3><p>Windows and macOS players share the same authoritative server and multiplayer protocol.</p></div>
           </article>
-          <article class="card">
-            <span class="tag">Source</span>
-            <h3>Follow development</h3>
-            <p>Read the D source, renderer architecture, platform documentation, and issue tracker.</p>
-            <a href="https://github.com/MinecraftDEdition/Minecraft-D-Edition">Open GitHub</a>
+          <article class="feature-card deepslate-card">
+            <span class="feature-number">03</span>
+            <div><h3>Open development</h3><p>Follow the D source, renderer architecture, platform work, and public issue tracker.</p></div>
           </article>
         </div>
       </div>
     </section>
 
-    <section id="project">
-      <div class="shell">
-        <h2>One game, native desktop builds</h2>
-        <p class="section-lead">Windows and macOS share the same gameplay rules, world format, assets, and network protocol while each platform keeps its native windowing, input, audio, renderer, and installer integration.</p>
-        <div class="notice">Minecraft D Edition is an independent fan-made project. It is not affiliated with, endorsed by, or sponsored by Mojang Studios or Microsoft. Minecraft is a trademark of Microsoft.</div>
+    <section class="downloads" id="downloads">
+      <div class="content-shell">
+        <p class="section-kicker light">Choose your platform</p>
+        <h2>Enter the Test world.</h2>
+        <p class="section-intro light-copy">Installers update changed game files while preserving player-owned worlds and settings.</p>
+
+        <div class="download-grid">
+          <article class="download-card">
+            <div class="platform-icon windows-icon" aria-hidden="true"><span></span><span></span><span></span><span></span></div>
+            <div class="download-copy">
+              <span class="platform-tag">Windows 10/11</span>
+              <h3>DirectX 12 + Vulkan</h3>
+              <p>Native installer with automatic, file-aware updates.</p>
+              <a class="block-button primary" href="https://github.com/MinecraftDEdition/Minecraft-D-Edition/releases/download/Test/Minecraft.D.Edition.Setup.exe">Download for Windows <span aria-hidden="true">›</span></a>
+            </div>
+          </article>
+
+          <article class="download-card">
+            <div class="platform-icon apple-icon" aria-hidden="true">●</div>
+            <div class="download-copy">
+              <span class="platform-tag">Apple silicon</span>
+              <h3>macOS + MoltenVK</h3>
+              <p>Native application distributed as a DMG with signed update support.</p>
+              <a class="block-button primary" href="https://github.com/MinecraftDEdition/Minecraft-D-Edition/releases/download/Test/Minecraft.D.Edition-macOS-arm64.dmg">Download for macOS <span aria-hidden="true">›</span></a>
+            </div>
+          </article>
+        </div>
+      </div>
+    </section>
+
+    <section class="accounts" id="accounts">
+      <div class="content-shell account-layout">
+        <div class="account-copy">
+          <p class="section-kicker">Player identity</p>
+          <h2>One account, every platform.</h2>
+          <p>The planned account layer will use a hosted sign-in flow instead of collecting passwords inside this static website. The same identity can later connect website profiles, Windows, macOS, and multiplayer moderation.</p>
+          <ul class="account-list">
+            <li>Email verification and account recovery</li>
+            <li>Optional passkeys and multi-factor authentication</li>
+            <li>Secure desktop login using OAuth 2.0 with PKCE</li>
+            <li>No EOS secrets or long-lived tokens in the browser</li>
+          </ul>
+        </div>
+        <div class="account-panel" aria-label="Account system status">
+          <div class="player-face" aria-hidden="true"><span></span><span></span></div>
+          <p class="account-status">Backend connection required</p>
+          <h3>Account services are not live yet.</h3>
+          <p>The visual entry point is ready. Sign-up will be enabled only after a managed identity provider and protected account API are configured.</p>
+          <span class="disabled-button" aria-disabled="true">Sign in — coming next</span>
+        </div>
       </div>
     </section>
   </main>
 
   <footer>
-    <div class="shell">Minecraft D Edition · Test software · Source and issue tracking on GitHub</div>
+    <div class="content-shell footer-grid">
+      <div><strong>Minecraft D Edition</strong><p>Independent fan-made Test software written in D.</p></div>
+      <div class="footer-links">
+        <a href="https://github.com/MinecraftDEdition/Minecraft-D-Edition">Source</a>
+        <a href="https://github.com/MinecraftDEdition/Minecraft-D-Edition/releases/tag/Test">Releases</a>
+        <a href="https://github.com/MinecraftDEdition/Minecraft-D-Edition/issues">Issues</a>
+      </div>
+    </div>
+    <div class="content-shell legal">Minecraft D Edition is not affiliated with, endorsed by, or sponsored by Mojang Studios or Microsoft. Minecraft is a trademark of Microsoft.</div>
   </footer>
 </body>
 </html>
