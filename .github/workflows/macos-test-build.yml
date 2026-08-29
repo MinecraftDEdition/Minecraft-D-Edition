@@ -98,7 +98,9 @@ jobs:
           nm -an "$executable" | grep -Ei \
             'InvalidMemory|lockNR|finaliz|conservative.*gc|rt_finalize|d_newclass' \
             | head -n 200 || true
-          atos -arch arm64 -o "$executable" -l 0x100000000 \
+          # The physical crash's main-image ASLR slide is 0xBA0000, derived
+          # by matching ten independent GC/runtime frames.
+          atos -arch arm64 -o "$executable" -l 0x100ba0000 \
             0x100ccd0c7 0x100cd512f 0x100cd5b87 0x100cb9a0b \
             0x100cc063f 0x100cc04cb 0x100cd68af 0x100cd69bb \
             0x100cb0aaf 0x100bf0523 0x100cd6d4b 0x100cc55f3 \
