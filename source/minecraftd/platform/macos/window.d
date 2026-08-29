@@ -26,6 +26,7 @@ private extern(C) nothrow
     int mcdPlatformConsumeResize(void* context, int* width, int* height);
     int mcdPlatformKeyDown(void* context, int key);
     int mcdPlatformKeyPressed(void* context, int key);
+    int mcdPlatformKeyRepeated(void* context, int key);
     int mcdPlatformFirstPressedKey(void* context);
     int mcdPlatformConsumeWheel(void* context);
     uint mcdPlatformConsumeText(void* context, char* output, uint capacity);
@@ -104,6 +105,10 @@ final class GameWindow
     bool pressed(int key) const
     {
         return mcdPlatformKeyPressed(cast(void*) context, key) != 0;
+    }
+    bool repeated(int key) const
+    {
+        return mcdPlatformKeyRepeated(cast(void*) context, key) != 0;
     }
     int firstPressedKey() const
     {

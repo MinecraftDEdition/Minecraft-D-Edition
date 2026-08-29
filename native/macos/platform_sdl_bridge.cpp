@@ -40,12 +40,14 @@ struct WindowContext {
     SDL_Window* window = nullptr;
     std::array<bool, 256> down{};
     std::array<bool, 256> pressed{};
+    std::array<bool, 256> repeated{};
     std::string text;
     int wheel = 0;
     int resizeWidth = 0;
     int resizeHeight = 0;
     bool running = true;
     bool captured = false;
+    bool textInputActive = false;
     std::array<SDL_Cursor*, 4> cursors{};
 };
 
@@ -161,7 +163,6 @@ void* mcdPlatformCreateWindow(const char* title, int width, int height,
     context->cursors[1] = SDL_CreateSystemCursor(SDL_SYSTEM_CURSOR_TEXT);
     context->cursors[2] = SDL_CreateSystemCursor(SDL_SYSTEM_CURSOR_POINTER);
     context->cursors[3] = SDL_CreateSystemCursor(SDL_SYSTEM_CURSOR_EW_RESIZE);
-    SDL_StartTextInput(context->window);
     SDL_RaiseWindow(context->window);
     return context.release();
 }
@@ -169,7 +170,8 @@ void* mcdPlatformCreateWindow(const char* title, int width, int height,
 void mcdPlatformDestroyWindow(void* value) {
     std::unique_ptr<WindowContext> context(static_cast<WindowContext*>(value));
     if (!context) return;
-    if (context->window) SDL_StopTextInput(context->window);
+    if (context->window && context->textInputActive)
+        SDL_StopTextInput(context->window);
     for (auto* cursor : context->cursors)
         if (cursor) SDL_DestroyCursor(cursor);
     if (context->window) SDL_DestroyWindow(context->window);
@@ -186,6 +188,7 @@ void mcdPlatformPump(void* value) {
     auto* context = static_cast<WindowContext*>(value);
     if (!context) return;
     context->pressed.fill(false);
+    context->repeated.fill(false);
     SDL_Event event{};
     while (SDL_PollEvent(&event)) {
         switch (event.type) {
@@ -196,8 +199,10 @@ void mcdPlatformPump(void* value) {
             case SDL_EVENT_KEY_DOWN:
             case SDL_EVENT_KEY_UP: {
                 const bool down = event.type == SDL_EVENT_KEY_DOWN;
-                setKey(context, keyFromScancode(event.key.scancode), down,
-                    down && !event.key.repeat);
+                const int key = keyFromScancode(event.key.scancode);
+                setKey(context, key, down, down && !event.key.repeat);
+                if (down && event.key.repeat && key >= 0 && key < 256)
+                    context->repeated[static_cast<size_t>(key)] = true;
                 break;
             }
             case SDL_EVENT_MOUSE_BUTTON_DOWN:
@@ -246,6 +251,11 @@ int mcdPlatformKeyDown(void* value, int key) {
 int mcdPlatformKeyPressed(void* value, int key) {
     auto* context = static_cast<WindowContext*>(value);
     return context && key >= 0 && key < 256 && context->pressed[key] ? 1 : 0;
+}
+
+int mcdPlatformKeyRepeated(void* value, int key) {
+    auto* context = static_cast<WindowContext*>(value);
+    return context && key >= 0 && key < 256 && context->repeated[key] ? 1 : 0;
 }
 
 int mcdPlatformFirstPressedKey(void* value) {
@@ -319,6 +329,14 @@ void mcdPlatformSetMouseCapture(void* value, int captured) {
     if (!context) return;
     context->captured = captured != 0;
     SDL_SetWindowRelativeMouseMode(context->window, context->captured);
+    const bool wantsTextInput = !context->captured;
+    if (wantsTextInput != context->textInputActive) {
+        if (wantsTextInput)
+            SDL_StartTextInput(context->window);
+        else
+            SDL_StopTextInput(context->window);
+        context->textInputActive = wantsTextInput;
+    }
 }
 
 int mcdPlatformSetClipboard(const char* value) {
@@ -337,7 +355,7 @@ uint32_t mcdPlatformGetClipboard(char* output, uint32_t capacity) {
 }
 
 int mcdPlatformShortcutDown(void*) {
-    return (SDL_GetModState() & SDL_KMOD_GUI) != 0 ? 1 : 0;
+    return (SDL_GetModState() & (SDL_KMOD_GUI | SDL_KMOD_CTRL)) != 0 ? 1 : 0;
 }
 
 void mcdPlatformWindowSize(void* value, int* width, int* height) {

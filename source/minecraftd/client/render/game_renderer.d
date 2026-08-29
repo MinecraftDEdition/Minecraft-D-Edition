@@ -714,6 +714,11 @@ final class GameRenderer
         cancelMining();
     }
 
+    long chatCursorAt(int mouseX, int mouseY, const ChatState chat) const
+    {
+        return chatRenderer.cursorAt(mouseX, mouseY, width, height, chat);
+    }
+
     void render(LocalPlayer player, const ChatState chat,
         MultiplayerClient multiplayer, float partialTick, float elapsedSeconds,
         const PauseMenuState pauseState = null, int menuMouseX = 0,

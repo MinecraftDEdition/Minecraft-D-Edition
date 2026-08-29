@@ -95,12 +95,28 @@ final class ChatRenderer
             cast(int) logicalWidth - 2, cast(int) logicalHeight - 2,
             logicalWidth, logicalHeight, Color(0,0,0,backgroundOpacity));
 
-        const available = cast(int) logicalWidth - 12;
         size_t visibleStart;
-        while (visibleStart < chat.cursor
-            && font.width(chat.input[visibleStart .. chat.cursor]) > available)
-            ++visibleStart;
-        const shown = chat.input[visibleStart .. $];
+        size_t visibleEnd;
+        visibleRange(chat, cast(int) logicalWidth, visibleStart, visibleEnd);
+        const shown = chat.input[visibleStart .. visibleEnd];
+
+        if (chat.hasSelection)
+        {
+            const first = chat.selectionStart > visibleStart
+                ? chat.selectionStart : visibleStart;
+            const after = chat.selectionEnd < visibleEnd
+                ? chat.selectionEnd : visibleEnd;
+            if (first < after)
+            {
+                const selectionX = 4
+                    + font.width(chat.input[visibleStart .. first]);
+                const selectionRight = 4
+                    + font.width(chat.input[visibleStart .. after]);
+                appendRect(frame, selectionX, cast(int) logicalHeight - 12,
+                    selectionRight, cast(int) logicalHeight - 3,
+                    logicalWidth, logicalHeight, Color(0.25f,0.45f,0.85f,0.8f));
+            }
+        }
         frame.append(font.buildText(shown, 4, cast(int) logicalHeight - 12,
                 logicalWidth, logicalHeight, Color(1, 1, 1, 1)),
             fontTexture, Mat4.identity(), DrawLayer.overlay);
@@ -114,7 +130,48 @@ final class ChatRenderer
         }
     }
 
+    long cursorAt(int mouseX, int mouseY, uint viewportWidth,
+        uint viewportHeight, const ChatState chat) const
+    {
+        const scale = automaticGuiScale(viewportWidth, viewportHeight);
+        const logicalWidth = cast(int) viewportWidth / scale;
+        const logicalHeight = cast(int) viewportHeight / scale;
+        const x = mouseX / scale;
+        const y = mouseY / scale;
+        if (y < logicalHeight - 14 || y >= logicalHeight - 2)
+            return -1;
+
+        size_t visibleStart;
+        size_t visibleEnd;
+        visibleRange(chat, logicalWidth, visibleStart, visibleEnd);
+        if (x <= 4)
+            return cast(long) visibleStart;
+        int previousX = 4;
+        foreach (index; visibleStart .. visibleEnd)
+        {
+            const nextX = 4 + font.width(chat.input[visibleStart .. index + 1]);
+            if (x < previousX + (nextX - previousX) / 2)
+                return cast(long) index;
+            previousX = nextX;
+        }
+        return cast(long) visibleEnd;
+    }
+
 private:
+    void visibleRange(const ChatState chat, int logicalWidth,
+        out size_t visibleStart, out size_t visibleEnd) const
+    {
+        const available = logicalWidth - 12;
+        visibleStart = 0;
+        while (visibleStart < chat.cursor
+            && font.width(chat.input[visibleStart .. chat.cursor]) > available)
+            ++visibleStart;
+        visibleEnd = visibleStart;
+        while (visibleEnd < chat.input.length
+            && font.width(chat.input[visibleStart .. visibleEnd + 1]) <= available)
+            ++visibleEnd;
+    }
+
     static int automaticGuiScale(uint width, uint height)
     {
         int result = 1;

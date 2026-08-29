@@ -19,6 +19,7 @@ private __gshared int pendingClientHeight;
 private __gshared HCURSOR desiredCursor;
 private __gshared bool closeRequested;
 private __gshared bool[256] framePressed;
+private __gshared bool[256] frameRepeated;
 
 enum CursorShape : ubyte
 {
@@ -36,8 +37,13 @@ extern (Windows) LRESULT windowProcedure(HWND window, UINT message, WPARAM wPara
         case WM_SYSKEYDOWN:
             // Bit 30 is set for auto-repeated key-down messages. `pressed`
             // represents a physical up-to-down edge, so latch only the first.
-            if (wParam < framePressed.length && (lParam & (1L << 30)) == 0)
-                framePressed[cast(size_t) wParam] = true;
+            if (wParam < framePressed.length)
+            {
+                if ((lParam & (1L << 30)) == 0)
+                    framePressed[cast(size_t) wParam] = true;
+                else
+                    frameRepeated[cast(size_t) wParam] = true;
+            }
             return DefWindowProcW(window, message, wParam, lParam);
         case WM_LBUTTONDOWN:
             framePressed[VK_LBUTTON] = true;
@@ -198,6 +204,7 @@ final class GameWindow
         // and can miss a complete press/release between rendered frames. Keep
         // a frame-local event latch populated by the window procedure instead.
         framePressed[] = false;
+        frameRepeated[] = false;
         MSG message;
         while (PeekMessageW(&message, null, 0, 0, PM_REMOVE))
         {
@@ -234,6 +241,12 @@ final class GameWindow
     {
         return virtualKey >= 0 && virtualKey < framePressed.length
             && framePressed[virtualKey];
+    }
+
+    bool repeated(int virtualKey) const
+    {
+        return virtualKey >= 0 && virtualKey < frameRepeated.length
+            && frameRepeated[virtualKey];
     }
 
     int firstPressedKey() const

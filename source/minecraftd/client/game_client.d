@@ -464,6 +464,7 @@ final class GameClient
         bool sprintLatched;
         bool attackToggleState;
         bool useToggleState;
+        bool chatMouseSelecting;
         uint lastJumpTapMilliseconds;
         uint dropHeldTicks;
         bool suppressPrimaryUntilRelease = window.down(VK_LBUTTON);
@@ -575,6 +576,8 @@ final class GameClient
             const homePressed = window.pressed(VK_HOME);
             const endPressed = window.pressed(VK_END);
             const deletePressed = window.pressed(VK_DELETE);
+            const backspacePressed = window.pressed(VK_BACK)
+                || window.repeated(VK_BACK);
             const perspectivePressed = window.pressed(
                 options.key(OptionsAction.bindPerspective));
             const attackPressed = window.pressed(
@@ -805,6 +808,7 @@ final class GameClient
             else if (!chat.active && openChatPressed)
             {
                 chat.open();
+                chatMouseSelecting = false;
                 window.clearTextInput();
                 window.setMouseCapture(false);
                 window.setCursorShape(CursorShape.text);
@@ -816,26 +820,73 @@ final class GameClient
             }
             else if (chat.active)
             {
-                chat.insertCharacters(window.consumeTextInput());
+                const mouse = window.cursorPosition();
+                const mouseCursor = renderer.chatCursorAt(mouse.x, mouse.y, chat);
+                if (window.pressed(VK_LBUTTON) && mouseCursor >= 0)
+                {
+                    chat.setCursor(cast(size_t) mouseCursor);
+                    chatMouseSelecting = true;
+                }
+                else if (chatMouseSelecting && window.down(VK_LBUTTON)
+                    && mouseCursor >= 0)
+                    chat.setCursor(cast(size_t) mouseCursor, true);
+                if (!window.down(VK_LBUTTON))
+                    chatMouseSelecting = false;
+
+                const shortcut = window.shortcutDown();
+                if (shortcut && window.pressed('A'))
+                {
+                    window.clearTextInput();
+                    chat.selectAll();
+                }
+                else if (shortcut && window.pressed('C'))
+                {
+                    window.clearTextInput();
+                    if (chat.hasSelection)
+                        window.setClipboardText(chat.selectedText);
+                }
+                else if (shortcut && window.pressed('X'))
+                {
+                    window.clearTextInput();
+                    if (chat.hasSelection)
+                    {
+                        if (window.setClipboardText(chat.selectedText))
+                            chat.cutSelection();
+                    }
+                }
+                else if (shortcut && window.pressed('V'))
+                {
+                    window.clearTextInput();
+                    chat.paste(window.clipboardText());
+                }
+                else
+                    chat.insertCharacters(window.consumeTextInput());
                 if (escapePressed)
                 {
                     chat.close(options.boolean("chatDrafts",true));
+                    chatMouseSelecting = false;
                     window.setMouseCapture(true);
                     window.setCursorShape(CursorShape.arrow);
                 }
                 else if (enterPressed)
                 {
                     chat.submit(multiplayer);
+                    chatMouseSelecting = false;
                     window.setMouseCapture(true);
                     window.setCursorShape(CursorShape.arrow);
                 }
                 else
                 {
-                    if (leftPressed) chat.moveCursor(-1);
-                    if (rightPressed) chat.moveCursor(1);
-                    if (homePressed) chat.cursor = 0;
-                    if (endPressed) chat.cursor = chat.input.length;
-                    if (deletePressed) chat.deleteForward();
+                    const selecting = window.down(VK_SHIFT);
+                    if (leftPressed || window.repeated(VK_LEFT))
+                        chat.moveCursor(-1, selecting);
+                    if (rightPressed || window.repeated(VK_RIGHT))
+                        chat.moveCursor(1, selecting);
+                    if (homePressed) chat.moveToStart(selecting);
+                    if (endPressed) chat.moveToEnd(selecting);
+                    if (backspacePressed) chat.backspace();
+                    if (deletePressed || window.repeated(VK_DELETE))
+                        chat.deleteForward();
                 }
             }
             else
