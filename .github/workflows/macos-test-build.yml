@@ -82,12 +82,21 @@ jobs:
           MDE_BUILD_NUMBER: ${{ github.run_number }}
           MDE_CONTENT_ROOT: ${{ github.workspace }}/distribution/macos/build/content
           MDE_REQUIRE_EOS: 1
+          MDE_DEBUG_SYMBOLS: 1
         run: bash distribution/macos/build_macos.sh
 
       - name: Symbolize reported macOS crash
         run: |
           executable='distribution/macos/build/bundle/Minecraft D Edition.app/Contents/MacOS/Minecraft D Edition'
           map_file='distribution/macos/build/Minecraft D Edition-linker.map'
+          atos -arch arm64 -o "$executable" -l 0x100000000 \
+            0x100ccd0c7 0x100cd512f 0x100cd5b87 0x100cb9a0b \
+            0x100cc063f 0x100cc04cb 0x100cd68af 0x100cd69bb \
+            0x100cb0aaf 0x100bf0523 0x100cd6d4b 0x100cc55f3 \
+            0x100cc25a3 0x100cc4873 0x100cc05db 0x100cc04cb \
+            0x100c189f3 0x100bb4ac7 0x100bbcbcf 0x100bbc4bb \
+            0x100bf952b 0x100cc099b 0x100cd575f 0x100cd55fb \
+            0x100cd547f
           python3 - "$map_file" <<'PY'
           import bisect
           import re
