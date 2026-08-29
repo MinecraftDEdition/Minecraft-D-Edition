@@ -69,6 +69,23 @@ void require(VkResult result, const char* operation) {
             + std::to_string(static_cast<int>(result)) + ")");
 }
 
+int surfaceFormatPreference(const VkSurfaceFormatKHR& candidate) {
+    // The renderer deliberately matches the DX12 path: textures and vertex
+    // colours already contain display-encoded sRGB values, and the UNORM back
+    // buffer stores those values unchanged.  An *_SRGB attachment would apply
+    // another linear-to-sRGB transform and make the entire image too bright.
+    int score = 0;
+    switch (candidate.format) {
+        case VK_FORMAT_B8G8R8A8_UNORM: score = 3000; break;
+        case VK_FORMAT_R8G8B8A8_UNORM: score = 2000; break;
+        case VK_FORMAT_A8B8G8R8_UNORM_PACK32: score = 1000; break;
+        default: break;
+    }
+    if (candidate.colorSpace == VK_COLOR_SPACE_SRGB_NONLINEAR_KHR)
+        score += 500;
+    return score;
+}
+
 std::vector<uint32_t> readSpirv(const char* path) {
     std::ifstream input(path, std::ios::binary | std::ios::ate);
     if (!input) throw std::runtime_error(std::string("Cannot open SPIR-V shader: ") + path);
@@ -538,8 +555,14 @@ struct Context {
             throw std::runtime_error(
                 "Vulkan swapchain does not support menu-blur capture");
         auto selected = formats[0];
-        for (const auto& candidate : formats)
-            if (candidate.format == VK_FORMAT_B8G8R8A8_UNORM) selected = candidate;
+        int selectedPreference = surfaceFormatPreference(selected);
+        for (const auto& candidate : formats) {
+            const int candidatePreference = surfaceFormatPreference(candidate);
+            if (candidatePreference > selectedPreference) {
+                selected = candidate;
+                selectedPreference = candidatePreference;
+            }
+        }
         colorFormat = selected.format;
         if (capabilities.currentExtent.width != UINT32_MAX)
             extent = capabilities.currentExtent;
