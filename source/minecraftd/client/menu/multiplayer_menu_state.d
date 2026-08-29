@@ -1,6 +1,6 @@
 module minecraftd.client.menu.multiplayer_menu_state;
 
-import std.file : exists, getcwd, readText, write;
+import std.file : exists, mkdirRecurse, readText, write;
 import std.path : buildPath;
 import std.string : splitLines;
 
@@ -25,9 +25,11 @@ final class MultiplayerMenuState
 
     private string storagePath;
 
-    this()
+    this(string userDataDirectory)
     {
-        storagePath = buildPath(getcwd(), "data", "server_entry.txt");
+        const dataDirectory = buildPath(userDataDirectory, "data");
+        mkdirRecurse(dataDirectory);
+        storagePath = buildPath(dataDirectory, "server_entry.txt");
         load();
     }
 
@@ -122,9 +124,16 @@ private:
 
 unittest
 {
-    auto state = new MultiplayerMenuState();
+    import std.file : rmdirRecurse, tempDir;
+
+    const directory = buildPath(tempDir(),
+        "minecraft-d-edition-multiplayer-menu-test");
+    scope (exit) if (exists(directory)) rmdirRecurse(directory);
+    auto state = new MultiplayerMenuState(directory);
     state.serverAddress = "";
     state.activate(MultiplayerField.serverAddress);
     state.paste("127.0.0.1:25565\r\n");
     assert(state.serverAddress == "127.0.0.1:25565");
+    state.save();
+    assert(exists(buildPath(directory, "data", "server_entry.txt")));
 }

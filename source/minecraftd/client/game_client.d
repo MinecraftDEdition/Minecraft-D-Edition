@@ -93,7 +93,7 @@ final class GameClient
         connectionEndpoint.host = connectionHost;
         connectionEndpoint.port = connectionPort;
         connectionEndpoint.valid = true;
-        auto serverMenu = new MultiplayerMenuState();
+        auto serverMenu = new MultiplayerMenuState(paths.userData);
         scope (exit) destroy(serverMenu);
         auto worldMenu = new WorldMenuState(paths.userData);
         scope (exit) destroy(worldMenu);
