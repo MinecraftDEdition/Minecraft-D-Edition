@@ -74,6 +74,7 @@ ldc2 -O3 -release -boundscheck=off -i -I"$repo/source" -J"$repo/shaders" \
     -L-framework -LCoreGraphics -L-framework -LIOKit \
     -L-framework -LIOSurface -L-framework -LCoreAudio \
     -L-framework -LAudioToolbox \
+    -L-map -L"$build/Minecraft D Edition-linker.map" \
     -L-rpath -L@executable_path/../Frameworks \
     ${eos_runtime:+-L"$eos_runtime"}
 

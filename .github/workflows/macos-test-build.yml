@@ -87,7 +87,8 @@ jobs:
       - name: Symbolize reported macOS crash
         run: |
           executable='distribution/macos/build/bundle/Minecraft D Edition.app/Contents/MacOS/Minecraft D Edition'
-          python3 - "$executable" <<'PY'
+          map_file='distribution/macos/build/Minecraft D Edition-linker.map'
+          python3 - "$map_file" <<'PY'
           import bisect
           import re
           import subprocess
@@ -103,12 +104,13 @@ jobs:
               0x100cd547f,
           ]
           symbols = []
-          for line in subprocess.check_output(
-                  ["nm", "-an", sys.argv[1]], text=True,
-                  errors="replace").splitlines():
-              match = re.match(r"^([0-9a-fA-F]{16})\s+\S\s+(.+)$", line)
+          for line in open(sys.argv[1], encoding="utf-8", errors="replace"):
+              match = re.match(
+                  r"^\s*(0x[0-9a-fA-F]+)\s+0x[0-9a-fA-F]+\s+\[\s*\d+\]\s+(.+)$",
+                  line)
               if match:
                   symbols.append((int(match.group(1), 16), match.group(2)))
+          symbols.sort()
           addresses = [address for address, _ in symbols]
           for target in targets:
               index = bisect.bisect_right(addresses, target) - 1
