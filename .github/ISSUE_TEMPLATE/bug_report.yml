@@ -1,0 +1,51 @@
+name: Bug report
+description: Report a reproducible problem in Minecraft D Edition
+title: "[Bug]: "
+labels:
+  - bug
+body:
+  - type: markdown
+    attributes:
+      value: Never include EOS credentials, access tokens, private invitation codes, or private world data.
+  - type: input
+    id: version
+    attributes:
+      label: Game version
+      placeholder: 0.1.7
+    validations:
+      required: true
+  - type: dropdown
+    id: platform
+    attributes:
+      label: Platform
+      options:
+        - Windows (DirectX 12)
+        - Windows (Vulkan)
+        - macOS (Vulkan through MoltenVK)
+        - Linux (development build)
+    validations:
+      required: true
+  - type: textarea
+    id: steps
+    attributes:
+      label: Steps to reproduce
+      description: List the smallest reliable sequence that causes the problem.
+    validations:
+      required: true
+  - type: textarea
+    id: expected
+    attributes:
+      label: Expected behavior
+    validations:
+      required: true
+  - type: textarea
+    id: actual
+    attributes:
+      label: Actual behavior
+    validations:
+      required: true
+  - type: textarea
+    id: context
+    attributes:
+      label: Additional context
+      description: Screenshots and sanitized logs are helpful.

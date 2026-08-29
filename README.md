@@ -4,6 +4,14 @@ An independent voxel game project written in D. Windows currently supports
 interchangeable DirectX 12 and Vulkan renderers while the Vulkan path is being
 prepared for Linux and MoltenVK on macOS.
 
+[Website](https://minecraftdedition.com) ·
+[Downloads](https://github.com/MinecraftDEdition/Minecraft-D-Edition/releases/tag/Test) ·
+[Report a bug](https://github.com/MinecraftDEdition/Minecraft-D-Edition/issues)
+
+> Minecraft D Edition is an independent fan-made project. It is not affiliated
+> with, endorsed by, or sponsored by Mojang Studios or Microsoft. Minecraft is
+> a trademark of Microsoft.
+
 ## Install and update
 
 Windows releases currently use a small per-user web installer and a lightweight launcher.
