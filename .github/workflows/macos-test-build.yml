@@ -26,11 +26,36 @@ jobs:
     steps:
       - uses: actions/checkout@v6
 
-      - name: Install LDC
-        run: brew install ldc
+      - name: Install build tools
+        run: brew install ldc openssl@3
 
       - name: Prepare macOS dependencies
         run: bash distribution/macos/prepare_dependencies.sh
+
+      - name: Prepare licensed EOS SDK
+        env:
+          GH_TOKEN: ${{ github.token }}
+          EOS_SDK_ARCHIVE_KEY: ${{ secrets.EOS_SDK_ARCHIVE_KEY }}
+        run: |
+          test -n "$EOS_SDK_ARCHIVE_KEY"
+          encrypted="$RUNNER_TEMP/mde-eos-macos-sdk-v1.19.1.2.tar.gz.enc"
+          archive="$RUNNER_TEMP/mde-eos-macos-sdk-v1.19.1.2.tar.gz"
+          eos_root="$RUNNER_TEMP/mde-eos-macos-sdk"
+          gh release download build-dependencies \
+            --repo "$GITHUB_REPOSITORY" \
+            --pattern 'mde-eos-macos-sdk-v1.19.1.2.tar.gz.enc' \
+            --dir "$RUNNER_TEMP"
+          printf '%s  %s\n' \
+            'e460a2badebbcf68bfbb0d5c62b9e18ac217ea8280804c0e517fbe5fd24f7d3a' \
+            "$encrypted" | shasum -a 256 --check
+          "$(brew --prefix openssl@3)/bin/openssl" enc -d -aes-256-cbc \
+            -pbkdf2 -iter 200000 -in "$encrypted" -out "$archive" \
+            -pass env:EOS_SDK_ARCHIVE_KEY
+          mkdir -p "$eos_root"
+          tar -xzf "$archive" -C "$eos_root"
+          test -f "$eos_root/SDK/Include/eos_sdk.h"
+          test -f "$eos_root/SDK/Bin/libEOSSDK-Mac-Shipping.dylib"
+          echo "MDE_EOS_SDK_ROOT=$eos_root/SDK" >> "$GITHUB_ENV"
 
       - name: Configure secure update signing
         env:
@@ -56,6 +81,7 @@ jobs:
           MDE_VERSION: ${{ inputs.version || '0.1.0' }}
           MDE_BUILD_NUMBER: ${{ github.run_number }}
           MDE_CONTENT_ROOT: ${{ github.workspace }}/distribution/macos/build/content
+          MDE_REQUIRE_EOS: 1
         run: bash distribution/macos/build_macos.sh
 
       - name: Smoke-test application launch
@@ -85,10 +111,22 @@ jobs:
             exit 1
           fi
 
+      - name: Smoke-test EOS Connect
+        run: |
+          executable='distribution/macos/build/bundle/Minecraft D Edition.app/Contents/MacOS/Minecraft D Edition'
+          eos_home="$RUNNER_TEMP/eos-smoke-home"
+          mkdir -p "$eos_home"
+          HOME="$eos_home" "$executable" --eos-smoke-test
+          cat eos-smoke-test.log
+          grep -F 'EOS Connect login succeeded; P2P is ready.' eos-smoke-test.log
+
       - name: Inspect application
         run: |
           file 'distribution/macos/build/bundle/Minecraft D Edition.app/Contents/MacOS/Minecraft D Edition'
           otool -L 'distribution/macos/build/bundle/Minecraft D Edition.app/Contents/MacOS/Minecraft D Edition'
+          eos='distribution/macos/build/bundle/Minecraft D Edition.app/Contents/Frameworks/libEOSSDK-Mac-Shipping.dylib'
+          test -f "$eos"
+          lipo -info "$eos"
           codesign --verify --deep --strict --verbose=2 \
             'distribution/macos/build/bundle/Minecraft D Edition.app'
 

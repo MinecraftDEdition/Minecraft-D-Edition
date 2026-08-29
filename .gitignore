@@ -36,6 +36,7 @@ data/eos-cache/
 data/options.txt
 data/server_entry.txt
 data/window_state.txt
+/private/
 
 # Locally imported, copyrighted Minecraft Java assets.
 assets/minecraft/sounds/**/*.ogg

@@ -33,10 +33,13 @@ update with the repository's private Ed25519 key before replacing the app.
 The private key belongs only in the ignored `private/` directory and the
 `MACOS_SPARKLE_ED25519` GitHub Actions secret.
 
-Epic Online Services is compiled only when the licensed macOS EOS SDK is made
-available to the build. The automated tester package currently retains TCP/LAN
-multiplayer but reports EOS as unavailable instead of embedding an unlicensed
-SDK copy.
+Epic Online Services is compiled from the same shared Connect/P2P bridge used
+on Windows. The licensed SDK input is kept out of the public source tree in an
+encrypted draft-release asset; only the release workflow can decrypt it. The
+player DMG contains Epic's distributable macOS runtime inside the signed app,
+plus the same restricted `eos.client.json` used by Windows. Consequently,
+Windows and macOS clients use the same EOS product, invitation format, game
+protocol, NAT traversal, and relay transport.
 
 ## Release gate
 

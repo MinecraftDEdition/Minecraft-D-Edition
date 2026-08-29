@@ -56,6 +56,9 @@ if [[ -d "$eos_root/Include" && -f "$eos_root/Bin/libEOSSDK-Mac-Shipping.dylib" 
     native_objects+=("$native_out/eos_abi_bridge.o")
     d_versions+=(--d-version=MCD_EOS)
     eos_runtime="$eos_root/Bin/libEOSSDK-Mac-Shipping.dylib"
+elif [[ "${MDE_REQUIRE_EOS:-0}" == 1 ]]; then
+    echo "The licensed macOS EOS SDK is required but unavailable at $eos_root" >&2
+    exit 1
 fi
 
 command -v ldc2 >/dev/null || { echo 'LDC is required to build macOS' >&2; exit 1; }
