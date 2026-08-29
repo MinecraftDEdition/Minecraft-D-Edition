@@ -87,14 +87,37 @@ jobs:
       - name: Symbolize reported macOS crash
         run: |
           executable='distribution/macos/build/bundle/Minecraft D Edition.app/Contents/MacOS/Minecraft D Edition'
-          atos -arch arm64 -o "$executable" -l 0x100000000 \
-            0x100ccd0c7 0x100cd512f 0x100cd5b87 0x100cb9a0b \
-            0x100cc063f 0x100cc04cb 0x100cd68af 0x100cd69bb \
-            0x100cb0aaf 0x100bf0523 0x100cd6d4b 0x100cc55f3 \
-            0x100cc25a3 0x100cc4873 0x100cc05db 0x100cc04cb \
-            0x100c189f3 0x100bb4ac7 0x100bbcbcf 0x100bbc4bb \
-            0x100bf952b 0x100cc099b 0x100cd575f 0x100cd55fb \
-            0x100cd547f
+          python3 - "$executable" <<'PY'
+          import bisect
+          import re
+          import subprocess
+          import sys
+
+          targets = [
+              0x100ccd0c7, 0x100cd512f, 0x100cd5b87, 0x100cb9a0b,
+              0x100cc063f, 0x100cc04cb, 0x100cd68af, 0x100cd69bb,
+              0x100cb0aaf, 0x100bf0523, 0x100cd6d4b, 0x100cc55f3,
+              0x100cc25a3, 0x100cc4873, 0x100cc05db, 0x100cc04cb,
+              0x100c189f3, 0x100bb4ac7, 0x100bbcbcf, 0x100bbc4bb,
+              0x100bf952b, 0x100cc099b, 0x100cd575f, 0x100cd55fb,
+              0x100cd547f,
+          ]
+          symbols = []
+          for line in subprocess.check_output(
+                  ["nm", "-an", sys.argv[1]], text=True,
+                  errors="replace").splitlines():
+              match = re.match(r"^([0-9a-fA-F]{16})\s+\S\s+(.+)$", line)
+              if match:
+                  symbols.append((int(match.group(1), 16), match.group(2)))
+          addresses = [address for address, _ in symbols]
+          for target in targets:
+              index = bisect.bisect_right(addresses, target) - 1
+              if index >= 0:
+                  address, name = symbols[index]
+                  print(f"{target:#x}: {name} + {target - address:#x}")
+              else:
+                  print(f"{target:#x}: no preceding symbol")
+          PY
 
       - name: Smoke-test application launch
         run: |
