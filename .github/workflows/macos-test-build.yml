@@ -117,7 +117,8 @@ jobs:
           eos_home="$RUNNER_TEMP/eos-smoke-home"
           mkdir -p "$eos_home"
           status=0
-          HOME="$eos_home" "$executable" --eos-smoke-test || status=$?
+          HOME="$eos_home" MDE_EOS_VERBOSE_LOGGING=1 \
+            "$executable" --eos-smoke-test || status=$?
           cat eos-smoke-test.log
           test "$status" -eq 0
           grep -F 'EOS Connect login succeeded; P2P is ready.' eos-smoke-test.log

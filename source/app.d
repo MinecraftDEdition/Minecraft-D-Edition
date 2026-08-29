@@ -30,7 +30,10 @@ int main(string[] arguments)
                     "EOS Connect login succeeded; P2P is ready.\n");
                 return 0;
             }
-            write("eos-smoke-test.log", eos.error ~ "\n");
+            const failure = eos.error;
+            write("eos-smoke-test.log", failure.length
+                ? failure ~ "\n"
+                : "EOS Connect login timed out while still initializing.\n");
             return 1;
         }
         auto client = new GameClient();

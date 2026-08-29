@@ -1,6 +1,7 @@
 #include <eos_sdk.h>
 #include <eos_init.h>
 #include <eos_connect.h>
+#include <eos_logging.h>
 #include <eos_p2p.h>
 
 #if defined(_WIN32)
@@ -13,6 +14,8 @@
 #endif
 
 #include <algorithm>
+#include <cstdio>
+#include <cstdlib>
 #include <cstring>
 #include <deque>
 #include <memory>
@@ -50,6 +53,16 @@ namespace
         bridge->error = operation;
         bridge->error += ": ";
         bridge->error += EOS_EResult_ToString(result);
+    }
+
+    void EOS_CALL onLogMessage(const EOS_LogMessage* message)
+    {
+        if (!message)
+            return;
+        std::fprintf(stderr, "EOS [%s] %s\n",
+            message->Category ? message->Category : "Unknown",
+            message->Message ? message->Message : "");
+        std::fflush(stderr);
     }
 
     bool copyText(const std::string& value, char* output, unsigned int capacity)
@@ -186,6 +199,11 @@ extern "C"
             return bridge.release();
         }
         bridge->initializedSdk = initializeResult == EOS_EResult::EOS_Success;
+        EOS_Logging_SetCallback(onLogMessage);
+        EOS_Logging_SetLogLevel(EOS_ELogCategory::EOS_LC_ALL_CATEGORIES,
+            std::getenv("MDE_EOS_VERBOSE_LOGGING")
+                ? EOS_ELogLevel::EOS_LOG_VeryVerbose
+                : EOS_ELogLevel::EOS_LOG_Warning);
 
         EOS_Platform_Options platformOptions{};
         platformOptions.ApiVersion = EOS_PLATFORM_OPTIONS_API_LATEST;
