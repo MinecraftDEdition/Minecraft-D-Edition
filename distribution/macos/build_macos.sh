@@ -63,12 +63,7 @@ fi
 
 command -v ldc2 >/dev/null || { echo 'LDC is required to build macOS' >&2; exit 1; }
 
-debug_flags=()
-if [[ "${MDE_DEBUG_SYMBOLS:-0}" == 1 ]]; then
-    debug_flags+=(-g)
-fi
-
-ldc2 -O3 -release -boundscheck=off "${debug_flags[@]}" -i -I"$repo/source" -J"$repo/shaders" \
+ldc2 -O3 -release -boundscheck=off -i -I"$repo/source" -J"$repo/shaders" \
     "${d_versions[@]}" "$repo/source/app.d" "${native_objects[@]}" \
     -of="$bin_out/Minecraft D Edition" \
     -L-lc++ \
@@ -79,7 +74,6 @@ ldc2 -O3 -release -boundscheck=off "${debug_flags[@]}" -i -I"$repo/source" -J"$r
     -L-framework -LCoreGraphics -L-framework -LIOKit \
     -L-framework -LIOSurface -L-framework -LCoreAudio \
     -L-framework -LAudioToolbox \
-    -L-map -L"$build/Minecraft D Edition-linker.map" \
     -L-rpath -L@executable_path/../Frameworks \
     ${eos_runtime:+-L"$eos_runtime"}
 

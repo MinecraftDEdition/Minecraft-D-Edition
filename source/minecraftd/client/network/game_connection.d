@@ -1,5 +1,6 @@
 module minecraftd.client.network.game_connection;
 
+import core.memory : GC;
 import core.atomic : atomicLoad, atomicStore;
 import core.sync.mutex : Mutex;
 import core.thread : Thread;
@@ -184,6 +185,25 @@ final class GameConnection
 
     ~this()
     {
+        // A GC-invoked finalizer may not allocate. In particular, converting
+        // EOS IDs with toStringz here used to throw InvalidMemoryOperationError
+        // on macOS if a freshly-created connection crossed a compiler liveness
+        // gap while the multiplayer menu was rendering.
+        if (GC.inFinalizer)
+        {
+            const wasRunning = atomicLoad(running);
+            atomicStore(running, false);
+            version (MCD_EOS) if (eosService !is null)
+            {
+                if (wasRunning)
+                    eosService.closePeer(eosRemoteUserId, eosSocketName);
+                eosService = null;
+                eosRemoteUserId = null;
+                eosSocketName = null;
+                eosStream = null;
+            }
+            return;
+        }
         close();
     }
 

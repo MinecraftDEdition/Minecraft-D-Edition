@@ -35,7 +35,7 @@ private extern(C) nothrow
     int mcd_eos_poll_closed(void* context, char* remoteOutput,
         uint remoteCapacity);
     void mcd_eos_close_peer(void* context, const(char)* remoteUserId,
-        const(char)* socketName);
+        const(char)* socketName) @nogc;
     int mcd_eos_random_socket_name(char* output, uint capacity);
 }
 
@@ -206,11 +206,17 @@ final class EosService
             ? fromStringz(remote.ptr).idup : "";
     }
 
-    void closePeer(string remoteUserId, string socketName)
+    void closePeer(string remoteUserId, string socketName) @nogc nothrow
     {
-        if (context !is null && remoteUserId.length && socketName.length)
-            mcd_eos_close_peer(context, toStringz(remoteUserId),
-                toStringz(socketName));
+        if (context is null || remoteUserId.length == 0
+            || socketName.length == 0)
+            return;
+        char[96] remote = 0;
+        char[40] socket = 0;
+        if (!copyCString(remoteUserId, remote[])
+            || !copyCString(socketName, socket[]))
+            return;
+        mcd_eos_close_peer(context, remote.ptr, socket.ptr);
     }
 
     static string createSocketName()
@@ -222,6 +228,15 @@ final class EosService
     }
 
 private:
+    static bool copyCString(const(char)[] value, char[] output) @nogc nothrow
+    {
+        if (value.length == 0 || value.length >= output.length)
+            return false;
+        output[0 .. value.length] = value[];
+        output[value.length] = '\0';
+        return true;
+    }
+
     static string requiredString(const ref JSONValue root, string key)
     {
         auto value = key in root.object;

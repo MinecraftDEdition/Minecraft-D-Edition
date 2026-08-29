@@ -337,9 +337,16 @@ final class GameClient
                     }
                 }
                 if (connectRequested)
+                {
                     gameConnection = connectFromMenu(serverMenu,
                         eos, connectionEndpoint, connectionHost,
                         connectionPort);
+                    // Do not allocate another menu frame between receiving the
+                    // connection and leaving this loop. LDC can otherwise
+                    // expose a short GC liveness gap for the captured local.
+                    if (gameConnection !is null)
+                        break;
+                }
                 renderer.renderMultiplayerScreen(cursor.x, cursor.y,
                     menuTime, serverMenu);
                 continue;
