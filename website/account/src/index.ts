@@ -5,6 +5,8 @@ interface Env {
   AUTH0_DOMAIN: string;
   AUTH0_CLIENT_ID: string;
   AUTH0_CLIENT_SECRET: string;
+  AUTH0_MANAGEMENT_CLIENT_ID: string;
+  AUTH0_MANAGEMENT_CLIENT_SECRET: string;
   SESSION_SECRET: string;
 }
 
@@ -16,6 +18,9 @@ interface AccountRow {
   username: string | null;
   has_skin: number;
   skin_model: 'classic' | 'slim';
+  account_status: 'active' | 'inactive';
+  deactivated_at: number | null;
+  last_password_reset_at: number | null;
   created_at: number;
   updated_at: number;
 }
@@ -48,6 +53,10 @@ export default {
       if (url.pathname === '/api/me' && request.method === 'GET') return getMe(request, env);
       if (url.pathname === '/api/profile' && request.method === 'POST') return updateProfile(request, env);
       if (url.pathname === '/api/skin' && request.method === 'POST') return updateSkin(request, env);
+      if (url.pathname === '/api/password/reset' && request.method === 'POST') return requestPasswordReset(request, env);
+      if (url.pathname === '/api/account/deactivate' && request.method === 'POST') return deactivateAccount(request, env);
+      if (url.pathname === '/api/account/reactivate' && request.method === 'POST') return reactivateAccount(request, env);
+      if (url.pathname === '/api/account/delete' && request.method === 'POST') return deleteAccount(request, env);
       if (url.pathname.startsWith('/skins/') && request.method === 'GET') return getSkin(url, env);
       if (url.pathname.startsWith('/api/')) return json({ error: 'Not found.' }, 404);
 
@@ -179,16 +188,21 @@ async function getMe(request: Request, env: Env): Promise<Response> {
       email: session.email,
       emailVerified: Boolean(session.email_verified),
       username: session.username,
+      active: session.account_status === 'active',
+      deactivatedAt: session.deactivated_at,
       skinUrl: session.has_skin ? `/skins/${session.id}.png?v=${session.updated_at}` : null,
       skinModel: session.skin_model,
       createdAt: session.created_at
     },
-    csrfToken: session.csrf_token
+    csrfToken: session.csrf_token,
+    features: {
+      accountDeletion: Boolean(env.AUTH0_MANAGEMENT_CLIENT_ID && env.AUTH0_MANAGEMENT_CLIENT_SECRET)
+    }
   });
 }
 
 async function updateProfile(request: Request, env: Env): Promise<Response> {
-  const session = await requireMutatingSession(request, env);
+  const session = await requireActiveMutatingSession(request, env);
   if (session instanceof Response) return session;
   let body: { username?: unknown };
   try {
@@ -211,7 +225,7 @@ async function updateProfile(request: Request, env: Env): Promise<Response> {
 }
 
 async function updateSkin(request: Request, env: Env): Promise<Response> {
-  const session = await requireMutatingSession(request, env);
+  const session = await requireActiveMutatingSession(request, env);
   if (session instanceof Response) return session;
   const contentType = request.headers.get('content-type') ?? '';
   if (!contentType.includes('multipart/form-data')) return json({ error: 'Upload a PNG skin file.' }, 400);
@@ -246,7 +260,23 @@ async function getSkin(url: URL, env: Env): Promise<Response> {
 
 async function logout(request: Request, env: Env): Promise<Response> {
   const token = readCookie(request, 'mcde_session');
-  if (token) await env.DB.prepare('DELETE FROM sessions WHERE token_hash = ?').bind(await sha256Hex(token)).run();
+  if (token) {
+    const tokenHash = await sha256Hex(token);
+    const session = await env.DB.prepare('SELECT account_id FROM sessions WHERE token_hash = ?')
+      .bind(tokenHash).first<{ account_id: string }>();
+    let scope = 'current';
+    try {
+      const form = await request.formData();
+      scope = form.get('scope') === 'all' ? 'all' : 'current';
+    } catch {
+      // An empty POST still signs out the current session.
+    }
+    if (scope === 'all' && session) {
+      await env.DB.prepare('DELETE FROM sessions WHERE account_id = ?').bind(session.account_id).run();
+    } else {
+      await env.DB.prepare('DELETE FROM sessions WHERE token_hash = ?').bind(tokenHash).run();
+    }
+  }
   const returnTo = `${env.SITE_ORIGIN}/`;
   const location = new URL(`https://${env.AUTH0_DOMAIN}/v2/logout`);
   location.searchParams.set('client_id', env.AUTH0_CLIENT_ID);
@@ -257,12 +287,117 @@ async function logout(request: Request, env: Env): Promise<Response> {
   });
 }
 
+async function requestPasswordReset(request: Request, env: Env): Promise<Response> {
+  const session = await requireMutatingSession(request, env);
+  if (session instanceof Response) return session;
+  if (!session.auth0_sub.startsWith('auth0|')) {
+    return json({ error: 'This account signs in through an external provider. Change the password with that provider.' }, 400);
+  }
+  const now = Date.now();
+  if (session.last_password_reset_at && now - session.last_password_reset_at < 60_000) {
+    return json({ error: 'A reset email was just requested. Wait one minute before trying again.' }, 429);
+  }
+  const response = await fetch(`https://${env.AUTH0_DOMAIN}/dbconnections/change_password`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({
+      client_id: env.AUTH0_CLIENT_ID,
+      email: session.email,
+      connection: 'Username-Password-Authentication'
+    })
+  });
+  if (!response.ok) {
+    console.error('Auth0 password reset request failed', response.status);
+    return json({ error: 'The password reset email could not be sent. Please try again later.' }, 502);
+  }
+  await env.DB.prepare('UPDATE accounts SET last_password_reset_at = ?, updated_at = ? WHERE id = ?')
+    .bind(now, now, session.id).run();
+  return json({ ok: true, message: 'Check your email for a secure password reset link.' });
+}
+
+async function deactivateAccount(request: Request, env: Env): Promise<Response> {
+  const session = await requireActiveMutatingSession(request, env);
+  if (session instanceof Response) return session;
+  const now = Date.now();
+  await env.DB.prepare(`UPDATE accounts
+    SET account_status = 'inactive', deactivated_at = ?, updated_at = ? WHERE id = ?`)
+    .bind(now, now, session.id).run();
+  return json({ ok: true, active: false, deactivatedAt: now });
+}
+
+async function reactivateAccount(request: Request, env: Env): Promise<Response> {
+  const session = await requireMutatingSession(request, env);
+  if (session instanceof Response) return session;
+  if (session.account_status === 'active') return json({ ok: true, active: true });
+  const now = Date.now();
+  await env.DB.prepare(`UPDATE accounts
+    SET account_status = 'active', deactivated_at = NULL, updated_at = ? WHERE id = ?`)
+    .bind(now, session.id).run();
+  return json({ ok: true, active: true });
+}
+
+async function deleteAccount(request: Request, env: Env): Promise<Response> {
+  const session = await requireMutatingSession(request, env);
+  if (session instanceof Response) return session;
+  let body: { confirmation?: unknown };
+  try {
+    body = await request.json<{ confirmation?: unknown }>();
+  } catch {
+    return json({ error: 'Send a valid deletion confirmation.' }, 400);
+  }
+  if (body.confirmation !== 'DELETE') {
+    return json({ error: 'Type DELETE exactly to permanently delete this account.' }, 400);
+  }
+  if (!env.AUTH0_MANAGEMENT_CLIENT_ID || !env.AUTH0_MANAGEMENT_CLIENT_SECRET) {
+    return json({ error: 'Account deletion is temporarily unavailable.' }, 503);
+  }
+
+  const managementToken = await getManagementToken(env);
+  if (!managementToken) return json({ error: 'Account deletion is temporarily unavailable.' }, 503);
+  const auth0Response = await fetch(`https://${env.AUTH0_DOMAIN}/api/v2/users/${encodeURIComponent(session.auth0_sub)}`, {
+    method: 'DELETE',
+    headers: { Authorization: `Bearer ${managementToken}` }
+  });
+  if (!auth0Response.ok && auth0Response.status !== 404) {
+    console.error('Auth0 user deletion failed', auth0Response.status);
+    return json({ error: 'The identity provider could not delete the account. Nothing was removed.' }, 502);
+  }
+
+  await env.DB.prepare('DELETE FROM accounts WHERE id = ?').bind(session.id).run();
+  const logout = new URL(`https://${env.AUTH0_DOMAIN}/v2/logout`);
+  logout.searchParams.set('client_id', env.AUTH0_CLIENT_ID);
+  logout.searchParams.set('returnTo', `${env.SITE_ORIGIN}/?deleted=1`);
+  const response = json({ ok: true, logoutUrl: logout.toString() });
+  response.headers.append('Set-Cookie', expireCookie('mcde_session'));
+  return response;
+}
+
+async function getManagementToken(env: Env): Promise<string | null> {
+  const response = await fetch(`https://${env.AUTH0_DOMAIN}/oauth/token`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({
+      grant_type: 'client_credentials',
+      client_id: env.AUTH0_MANAGEMENT_CLIENT_ID,
+      client_secret: env.AUTH0_MANAGEMENT_CLIENT_SECRET,
+      audience: `https://${env.AUTH0_DOMAIN}/api/v2/`
+    })
+  });
+  if (!response.ok) {
+    console.error('Auth0 Management API token request failed', response.status);
+    return null;
+  }
+  const body = await response.json<{ access_token?: string }>();
+  return body.access_token ?? null;
+}
+
 async function requireSession(request: Request, env: Env): Promise<SessionRow | null> {
   const token = readCookie(request, 'mcde_session');
   if (!token) return null;
   const now = Date.now();
   const session = await env.DB.prepare(`SELECT
       a.id, a.auth0_sub, a.email, a.email_verified, a.username, a.skin_model,
+      a.account_status, a.deactivated_at, a.last_password_reset_at,
       a.created_at, a.updated_at, CASE WHEN a.skin_png IS NULL THEN 0 ELSE 1 END AS has_skin,
       s.csrf_token, s.expires_at
     FROM sessions s JOIN accounts a ON a.id = s.account_id
@@ -278,6 +413,13 @@ async function requireMutatingSession(request: Request, env: Env): Promise<Sessi
   if (!session) return json({ error: 'Sign in to continue.' }, 401);
   const csrf = request.headers.get('X-CSRF-Token') ?? '';
   if (!timingSafeEqual(csrf, session.csrf_token)) return json({ error: 'The security token was missing or invalid.' }, 403);
+  return session;
+}
+
+async function requireActiveMutatingSession(request: Request, env: Env): Promise<SessionRow | Response> {
+  const session = await requireMutatingSession(request, env);
+  if (session instanceof Response) return session;
+  if (session.account_status !== 'active') return json({ error: 'Reactivate this account before changing its profile.' }, 403);
   return session;
 }
 

@@ -41,6 +41,15 @@
     </section>
 
     <section id="dashboard" hidden>
+      <section id="inactive-notice" class="panel inactive-notice" hidden>
+        <div>
+          <p class="eyebrow">ACCOUNT INACTIVE</p>
+          <h2>Your MCDE account is deactivated</h2>
+          <p>Your profile and future game access are paused. Your username and skin remain stored until you reactivate or permanently delete the account.</p>
+        </div>
+        <button id="reactivate-button" class="button primary" type="button">Reactivate account</button>
+      </section>
+
       <div class="dashboard-grid">
         <article class="panel identity-card">
           <p class="eyebrow">ACCOUNT</p>
@@ -52,7 +61,7 @@
           </dl>
         </article>
 
-        <article class="panel">
+        <article id="username-panel" class="panel profile-control">
           <p class="eyebrow">USERNAME</p>
           <h2>Choose how players see you</h2>
           <form id="username-form">
@@ -63,7 +72,7 @@
           </form>
         </article>
 
-        <article class="panel skin-panel">
+        <article id="skin-panel" class="panel skin-panel profile-control">
           <div>
             <p class="eyebrow">PLAYER SKIN</p>
             <h2>Upload your Minecraft skin</h2>
@@ -86,11 +95,38 @@
             </form>
           </div>
         </article>
-      </div>
 
-      <form id="logout-form" action="/logout" method="post">
-        <button class="button secondary" type="submit">Sign out</button>
-      </form>
+        <article class="panel security-panel">
+          <p class="eyebrow">SECURITY</p>
+          <h2>Password and sessions</h2>
+          <p>Passwords are changed only on Auth0’s secure reset page. MCDE never sees the password you choose.</p>
+          <div class="button-row">
+            <button id="password-reset-button" class="button primary" type="button">Change password</button>
+          </div>
+          <form id="logout-form" action="/logout" method="post">
+            <button class="button secondary" type="submit" name="scope" value="current">Sign out</button>
+            <button class="button secondary" type="submit" name="scope" value="all">Sign out everywhere</button>
+          </form>
+        </article>
+
+        <article class="panel danger-panel">
+          <p class="eyebrow danger-label">ACCOUNT CONTROL</p>
+          <h2>Deactivate or delete</h2>
+          <div id="deactivate-control">
+            <p>Deactivation pauses your profile and future game access without removing your username or skin.</p>
+            <button id="deactivate-button" class="button warning" type="button">Deactivate account</button>
+          </div>
+          <div id="delete-control" hidden>
+            <hr>
+            <p>Deletion permanently removes your MCDE profile, username, uploaded skin, sessions, and Auth0 identity.</p>
+            <form id="delete-form">
+              <label for="delete-confirmation">Type DELETE to confirm</label>
+              <input id="delete-confirmation" name="confirmation" type="text" autocomplete="off" required>
+              <button class="button danger" type="submit">Permanently delete account</button>
+            </form>
+          </div>
+        </article>
+      </div>
     </section>
   </main>
 

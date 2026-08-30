@@ -11,6 +11,8 @@ This Cloudflare Worker hosts the account website and its server-side API. Auth0 
 - Profile changes require a same-origin request and a per-session CSRF token.
 - Skin files must have a PNG signature and a 64×64 IHDR and must be at most 256 KB.
 - Auth0 access tokens are discarded after the profile is fetched.
+- Password changes use Auth0's one-time email reset flow; passwords never pass through MCDE.
+- Account deletion uses a separate least-privilege Auth0 client with only `delete:users`.
 
 ## Initial provisioning
 
@@ -18,7 +20,7 @@ This Cloudflare Worker hosts the account website and its server-side API. Auth0 
 2. Authenticate Wrangler with `npx wrangler login`.
 3. Create D1 database `minecraft-d-edition-accounts` and place its ID in `wrangler.jsonc`.
 4. Apply the D1 migration remotely.
-5. Set `AUTH0_CLIENT_SECRET` and a random 32-byte-or-longer `SESSION_SECRET` with `wrangler secret put`.
+5. Set `AUTH0_CLIENT_SECRET`, `AUTH0_MANAGEMENT_CLIENT_ID`, `AUTH0_MANAGEMENT_CLIENT_SECRET`, and a random 32-byte-or-longer `SESSION_SECRET` with `wrangler secret put`.
 6. Set the Auth0 tenant domain and client ID in `wrangler.jsonc`.
 7. Deploy with `npm run deploy`.
 

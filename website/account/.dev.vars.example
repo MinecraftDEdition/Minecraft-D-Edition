@@ -1,2 +1,4 @@
 AUTH0_CLIENT_SECRET="set-with-wrangler-secret-put"
+AUTH0_MANAGEMENT_CLIENT_ID="least-privilege-delete-client-id"
+AUTH0_MANAGEMENT_CLIENT_SECRET="set-with-wrangler-secret-put"
 SESSION_SECRET="generate-at-least-32-random-bytes"

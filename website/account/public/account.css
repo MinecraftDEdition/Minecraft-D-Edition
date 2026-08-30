@@ -9,10 +9,13 @@
   --green: #72b84b;
   --green-dark: #3f7f2c;
   --danger: #ff7770;
+  --danger-dark: #8f2f2a;
+  --warning: #b97a35;
   --shadow: #050605;
 }
 
 * { box-sizing: border-box; }
+[hidden] { display: none !important; }
 html { background: var(--bg); }
 body {
   margin: 0;
@@ -65,6 +68,13 @@ h2 { font-size: clamp(24px, 3vw, 34px); }
 .signed-out p:not(.eyebrow), .skin-panel p:not(.eyebrow) { color: var(--muted); line-height: 1.65; }
 .dashboard-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 24px; }
 .skin-panel { grid-column: 1 / -1; }
+.security-panel, .danger-panel { grid-column: 1 / -1; }
+.security-panel > p:not(.eyebrow), .danger-panel > p, .inactive-notice p:not(.eyebrow) { color: var(--muted); line-height: 1.6; }
+.inactive-notice { margin-bottom: 24px; display: flex; align-items: center; justify-content: space-between; gap: 30px; border-color: #a56d34; }
+.button-row, #logout-form { display: flex; flex-wrap: wrap; gap: 12px; }
+.danger-panel { border-color: #673532; }
+.danger-label { color: var(--danger) !important; }
+.danger-panel hr { margin: 28px 0; border: 0; border-top: 1px solid #5a3633; }
 .identity-card dl { margin: 26px 0 0; display: grid; gap: 15px; }
 .identity-card dl div { border-top: 1px solid var(--line); padding-top: 12px; }
 dt { color: #8e9989; font: 800 11px/1.2 ui-monospace, monospace; letter-spacing: .12em; }
@@ -91,12 +101,16 @@ fieldset { margin: 18px 0; padding: 0; border: 0; }
 .button:active { transform: translate(2px, 2px); box-shadow: inset 0 0 0 2px rgba(255,255,255,.12), 2px 2px 0 #050605; }
 .primary { background: linear-gradient(#68ad45, #477d32); }
 .secondary { background: linear-gradient(#555e50, #343b31); }
+.warning { background: linear-gradient(#b47436, #7d4c24); }
+.danger { background: linear-gradient(#a43f39, #6f2925); }
 
 .skin-layout { margin-top: 28px; display: grid; grid-template-columns: 180px 1fr; gap: 34px; align-items: start; }
 .skin-preview-wrap { width: 180px; height: 180px; padding: 18px; background: #10140e; border: 2px solid var(--line); image-rendering: pixelated; }
 .skin-preview-wrap img { width: 100%; height: 100%; object-fit: contain; image-rendering: pixelated; }
 .skin-placeholder { width: 100%; height: 100%; display: grid; place-items: center; background: #252e21; color: #6f7b69; font: 900 60px/1 monospace; }
-#logout-form { margin-top: 28px; text-align: right; }
+#logout-form { margin-top: 18px; }
+#delete-form { max-width: 520px; }
+#delete-form .button { margin-top: 14px; }
 .message { margin: 0 0 24px; padding: 14px 16px; color: #eaffdf; background: #29451f; border: 2px solid #5e9b43; }
 .message.error { color: #ffe8e6; background: #501e1c; border-color: var(--danger); }
 
@@ -107,6 +121,8 @@ footer p { margin: 0; }
   .signed-out { align-items: flex-start; flex-direction: column; }
   .dashboard-grid { grid-template-columns: 1fr; }
   .skin-panel { grid-column: auto; }
+  .security-panel, .danger-panel { grid-column: auto; }
+  .inactive-notice { align-items: flex-start; flex-direction: column; }
   .skin-layout { grid-template-columns: 1fr; }
   .skin-preview-wrap { width: 150px; height: 150px; }
   footer { flex-direction: column; }
