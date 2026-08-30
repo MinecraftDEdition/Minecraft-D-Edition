@@ -159,6 +159,17 @@ jobs:
               --maximum-deltas 0 \
               -o "$release_dir/mde-macos-appcast.xml" \
               "$release_dir"
+          python3 - <<'PY'
+          from pathlib import Path
+
+          appcast = Path("distribution/macos/build/release/mde-macos-appcast.xml")
+          contents = appcast.read_text(encoding="utf-8")
+          old_title = "<title>Minecraft D Edition</title>"
+          new_title = "<title>Minecraft: D Edition</title>"
+          if contents.count(old_title) != 1:
+              raise SystemExit("Unexpected generated appcast title")
+          appcast.write_text(contents.replace(old_title, new_title, 1), encoding="utf-8")
+          PY
 
       - name: Upload Mac test installer
         uses: actions/upload-artifact@v6
