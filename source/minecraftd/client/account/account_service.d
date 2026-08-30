@@ -154,8 +154,22 @@ final class AccountService
                     bytes);
                 if (response.status != 200)
                     throw new Exception(responseError(response.text));
-                refreshProfile(false);
-                setMessage("Skin changed successfully.");
+                const result=parseJSON(response.text);
+                const updated=longField(result,"updatedAt");
+                const returnedModel=stringField(result,"skinModel");
+                installCachedSkin(bytes);
+                synchronized(mutex)
+                {
+                    current.status=AccountStatus.loggedIn;
+                    current.skinPath=cachedSkinPath.idup;
+                    current.skinModel=returnedModel=="slim"?"slim":"classic";
+                    // A changed revision forces both renderers to upload the
+                    // newly installed pixels on their next frame.
+                    current.updatedAt=updated>0?updated
+                        :current.updatedAt+1;
+                    current.message="Skin changed successfully.";
+                }
+                nextRefresh=monotonicMilliseconds()+15_000;
             }
             catch (Exception error) { setError(error.msg); }
         });
@@ -303,6 +317,7 @@ private:
             const skinUrl = nullableStringField(account, "skinUrl");
             const updated = longField(account, "updatedAt");
             string localSkin = exists(cachedSkinPath) ? cachedSkinPath : "";
+            bool skinReady=!skinUrl.length;
             if (skinUrl.length)
             {
                 bool needsDownload;
@@ -314,11 +329,16 @@ private:
                     const skin = webRequest("GET", absoluteUrl(skinUrl));
                     if (skin.status == 200 && isModernSkin(skin.body))
                     {
-                        write(cachedSkinPath, skin.body);
+                        installCachedSkin(skin.body);
                         localSkin = cachedSkinPath;
+                        skinReady=true;
                     }
                 }
-                else localSkin = cachedSkinPath;
+                else
+                {
+                    localSkin = cachedSkinPath;
+                    skinReady=true;
+                }
             }
             synchronized (mutex)
             {
@@ -328,7 +348,10 @@ private:
                 current.email = email.idup;
                 current.skinModel = model == "slim" ? "slim" : "classic";
                 current.skinPath = localSkin.idup;
-                current.updatedAt = updated;
+                // Do not accept a new skin revision until its pixels are
+                // present. This keeps periodic refreshes retrying transient
+                // download failures instead of permanently using stale skin.
+                if(skinReady)current.updatedAt = updated;
             }
             nextRefresh = monotonicMilliseconds() + 15_000;
         }
@@ -358,6 +381,14 @@ private:
             import core.sys.posix.sys.stat : chmod;
             chmod(tokenPath.toStringz(), 0x180); // 0600
         }
+    }
+
+    void installCachedSkin(const(ubyte)[] bytes)
+    {
+        const temporary=cachedSkinPath~".new";
+        write(temporary,bytes);
+        if(exists(cachedSkinPath))remove(cachedSkinPath);
+        rename(temporary,cachedSkinPath);
     }
 
     void clearSession()
