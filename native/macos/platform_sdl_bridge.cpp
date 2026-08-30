@@ -109,6 +109,23 @@ int keyFromScancode(SDL_Scancode scancode) {
     }
 }
 
+int keyFromEvent(const SDL_KeyboardEvent& event) {
+    const int scancodeKey = keyFromScancode(event.scancode);
+    if (scancodeKey >= 0) return scancodeKey;
+    // Some Apple keyboards and remapping tools report a logical key while
+    // leaving the physical scancode unknown. Keep editing keys functional in
+    // that path as well.
+    switch (event.key) {
+        case SDLK_BACKSPACE: return KeyBackspace;
+        case SDLK_DELETE: return KeyDelete;
+        case SDLK_RETURN:
+        case SDLK_KP_ENTER: return KeyReturn;
+        case SDLK_TAB: return KeyTab;
+        case SDLK_ESCAPE: return KeyEscape;
+        default: return -1;
+    }
+}
+
 void setKey(WindowContext* context, int key, bool down, bool pressed) {
     if (key < 0 || key >= static_cast<int>(context->down.size())) return;
     context->down[static_cast<size_t>(key)] = down;
@@ -199,10 +216,16 @@ void mcdPlatformPump(void* value) {
             case SDL_EVENT_KEY_DOWN:
             case SDL_EVENT_KEY_UP: {
                 const bool down = event.type == SDL_EVENT_KEY_DOWN;
-                const int key = keyFromScancode(event.key.scancode);
+                const int key = keyFromEvent(event.key);
                 setKey(context, key, down, down && !event.key.repeat);
                 if (down && event.key.repeat && key >= 0 && key < 256)
                     context->repeated[static_cast<size_t>(key)] = true;
+                // SDL text events intentionally omit control characters. Add a
+                // semantic fallback so the D input layer can still observe a
+                // macOS Delete/Backspace press if a keyboard layout suppresses
+                // the normal key-state route.
+                if (down && !event.key.repeat && key == KeyBackspace)
+                    context->text.push_back('\b');
                 break;
             }
             case SDL_EVENT_MOUSE_BUTTON_DOWN:

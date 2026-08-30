@@ -28,8 +28,9 @@ import minecraftd.client.render.graphics_device : GraphicsApi, GraphicsDevice,
 import minecraftd.client.render.title_screen_renderer : TitleAction,
     MultiplayerMenuAction, TitleScreenRenderer, TitleTextureSet,
     WorldMenuAction;
-import minecraftd.client.menu.multiplayer_menu_state : MultiplayerMenuState;
-import minecraftd.client.menu.world_menu_state : WorldMenuState;
+import minecraftd.client.menu.multiplayer_menu_state : MultiplayerField,
+    MultiplayerMenuState;
+import minecraftd.client.menu.world_menu_state : WorldField, WorldMenuState;
 import minecraftd.client.menu.pause_menu : PauseAction, PauseMenuRenderer,
     PauseMenuState, PauseTextureSet;
 import minecraftd.client.menu.death_screen : DeathAction, DeathScreenRenderer,
@@ -377,10 +378,24 @@ final class GameRenderer
         return titleScreen.multiplayerHitTest(width, height, mouseX, mouseY);
     }
 
+    long multiplayerTextCursorAt(int mouseX,
+        const MultiplayerMenuState state, MultiplayerField field) const
+    {
+        return titleScreen.multiplayerTextCursorAt(width, height, mouseX,
+            state, field, hudFont);
+    }
+
     WorldMenuAction worldMenuActionAt(int mouseX, int mouseY,
         const WorldMenuState state) const
     {
         return titleScreen.worldMenuHitTest(width,height,mouseX,mouseY,state);
+    }
+
+    long worldTextCursorAt(int mouseX, const WorldMenuState state,
+        WorldField field) const
+    {
+        return titleScreen.worldTextCursorAt(width, height, mouseX,
+            state, field, hudFont);
     }
 
     int worldRowAt(int mouseY, const WorldMenuState state) const

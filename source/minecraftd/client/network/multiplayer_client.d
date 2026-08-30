@@ -164,6 +164,7 @@ final class MultiplayerClient
     uint serverTick;
     bool serverPaused;
     string localDeathMessage;
+    string disconnectReason;
 
     this(GameConnection connection, World world, LocalPlayer localPlayer)
     {
@@ -189,6 +190,7 @@ final class MultiplayerClient
             destroy(connection);
         connection = replacement;
         loginComplete = false;
+        disconnectReason = "";
         localPlayerId = 0;
         pendingInputs.length = 0;
         localDamageEventId = 0;
@@ -306,8 +308,14 @@ final class MultiplayerClient
                     handleDimensionChange(packet.payload);
                     break;
                 case GamePacketType.disconnect:
+                {
+                    PacketReader reader = PacketReader(packet.payload);
+                    const reason = reader.readString();
+                    disconnectReason = reader.valid && reason.length
+                        ? reason : "The server closed the connection";
                     loginComplete = false;
                     break;
+                }
                 case GamePacketType.loginRequest,
                      GamePacketType.playerInput,
                      GamePacketType.playerAction,

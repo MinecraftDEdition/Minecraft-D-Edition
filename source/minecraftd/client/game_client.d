@@ -115,6 +115,8 @@ final class GameClient
             ensureEos();
         initialSession = false;
         bool worldScreen;
+        bool worldTextMouseSelecting;
+        bool serverTextMouseSelecting;
 
         bool startLocalWorld(const WorldEntry entry)
         {
@@ -210,13 +212,72 @@ final class GameClient
             {
                 const hovered = renderer.worldMenuActionAt(cursor.x,cursor.y,worldMenu);
                 const textAction = hovered == WorldMenuAction.name
-                    || hovered == WorldMenuAction.seed;
+                    || hovered == WorldMenuAction.seed && !worldMenu.editing;
                 window.setCursorShape(textAction ? CursorShape.text
                     : (hovered == WorldMenuAction.none ? CursorShape.arrow : CursorShape.hand));
-                worldMenu.insertCharacters(window.consumeTextInput());
-                if (window.pressed(VK_BACK)) worldMenu.backspace();
-                if (window.shortcutDown() && window.pressed('V'))
+                const worldTextInput = window.consumeTextInput();
+                const worldTextBackspace = containsCharacter(worldTextInput, 8);
+                const worldShortcut = window.shortcutDown();
+                if (worldShortcut && window.pressed('A'))
+                {
+                    window.clearTextInput();
+                    worldMenu.selectAll();
+                }
+                else if (worldShortcut && window.pressed('C'))
+                {
+                    window.clearTextInput();
+                    if (worldMenu.hasTextSelection)
+                        window.setClipboardText(worldMenu.selectedText);
+                }
+                else if (worldShortcut && window.pressed('X'))
+                {
+                    window.clearTextInput();
+                    if (worldMenu.hasTextSelection
+                        && window.setClipboardText(worldMenu.selectedText))
+                        worldMenu.cutSelection();
+                }
+                else if (worldShortcut && window.pressed('V'))
+                {
+                    window.clearTextInput();
                     worldMenu.insertCharacters(window.clipboardText());
+                }
+                else
+                    worldMenu.insertCharacters(worldTextInput);
+                const worldSelecting = window.down(VK_SHIFT);
+                if (window.pressed(VK_LEFT) || window.repeated(VK_LEFT))
+                    worldMenu.moveCursor(-1, worldSelecting);
+                if (window.pressed(VK_RIGHT) || window.repeated(VK_RIGHT))
+                    worldMenu.moveCursor(1, worldSelecting);
+                if (window.pressed(VK_HOME))
+                    worldMenu.moveToStart(worldSelecting);
+                if (window.pressed(VK_END))
+                    worldMenu.moveToEnd(worldSelecting);
+                if (window.pressed(VK_BACK) || window.repeated(VK_BACK)
+                    || worldTextBackspace)
+                    worldMenu.backspace();
+                if (window.pressed(VK_DELETE) || window.repeated(VK_DELETE))
+                    worldMenu.deleteForward();
+
+                if (window.pressed(VK_LBUTTON) && textAction)
+                {
+                    const clickedField = hovered == WorldMenuAction.name
+                        ? WorldField.name : WorldField.seed;
+                    worldMenu.activate(clickedField);
+                    const textCursor = renderer.worldTextCursorAt(cursor.x,
+                        worldMenu, clickedField);
+                    if (textCursor >= 0)
+                        worldMenu.setCursor(cast(size_t) textCursor);
+                    worldTextMouseSelecting = true;
+                }
+                else if (worldTextMouseSelecting && window.down(VK_LBUTTON))
+                {
+                    const textCursor = renderer.worldTextCursorAt(cursor.x,
+                        worldMenu, worldMenu.field);
+                    if (textCursor >= 0)
+                        worldMenu.setCursor(cast(size_t) textCursor, true);
+                }
+                if (!window.down(VK_LBUTTON))
+                    worldTextMouseSelecting = false;
                 if (window.pressed(VK_ESCAPE))
                 {
                     if (worldMenu.screen == WorldMenuScreen.selection)
@@ -224,7 +285,8 @@ final class GameClient
                     else
                     {
                         worldMenu.screen = WorldMenuScreen.selection;
-                        worldMenu.field = WorldField.none;
+                        worldMenu.activate(WorldField.none);
+                        worldTextMouseSelecting = false;
                         worldMenu.refresh();
                     }
                 }
@@ -249,11 +311,11 @@ final class GameClient
                             break;
                         case WorldMenuAction.recreate: worldMenu.beginRecreate(); break;
                         case WorldMenuAction.cancel: worldScreen = false; break;
-                        case WorldMenuAction.tabGame: worldMenu.tab=WorldCreationTab.game; worldMenu.field=WorldField.none; break;
-                        case WorldMenuAction.tabWorld: worldMenu.tab=WorldCreationTab.world; worldMenu.field=WorldField.none; break;
-                        case WorldMenuAction.tabMore: worldMenu.tab=WorldCreationTab.more; worldMenu.field=WorldField.none; break;
-                        case WorldMenuAction.name: worldMenu.field=WorldField.name; break;
-                        case WorldMenuAction.seed: if(!worldMenu.editing) worldMenu.field=WorldField.seed; break;
+                        case WorldMenuAction.tabGame: worldMenu.tab=WorldCreationTab.game; worldMenu.activate(WorldField.none); break;
+                        case WorldMenuAction.tabWorld: worldMenu.tab=WorldCreationTab.world; worldMenu.activate(WorldField.none); break;
+                        case WorldMenuAction.tabMore: worldMenu.tab=WorldCreationTab.more; worldMenu.activate(WorldField.none); break;
+                        case WorldMenuAction.name: worldMenu.activate(WorldField.name); break;
+                        case WorldMenuAction.seed: if(!worldMenu.editing) worldMenu.activate(WorldField.seed); break;
                         case WorldMenuAction.mode: worldMenu.cycleMode(); break;
                         case WorldMenuAction.difficulty: worldMenu.cycleDifficulty(); break;
                         case WorldMenuAction.commands:
@@ -281,6 +343,7 @@ final class GameClient
                             {
                                 saveWorldMetadata(directory,worldMenu.draft);
                                 worldMenu.screen=WorldMenuScreen.selection;
+                                worldMenu.activate(WorldField.none);
                                 worldMenu.refresh();
                             }
                             else
@@ -294,7 +357,9 @@ final class GameClient
                             break;
                         }
                         case WorldMenuAction.cancelCreate:
-                            worldMenu.screen=WorldMenuScreen.selection; worldMenu.refresh(); break;
+                            worldMenu.screen=WorldMenuScreen.selection;
+                            worldMenu.activate(WorldField.none);
+                            worldMenu.refresh(); break;
                         case WorldMenuAction.confirmDelete:
                             import minecraftd.world.world_settings : deleteWorld;
                             if(worldMenu.hasSelection) deleteWorld(worldMenu.worlds[worldMenu.selected]);
@@ -316,17 +381,78 @@ final class GameClient
                 window.setCursorShape(overText ? CursorShape.text
                     : (hovered == MultiplayerMenuAction.none
                         ? CursorShape.arrow : CursorShape.hand));
-                serverMenu.insertCharacters(window.consumeTextInput());
-                if (window.shortcutDown() && window.pressed('V'))
+                const serverTextInput = window.consumeTextInput();
+                const serverTextBackspace = containsCharacter(serverTextInput, 8);
+                const serverShortcut = window.shortcutDown();
+                if (serverShortcut && window.pressed('A'))
+                {
+                    window.clearTextInput();
+                    serverMenu.selectAll();
+                }
+                else if (serverShortcut && window.pressed('C'))
+                {
+                    window.clearTextInput();
+                    if (serverMenu.hasSelection)
+                        window.setClipboardText(serverMenu.selectedText);
+                }
+                else if (serverShortcut && window.pressed('X'))
+                {
+                    window.clearTextInput();
+                    if (serverMenu.hasSelection
+                        && window.setClipboardText(serverMenu.selectedText))
+                        serverMenu.cutSelection();
+                }
+                else if (serverShortcut && window.pressed('V'))
+                {
+                    window.clearTextInput();
                     serverMenu.paste(window.clipboardText());
+                }
+                else
+                    serverMenu.insertCharacters(serverTextInput);
+                const serverSelecting = window.down(VK_SHIFT);
+                if (window.pressed(VK_LEFT) || window.repeated(VK_LEFT))
+                    serverMenu.moveCursor(-1, serverSelecting);
+                if (window.pressed(VK_RIGHT) || window.repeated(VK_RIGHT))
+                    serverMenu.moveCursor(1, serverSelecting);
+                if (window.pressed(VK_HOME))
+                    serverMenu.moveToStart(serverSelecting);
+                if (window.pressed(VK_END))
+                    serverMenu.moveToEnd(serverSelecting);
+                if (window.pressed(VK_BACK) || window.repeated(VK_BACK)
+                    || serverTextBackspace)
+                    serverMenu.backspace();
+                if (window.pressed(VK_DELETE) || window.repeated(VK_DELETE))
+                    serverMenu.deleteForward();
                 if (window.pressed(VK_TAB))
                     serverMenu.selectNextField();
+
+                if (window.pressed(VK_LBUTTON) && overText)
+                {
+                    const clickedField = hovered == MultiplayerMenuAction.serverName
+                        ? MultiplayerField.serverName : MultiplayerField.serverAddress;
+                    serverMenu.activate(clickedField);
+                    const textCursor = renderer.multiplayerTextCursorAt(cursor.x,
+                        serverMenu, clickedField);
+                    if (textCursor >= 0)
+                        serverMenu.setCursor(cast(size_t) textCursor);
+                    serverTextMouseSelecting = true;
+                }
+                else if (serverTextMouseSelecting && window.down(VK_LBUTTON))
+                {
+                    const textCursor = renderer.multiplayerTextCursorAt(cursor.x,
+                        serverMenu, serverMenu.activeField);
+                    if (textCursor >= 0)
+                        serverMenu.setCursor(cast(size_t) textCursor, true);
+                }
+                if (!window.down(VK_LBUTTON))
+                    serverTextMouseSelecting = false;
 
                 bool connectRequested = window.pressed(VK_RETURN);
                 if (window.pressed(VK_ESCAPE))
                 {
                     multiplayerScreen = false;
                     serverMenu.error = "";
+                    serverTextMouseSelecting = false;
                 }
                 if (window.pressed(VK_LBUTTON))
                 {
@@ -346,6 +472,7 @@ final class GameClient
                             renderer.playUiButtonClick();
                             multiplayerScreen = false;
                             serverMenu.error = "";
+                            serverTextMouseSelecting = false;
                             break;
                         case MultiplayerMenuAction.none:
                             break;
@@ -393,7 +520,11 @@ final class GameClient
                         worldMenu.refresh();
                         worldScreen = true;
                         if (!worldMenu.worlds.length) worldMenu.beginCreate();
-                        else worldMenu.screen = WorldMenuScreen.selection;
+                        else
+                        {
+                            worldMenu.screen = WorldMenuScreen.selection;
+                            worldMenu.activate(WorldField.none);
+                        }
                         break;
                     case TitleAction.multiplayer:
                         ensureEos();
@@ -425,9 +556,12 @@ final class GameClient
         auto chat = new ChatState();
         scope (exit) destroy(chat);
         auto multiplayer = new MultiplayerClient(gameConnection, world, player);
-        uint loadingFrames;
+        const connectionStarted = monotonicMilliseconds();
+        enum uint connectionTimeoutMilliseconds = 30_000;
         while (window.running && multiplayer.connected()
-            && !multiplayer.loginComplete && loadingFrames++ < 600)
+            && !multiplayer.loginComplete
+            && monotonicMilliseconds() - connectionStarted
+                < connectionTimeoutMilliseconds)
         {
             window.pumpMessages();
             tickEos();
@@ -443,9 +577,11 @@ final class GameClient
         if (!window.running || !multiplayer.loginComplete)
         {
             if (window.running)
-                renderer.setTitleNotice(integratedServer is null
-                    ? "Connection timed out or the host closed the world"
-                    : "The local world server did not finish loading");
+                renderer.setTitleNotice(multiplayer.disconnectReason.length
+                    ? multiplayer.disconnectReason
+                    : (integratedServer is null
+                        ? "Connection timed out or the host closed the world"
+                        : "The local world server did not finish loading"));
             destroy(multiplayer);
             if (integratedServer !is null) destroy(integratedServer);
             if (!window.running) break;
@@ -838,6 +974,8 @@ final class GameClient
             else if (chat.active)
             {
                 const mouse = window.cursorPosition();
+                const chatTextInput = window.consumeTextInput();
+                const chatTextBackspace = containsCharacter(chatTextInput, 8);
                 const mouseCursor = renderer.chatCursorAt(mouse.x, mouse.y, chat);
                 if (window.pressed(VK_LBUTTON) && mouseCursor >= 0)
                 {
@@ -877,7 +1015,7 @@ final class GameClient
                     chat.paste(window.clipboardText());
                 }
                 else
-                    chat.insertCharacters(window.consumeTextInput());
+                    chat.insertCharacters(chatTextInput);
                 if (escapePressed)
                 {
                     chat.close(options.boolean("chatDrafts",true));
@@ -901,7 +1039,7 @@ final class GameClient
                         chat.moveCursor(1, selecting);
                     if (homePressed) chat.moveToStart(selecting);
                     if (endPressed) chat.moveToEnd(selecting);
-                    if (backspacePressed) chat.backspace();
+                    if (backspacePressed || chatTextBackspace) chat.backspace();
                     if (deletePressed || window.repeated(VK_DELETE))
                         chat.deleteForward();
                 }
@@ -1133,6 +1271,13 @@ final class GameClient
     }
 
 private:
+    static bool containsCharacter(const(wchar)[] text, wchar value)
+    {
+        foreach (character; text)
+            if (character == value) return true;
+        return false;
+    }
+
     static GameConnection connectFromMenu(MultiplayerMenuState menu,
         EosService eos, out ServerEndpoint selected,
         out string host, out ushort port)

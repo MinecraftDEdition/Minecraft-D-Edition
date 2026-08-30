@@ -210,11 +210,17 @@ final class TitleScreenRenderer
             logicalHeight, font, fontTexture, Color(0.75f,0.75f,0.75f,1));
         appendTextField(frame, center - 150, 64, 300, state.serverName,
             state.activeField == MultiplayerField.serverName,
+            state.activeField == MultiplayerField.serverName ? state.cursor : 0,
+            state.activeField == MultiplayerField.serverName
+                ? state.selectionAnchor : 0,
             logicalWidth, logicalHeight, textures, font, fontTexture);
         appendText(frame, "Server Address", center - 150, 92, logicalWidth,
             logicalHeight, font, fontTexture, Color(0.75f,0.75f,0.75f,1));
         appendTextField(frame, center - 150, 103, 300, state.serverAddress,
             state.activeField == MultiplayerField.serverAddress,
+            state.activeField == MultiplayerField.serverAddress ? state.cursor : 0,
+            state.activeField == MultiplayerField.serverAddress
+                ? state.selectionAnchor : 0,
             logicalWidth, logicalHeight, textures, font, fontTexture);
 
         const buttonY = cast(int) logicalHeight / 2 + 28;
@@ -233,6 +239,20 @@ final class TitleScreenRenderer
                 "The server exists only while its owner is online.",
                 buttonY + 28, logicalWidth, logicalHeight, font, fontTexture,
                 Color(0.7f,0.7f,0.7f,1));
+    }
+
+    long multiplayerTextCursorAt(uint viewportWidth, uint viewportHeight,
+        int mouseX, const MultiplayerMenuState state,
+        MultiplayerField field, const FontRenderer font) const
+    {
+        if (field == MultiplayerField.none) return -1;
+        const scale = guiScale(viewportWidth, viewportHeight);
+        const center = cast(int) viewportWidth / scale / 2;
+        const value = field == MultiplayerField.serverName
+            ? state.serverName : state.serverAddress;
+        const cursor = field == state.activeField ? state.cursor : value.length;
+        return textFieldCursorAt(value, cursor, 300,
+            mouseX / scale - (center - 150), font);
     }
 
     WorldMenuAction worldMenuHitTest(uint viewportWidth, uint viewportHeight,
@@ -351,7 +371,11 @@ final class TitleScreenRenderer
         {
             case WorldCreationTab.game:
                 appendText(frame,"World Name",center-150,57,w,h,font,fontTexture,Color(.75f,.75f,.75f,1));
-                appendTextField(frame,center-150,68,300,state.draft.name,state.field==WorldField.name,w,h,textures,font,fontTexture);
+                appendTextField(frame,center-150,68,300,state.draft.name,
+                    state.field==WorldField.name,
+                    state.field==WorldField.name ? state.cursor : 0,
+                    state.field==WorldField.name ? state.selectionAnchor : 0,
+                    w,h,textures,font,fontTexture);
                 appendMenuButton(frame,center-150,105,148,"Game Mode: "~state.modeLabel,hovered==WorldMenuAction.mode,w,h,textures,font,fontTexture);
                 appendMenuButton(frame,center+2,105,148,"Difficulty: "~difficultyName(state.draft.difficulty),hovered==WorldMenuAction.difficulty,w,h,textures,font,fontTexture,!state.draft.hardcore);
                 appendMenuButton(frame,center-150,138,300,"Allow Commands: "~(state.draft.allowCommands?"ON":"OFF"),hovered==WorldMenuAction.commands,w,h,textures,font,fontTexture,!state.draft.hardcore);
@@ -359,7 +383,10 @@ final class TitleScreenRenderer
             case WorldCreationTab.world:
                 appendText(frame,"Seed (blank = random)",center-150,57,w,h,font,fontTexture,Color(.75f,.75f,.75f,1));
                 appendTextField(frame,center-150,68,300,state.seedInput,
-                    state.field==WorldField.seed,w,h,textures,font,fontTexture);
+                    state.field==WorldField.seed,
+                    state.field==WorldField.seed ? state.cursor : 0,
+                    state.field==WorldField.seed ? state.selectionAnchor : 0,
+                    w,h,textures,font,fontTexture);
                 appendMenuButton(frame,center-150,105,300,"World Type: "~(state.draft.worldType==WorldType.normal?"Normal":"Flat"),hovered==WorldMenuAction.worldType,w,h,textures,font,fontTexture,!state.editing);
                 appendMenuButton(frame,center-150,138,148,"Structures: "~(state.draft.generateStructures?"ON":"OFF"),hovered==WorldMenuAction.structures,w,h,textures,font,fontTexture,!state.editing);
                 appendMenuButton(frame,center+2,138,148,"Bonus Chest: "~(state.draft.bonusChest?"ON":"OFF"),hovered==WorldMenuAction.bonusChest,w,h,textures,font,fontTexture,!state.editing);
@@ -373,6 +400,19 @@ final class TitleScreenRenderer
         if (state.notice.length) appendCenteredText(frame,state.notice,cast(int)h-42,w,h,font,fontTexture,Color(1,.8f,.3f,1));
         appendMenuButton(frame,center-150,cast(int)h-28,148,state.editing?"Save Changes":"Create New World",hovered==WorldMenuAction.confirmCreate,w,h,textures,font,fontTexture);
         appendMenuButton(frame,center+2,cast(int)h-28,148,"Cancel",hovered==WorldMenuAction.cancelCreate,w,h,textures,font,fontTexture);
+    }
+
+    long worldTextCursorAt(uint viewportWidth, uint viewportHeight,
+        int mouseX, const WorldMenuState state, WorldField field,
+        const FontRenderer font) const
+    {
+        if (field == WorldField.none) return -1;
+        const scale = guiScale(viewportWidth, viewportHeight);
+        const center = cast(int) viewportWidth / scale / 2;
+        const value = field == WorldField.name ? state.draft.name : state.seedInput;
+        const cursor = field == state.field ? state.cursor : value.length;
+        return textFieldCursorAt(value, cursor, 300,
+            mouseX / scale - (center - 150), font);
     }
 
     void appendLoading(ref FrameMesh frame, uint viewportWidth,
@@ -559,7 +599,8 @@ private:
     }
 
     static void appendTextField(ref FrameMesh frame, int x, int y, int width,
-        string value, bool active, float logicalWidth, float logicalHeight,
+        string value, bool active, size_t cursor, size_t selectionAnchor,
+        float logicalWidth, float logicalHeight,
         const TitleTextureSet textures, const FontRenderer font,
         uint fontTexture)
     {
@@ -569,20 +610,70 @@ private:
         appendImage(frame, textures.white, x + 1, y + 1, width - 2, 18,
             logicalWidth, logicalHeight, Vec2(0,0), Vec2(1,1),
             Color(0.04f,0.04f,0.04f,0.96f));
-        size_t start;
-        while (start < value.length
-            && font.width(value[start .. $]) > width - 12)
-            ++start;
-        appendText(frame, value[start .. $], x + 4, y + 6,
+        size_t start, end;
+        textFieldVisibleRange(value, cursor, width, font, start, end);
+        if (active && cursor != selectionAnchor)
+        {
+            const selectionStart = cursor < selectionAnchor
+                ? cursor : selectionAnchor;
+            const selectionEnd = cursor > selectionAnchor
+                ? cursor : selectionAnchor;
+            const first = selectionStart > start ? selectionStart : start;
+            const after = selectionEnd < end ? selectionEnd : end;
+            if (first < after)
+            {
+                const left = x + 4 + font.width(value[start .. first]);
+                const right = x + 4 + font.width(value[start .. after]);
+                appendImage(frame, textures.white, left, y + 4,
+                    right - left, 12, logicalWidth, logicalHeight,
+                    Vec2(0,0), Vec2(1,1), Color(.25f,.45f,.85f,.8f));
+            }
+        }
+        appendText(frame, value[start .. end], x + 4, y + 6,
             logicalWidth, logicalHeight, font, fontTexture,
             Color(1,1,1,1));
         if (active)
         {
-            const caretX = x + 4 + font.width(value[start .. $]);
+            const caret = cursor <= value.length ? cursor : value.length;
+            const caretX = x + 4 + font.width(value[start .. caret]);
             appendImage(frame, textures.white, caretX, y + 5, 1, 10,
                 logicalWidth, logicalHeight, Vec2(0,0), Vec2(1,1),
                 Color(1,1,1,1));
         }
+    }
+
+    static void textFieldVisibleRange(string value, size_t cursor, int width,
+        const FontRenderer font, out size_t start, out size_t end)
+    {
+        cursor = cursor <= value.length ? cursor : value.length;
+        start = cursor;
+        while (start > 0
+            && font.width(value[start - 1 .. cursor]) <= width - 12)
+            --start;
+        end = cursor;
+        while (end < value.length
+            && font.width(value[start .. end + 1]) <= width - 12)
+            ++end;
+    }
+
+    static long textFieldCursorAt(string value, size_t cursor, int width,
+        int localMouseX, const FontRenderer font)
+    {
+        size_t start, end;
+        textFieldVisibleRange(value, cursor, width, font, start, end);
+        const target = localMouseX - 4;
+        if (target <= 0) return cast(long) start;
+        if (target >= width - 8 && end < value.length)
+            return cast(long) end + 1;
+        int previous;
+        foreach (position; start .. end)
+        {
+            const next = font.width(value[start .. position + 1]);
+            if (target < previous + (next - previous) / 2)
+                return cast(long) position;
+            previous = next;
+        }
+        return cast(long) end;
     }
 
     static void appendCenteredText(ref FrameMesh frame, string value, int y,
