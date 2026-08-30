@@ -166,7 +166,7 @@ void* mcdPlatformCreateWindow(const char* title, int width, int height,
     SDL_WindowFlags flags = static_cast<SDL_WindowFlags>(SDL_WINDOW_VULKAN
         | SDL_WINDOW_RESIZABLE | SDL_WINDOW_HIGH_PIXEL_DENSITY);
     context->window = SDL_CreateWindow(title && *title ? title
-        : "Minecraft D Edition", width, height, flags);
+        : "Minecraft: D Edition", width, height, flags);
     if (!context->window) {
         copyError(error, errorCapacity, SDL_GetError());
         SDL_Vulkan_UnloadLibrary();
@@ -391,7 +391,7 @@ void mcdPlatformWindowSize(void* value, int* width, int* height) {
 
 void mcdPlatformShowError(const char* title, const char* message) {
     SDL_ShowSimpleMessageBox(SDL_MESSAGEBOX_ERROR,
-        title ? title : "Minecraft D Edition",
+        title ? title : "Minecraft: D Edition",
         message ? message : "Unknown error", nullptr);
 }
 

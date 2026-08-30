@@ -5,5 +5,4 @@ version (Windows)
 else version (OSX)
     public import minecraftd.platform.macos.window : CursorShape, GameWindow;
 else
-    static assert(false, "Minecraft D Edition has no window backend for this platform");
-
+    static assert(false, "Minecraft: D Edition has no window backend for this platform");

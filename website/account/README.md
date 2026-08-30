@@ -1,4 +1,4 @@
-# Minecraft D Edition account service
+# Minecraft: D Edition account service
 
 This Cloudflare Worker hosts the account website and its server-side API. Auth0 handles authentication, while D1 stores profiles, opaque sessions, and validated PNG skins.
 

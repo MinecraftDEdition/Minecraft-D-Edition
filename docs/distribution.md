@@ -1,6 +1,6 @@
 # Windows installer and differential updates
 
-Minecraft D Edition ships through the GitHub release channel at
+Minecraft: D Edition ships through the GitHub release channel at
 <https://github.com/MinecraftDEdition/Minecraft-D-Edition/releases/tag/Test>.
 
 ## Player experience

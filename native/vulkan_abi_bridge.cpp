@@ -12,7 +12,7 @@
 #include <SDL3/SDL_vulkan.h>
 #define MCD_EXPORT __attribute__((visibility("default")))
 #else
-#error Minecraft D Edition Vulkan bridge has no surface implementation
+#error Minecraft: D Edition Vulkan bridge has no surface implementation
 #endif
 
 #include <algorithm>
@@ -882,9 +882,9 @@ struct Context {
         pixelShader = readSpirv(pixelPath);
         blurPixelShader = readSpirv(blurPixelPath);
         VkApplicationInfo application{VK_STRUCTURE_TYPE_APPLICATION_INFO};
-        application.pApplicationName = "Minecraft D Edition";
+        application.pApplicationName = "Minecraft: D Edition";
         application.applicationVersion = VK_MAKE_VERSION(0, 1, 0);
-        application.pEngineName = "Minecraft D Edition";
+        application.pEngineName = "Minecraft: D Edition";
         application.engineVersion = VK_MAKE_VERSION(0, 1, 0);
         application.apiVersion = VK_API_VERSION_1_1;
         std::vector<const char*> extensions;

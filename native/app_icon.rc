@@ -13,7 +13,7 @@ BEGIN
     BEGIN
         BLOCK "040904B0"
         BEGIN
-            VALUE "CompanyName", "Minecraft D Edition contributors\0"
+            VALUE "CompanyName", "Minecraft: D Edition contributors\0"
             VALUE "FileDescription", "Minecraft: D Edition\0"
             VALUE "FileVersion", "0.1.0.0\0"
             VALUE "InternalName", "Minecraft D Edition\0"

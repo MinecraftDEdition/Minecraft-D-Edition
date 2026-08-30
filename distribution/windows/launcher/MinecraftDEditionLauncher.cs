@@ -14,9 +14,9 @@ using System.Threading;
 using System.Threading.Tasks;
 using System.Windows.Forms;
 
-[assembly: System.Reflection.AssemblyTitle("Minecraft D Edition Launcher")]
-[assembly: System.Reflection.AssemblyProduct("Minecraft D Edition")]
-[assembly: System.Reflection.AssemblyCompany("Minecraft D Edition")]
+[assembly: System.Reflection.AssemblyTitle("Minecraft: D Edition Launcher")]
+[assembly: System.Reflection.AssemblyProduct("Minecraft: D Edition")]
+[assembly: System.Reflection.AssemblyCompany("Minecraft: D Edition")]
 [assembly: System.Reflection.AssemblyVersion("1.0.0.0")]
 
 namespace MinecraftDEdition.Updater
@@ -182,7 +182,7 @@ namespace MinecraftDEdition.Updater
             }
             gameArguments = forwarded.ToArray();
 
-            Text = "Minecraft D Edition Installer";
+            Text = "Minecraft: D Edition Installer";
             ClientSize = new Size(560, 218);
             FormBorderStyle = FormBorderStyle.FixedDialog;
             MaximizeBox = false;
@@ -206,7 +206,7 @@ namespace MinecraftDEdition.Updater
             heading.Location = new Point(94, 20);
             heading.Size = new Size(440, 34);
             heading.Font = new Font("Segoe UI", 17.0f, FontStyle.Bold);
-            heading.Text = "Minecraft D Edition";
+            heading.Text = "Minecraft: D Edition";
             Controls.Add(heading);
 
             Label subtitle = new Label();
@@ -259,7 +259,7 @@ namespace MinecraftDEdition.Updater
                 SetStatus("The update could not be completed.");
                 SetDetails("Your existing game files were left unchanged.");
                 MessageBox.Show(this,
-                    "Minecraft D Edition was not changed.\n\n" + exception.Message,
+                    "Minecraft: D Edition was not changed.\n\n" + exception.Message,
                     "Update failed", MessageBoxButtons.OK, MessageBoxIcon.Error);
                 Environment.ExitCode = 1;
                 Close();
@@ -305,7 +305,7 @@ namespace MinecraftDEdition.Updater
                 if (installed != null && String.Equals(installed.Version,
                     pointer.Version, StringComparison.Ordinal))
                 {
-                    SetStatus("Minecraft D Edition is up to date.");
+                    SetStatus("Minecraft: D Edition is up to date.");
                     SetDetails("Starting the game...");
                     return;
                 }
@@ -356,7 +356,7 @@ namespace MinecraftDEdition.Updater
             if (installed != null && String.Equals(installed.Version, remote.Version,
                 StringComparison.Ordinal))
             {
-                SetStatus("Minecraft D Edition is up to date.");
+                SetStatus("Minecraft: D Edition is up to date.");
                 SetDetails("Starting the game...");
                 return;
             }
@@ -366,7 +366,7 @@ namespace MinecraftDEdition.Updater
             if (changed.Count == 0 && removed.Count == 0)
             {
                 WriteInstalledManifest(root, remote.RawText);
-                SetStatus("Minecraft D Edition is up to date.");
+                SetStatus("Minecraft: D Edition is up to date.");
                 SetDetails("All installed files match version " + remote.Version + ".");
                 return;
             }
@@ -419,7 +419,7 @@ namespace MinecraftDEdition.Updater
             WriteInstalledManifest(root, remote.RawText);
             TryDeleteDirectory(work);
             SetStatus("Update complete.");
-            SetDetails("Starting Minecraft D Edition...");
+            SetDetails("Starting Minecraft: D Edition...");
         }
 
         private static List<FileRecord> FindChangedFiles(string root,

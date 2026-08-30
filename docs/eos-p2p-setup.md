@@ -24,7 +24,7 @@ the existing game protocol without router or firewall configuration.
 These steps must be completed by the EOS product owner because they require an
 Epic Games account and acceptance of Epic's developer agreement.
 
-1. Create an organization and a product named `Minecraft D Edition` in the
+1. Create an organization and a product named `Minecraft: D Edition` in the
    Epic Games Developer Portal.
 2. Create or select a development sandbox and deployment.
 3. Configure an EOS client policy that permits the minimum services needed by

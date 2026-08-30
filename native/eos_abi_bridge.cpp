@@ -188,7 +188,7 @@ extern "C"
 
         EOS_InitializeOptions initialize{};
         initialize.ApiVersion = EOS_INITIALIZE_API_LATEST;
-        initialize.ProductName = "Minecraft D Edition";
+        initialize.ProductName = "Minecraft: D Edition";
         initialize.ProductVersion = "0.1";
         const EOS_EResult initializeResult = EOS_Initialize(&initialize);
         if (initializeResult != EOS_EResult::EOS_Success

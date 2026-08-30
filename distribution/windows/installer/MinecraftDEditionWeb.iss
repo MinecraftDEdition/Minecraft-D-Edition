@@ -1,6 +1,7 @@
 ; Windows GitHub-backed web installer. macOS uses a signed app bundle and DMG.
-#define MyAppName "Minecraft D Edition"
-#define MyAppPublisher "Minecraft D Edition"
+#define MyAppName "Minecraft: D Edition"
+#define MyAppPathName "Minecraft D Edition"
+#define MyAppPublisher "Minecraft: D Edition"
 #define MyAppURL "https://github.com/MinecraftDEdition/Minecraft-D-Edition"
 #define MyAppVersion GetEnv("MDE_VERSION")
 
@@ -12,8 +13,8 @@ AppPublisher={#MyAppPublisher}
 AppPublisherURL={#MyAppURL}
 AppSupportURL={#MyAppURL}/issues
 AppUpdatesURL={#MyAppURL}/releases/tag/Test
-DefaultDirName={localappdata}\Programs\{#MyAppName}
-DefaultGroupName={#MyAppName}
+DefaultDirName={localappdata}\Programs\{#MyAppPathName}
+DefaultGroupName={#MyAppPathName}
 DisableProgramGroupPage=yes
 PrivilegesRequired=lowest
 PrivilegesRequiredOverridesAllowed=dialog
@@ -48,7 +49,7 @@ Name: "{group}\Minecraft D Edition"; Filename: "{app}\Minecraft D Edition Launch
 Name: "{autodesktop}\Minecraft D Edition"; Filename: "{app}\Minecraft D Edition Launcher.exe"; WorkingDir: "{app}"; Tasks: desktopicon
 
 [Run]
-Filename: "{app}\Minecraft D Edition Launcher.exe"; Description: "Download and launch Minecraft D Edition"; WorkingDir: "{app}"; Flags: nowait postinstall skipifsilent
+Filename: "{app}\Minecraft D Edition Launcher.exe"; Description: "Download and launch Minecraft: D Edition"; WorkingDir: "{app}"; Flags: nowait postinstall skipifsilent
 
 [UninstallDelete]
 Type: files; Name: "{app}\Minecraft D Edition.exe"

@@ -1,7 +1,7 @@
 {
   "name": "minecraft-d-edition",
   "description": "A cross-platform voxel game written in D",
-  "authors": ["Minecraft D Edition contributors"],
+  "authors": ["Minecraft: D Edition contributors"],
   "license": "proprietary",
   "targetType": "executable",
   "targetName": "Minecraft D Edition",

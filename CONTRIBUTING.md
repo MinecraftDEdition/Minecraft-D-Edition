@@ -1,6 +1,6 @@
 # Contributing
 
-Thanks for helping improve Minecraft D Edition.
+Thanks for helping improve Minecraft: D Edition.
 
 ## Before opening an issue
 

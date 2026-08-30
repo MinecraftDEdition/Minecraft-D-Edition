@@ -1,6 +1,6 @@
 # Renderer backends
 
-Minecraft D Edition builds renderer-neutral frame meshes in shared D code. A
+Minecraft: D Edition builds renderer-neutral frame meshes in shared D code. A
 small `GraphicsDevice` boundary owns only GPU-specific work: texture upload,
 resize, presentation, VSync, and rendering the already-built draw list. This
 keeps terrain generation, water geometry, particles, menus, HUD, gameplay,

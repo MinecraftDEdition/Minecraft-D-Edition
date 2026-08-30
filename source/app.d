@@ -67,7 +67,7 @@ int main(string[] arguments)
         // Keep a persistent diagnostic for failures launched outside a console.
         const paths = platformPaths();
         write(buildPath(paths.userData, "last-error.log"), message);
-        showFatalError("Minecraft D Edition", message);
+        showFatalError("Minecraft: D Edition", message);
         return 1;
     }
 }

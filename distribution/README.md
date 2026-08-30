@@ -1,6 +1,6 @@
 # Desktop distributions
 
-Minecraft D Edition is one game built into separate native packages. The
+Minecraft: D Edition is one game built into separate native packages. The
 repository, gameplay code, assets, world format, and multiplayer protocol are
 shared; executables, native libraries, installers, and update mechanisms are
 platform-specific.
@@ -18,4 +18,3 @@ architecture.
 
 Cross-play does not depend on packaging. It is controlled by the shared
 wire protocol documented in [`../docs/cross-platform.md`](../docs/cross-platform.md).
-
