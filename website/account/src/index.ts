@@ -35,11 +35,24 @@ interface OAuthState {
   nonce: string;
   verifier: string;
   expiresAt: number;
+  desktopRequestId?: string;
+  desktopMode?: 'login' | 'signup';
+}
+
+interface DesktopLoginRow {
+  id: string;
+  poll_secret_hash: string;
+  account_id: string | null;
+  mode: 'login' | 'signup';
+  expires_at: number;
+  authorized_at: number | null;
 }
 
 const encoder = new TextEncoder();
 const SESSION_SECONDS = 60 * 60 * 24 * 7;
+const DESKTOP_SESSION_SECONDS = 60 * 60 * 24 * 30;
 const OAUTH_SECONDS = 60 * 10;
+const DESKTOP_LOGIN_SECONDS = 60 * 10;
 const MAX_SKIN_BYTES = 256 * 1024;
 const USERNAME = /^[A-Za-z0-9_]{3,16}$/;
 
@@ -48,11 +61,17 @@ export default {
     try {
       const url = new URL(request.url);
       if (url.pathname === '/login' && request.method === 'GET') return beginLogin(env);
+      if (url.pathname === '/desktop/login' && request.method === 'GET') return beginDesktopLogin(request, env, 'login');
+      if (url.pathname === '/desktop/signup' && request.method === 'GET') return beginDesktopLogin(request, env, 'signup');
       if (url.pathname === '/callback' && request.method === 'GET') return finishLogin(request, env);
       if (url.pathname === '/logout' && request.method === 'POST') return logout(request, env);
       if (url.pathname === '/api/me' && request.method === 'GET') return getMe(request, env);
+      if (url.pathname === '/api/desktop/start' && request.method === 'POST') return startDesktopLogin(request, env);
+      if (url.pathname === '/api/desktop/poll' && request.method === 'POST') return pollDesktopLogin(request, env);
+      if (url.pathname === '/api/desktop/logout' && request.method === 'POST') return logoutDesktop(request, env);
       if (url.pathname === '/api/profile' && request.method === 'POST') return updateProfile(request, env);
       if (url.pathname === '/api/skin' && request.method === 'POST') return updateSkin(request, env);
+      if (url.pathname === '/api/skin' && request.method === 'PUT') return updateDesktopSkin(request, env);
       if (url.pathname === '/api/password/reset' && request.method === 'POST') return requestPasswordReset(request, env);
       if (url.pathname === '/api/account/deactivate' && request.method === 'POST') return deactivateAccount(request, env);
       if (url.pathname === '/api/account/reactivate' && request.method === 'POST') return reactivateAccount(request, env);
@@ -70,12 +89,28 @@ export default {
 } satisfies ExportedHandler<Env>;
 
 async function beginLogin(env: Env): Promise<Response> {
+  return beginLoginFlow(env);
+}
+
+async function beginDesktopLogin(request: Request, env: Env, mode: 'login' | 'signup'): Promise<Response> {
+  const requestId = new URL(request.url).searchParams.get('request') ?? '';
+  const pending = await env.DB.prepare(`SELECT id FROM desktop_login_requests
+    WHERE id = ? AND mode = ? AND account_id IS NULL AND expires_at > ?`)
+    .bind(requestId, mode, Date.now()).first<{ id: string }>();
+  if (!pending) return desktopResultPage('This game sign-in request expired. Return to Minecraft: D Edition and try again.', false);
+  return beginLoginFlow(env, requestId, mode);
+}
+
+async function beginLoginFlow(env: Env, desktopRequestId?: string,
+  desktopMode?: 'login' | 'signup'): Promise<Response> {
   assertConfigured(env);
   const state: OAuthState = {
     state: randomToken(24),
     nonce: randomToken(24),
     verifier: randomToken(48),
-    expiresAt: Date.now() + OAUTH_SECONDS * 1000
+    expiresAt: Date.now() + OAUTH_SECONDS * 1000,
+    desktopRequestId,
+    desktopMode
   };
   const challenge = base64Url(await crypto.subtle.digest('SHA-256', encoder.encode(state.verifier)));
   const cookie = await signValue(JSON.stringify(state), env.SESSION_SECRET);
@@ -88,6 +123,10 @@ async function beginLogin(env: Env): Promise<Response> {
   authorize.searchParams.set('nonce', state.nonce);
   authorize.searchParams.set('code_challenge', challenge);
   authorize.searchParams.set('code_challenge_method', 'S256');
+  if (desktopMode === 'signup') {
+    authorize.searchParams.set('screen_hint', 'signup');
+    authorize.searchParams.set('prompt', 'login');
+  }
 
   return new Response(null, {
     status: 302,
@@ -149,9 +188,11 @@ async function finishLogin(request: Request, env: Env): Promise<Response> {
   if (!identity.sub || !identity.email) return redirectWithError(env, 'Your account is missing a verified identity.');
 
   const now = Date.now();
+  let created = false;
   let account = await env.DB.prepare('SELECT * FROM accounts WHERE auth0_sub = ?')
     .bind(identity.sub).first<AccountRow>();
   if (!account) {
+    created = true;
     const id = crypto.randomUUID();
     await env.DB.prepare(`INSERT INTO accounts
       (id, auth0_sub, email, email_verified, created_at, updated_at)
@@ -171,6 +212,23 @@ async function finishLogin(request: Request, env: Env): Promise<Response> {
   await env.DB.prepare(`INSERT INTO sessions
     (token_hash, account_id, csrf_token, expires_at, created_at) VALUES (?, ?, ?, ?, ?)`)
     .bind(sessionHash, account.id, csrf, now + SESSION_SECONDS * 1000, now).run();
+
+  if (oauth.desktopRequestId) {
+    const pending = await env.DB.prepare(`SELECT id FROM desktop_login_requests
+      WHERE id = ? AND account_id IS NULL AND expires_at > ?`)
+      .bind(oauth.desktopRequestId, now).first<{ id: string }>();
+    if (!pending) return desktopResultPage('This game sign-in request expired. Return to Minecraft: D Edition and try again.', false);
+    await env.DB.prepare(`UPDATE desktop_login_requests
+      SET account_id = ?, authorized_at = ? WHERE id = ?`)
+      .bind(account.id, now, oauth.desktopRequestId).run();
+    const message = created || oauth.desktopMode === 'signup'
+      ? "You're good to go! You created an account successfully, and can return to Minecraft: D Edition."
+      : "You're good to go! You logged in successfully, and can return to Minecraft: D Edition.";
+    const response = desktopResultPage(message, true);
+    response.headers.append('Set-Cookie', expireCookie('mcde_oauth'));
+    response.headers.append('Set-Cookie', cookieHeader('mcde_session', sessionToken, SESSION_SECONDS));
+    return response;
+  }
 
   const headers = new Headers({ Location: `${env.SITE_ORIGIN}/`, ...securityHeaders() });
   headers.append('Set-Cookie', expireCookie('mcde_oauth'));
@@ -192,6 +250,7 @@ async function getMe(request: Request, env: Env): Promise<Response> {
       deactivatedAt: session.deactivated_at,
       skinUrl: session.has_skin ? `/skins/${session.id}.png?v=${session.updated_at}` : null,
       skinModel: session.skin_model,
+      updatedAt: session.updated_at,
       createdAt: session.created_at
     },
     csrfToken: session.csrf_token,
@@ -199,6 +258,66 @@ async function getMe(request: Request, env: Env): Promise<Response> {
       accountDeletion: Boolean(env.AUTH0_MANAGEMENT_CLIENT_ID && env.AUTH0_MANAGEMENT_CLIENT_SECRET)
     }
   });
+}
+
+async function startDesktopLogin(request: Request, env: Env): Promise<Response> {
+  let mode: 'login' | 'signup' = 'login';
+  try {
+    const body = await request.json<{ mode?: unknown }>();
+    if (body.mode === 'signup') mode = 'signup';
+  } catch {
+    return json({ error: 'Send a valid login request.' }, 400);
+  }
+  const now = Date.now();
+  await env.DB.prepare('DELETE FROM desktop_login_requests WHERE expires_at <= ?').bind(now).run();
+  const id = crypto.randomUUID();
+  const pollSecret = randomToken(48);
+  await env.DB.prepare(`INSERT INTO desktop_login_requests
+    (id, poll_secret_hash, mode, expires_at) VALUES (?, ?, ?, ?)`)
+    .bind(id, await sha256Hex(pollSecret), mode, now + DESKTOP_LOGIN_SECONDS * 1000).run();
+  return json({
+    requestId: id,
+    pollSecret,
+    authorizeUrl: `${env.SITE_ORIGIN}/desktop/${mode}?request=${encodeURIComponent(id)}`,
+    expiresIn: DESKTOP_LOGIN_SECONDS
+  });
+}
+
+async function pollDesktopLogin(request: Request, env: Env): Promise<Response> {
+  let body: { requestId?: unknown; pollSecret?: unknown };
+  try {
+    body = await request.json<{ requestId?: unknown; pollSecret?: unknown }>();
+  } catch {
+    return json({ error: 'Send a valid polling request.' }, 400);
+  }
+  const requestId = typeof body.requestId === 'string' ? body.requestId : '';
+  const pollSecret = typeof body.pollSecret === 'string' ? body.pollSecret : '';
+  const pending = await env.DB.prepare('SELECT * FROM desktop_login_requests WHERE id = ?')
+    .bind(requestId).first<DesktopLoginRow>();
+  if (!pending || !pollSecret || !timingSafeEqual(pending.poll_secret_hash, await sha256Hex(pollSecret)))
+    return json({ error: 'The game sign-in request is invalid.' }, 404);
+  if (pending.expires_at <= Date.now()) {
+    await env.DB.prepare('DELETE FROM desktop_login_requests WHERE id = ?').bind(requestId).run();
+    return json({ error: 'The game sign-in request expired.' }, 410);
+  }
+  if (!pending.account_id) return json({ pending: true }, 202);
+
+  const sessionToken = randomToken(48);
+  const csrf = randomToken(24);
+  const now = Date.now();
+  await env.DB.prepare(`INSERT INTO sessions
+    (token_hash, account_id, csrf_token, expires_at, created_at) VALUES (?, ?, ?, ?, ?)`)
+    .bind(await sha256Hex(sessionToken), pending.account_id, csrf,
+      now + DESKTOP_SESSION_SECONDS * 1000, now).run();
+  await env.DB.prepare('DELETE FROM desktop_login_requests WHERE id = ?').bind(requestId).run();
+  return json({ authenticated: true, token: sessionToken, expiresIn: DESKTOP_SESSION_SECONDS });
+}
+
+async function logoutDesktop(request: Request, env: Env): Promise<Response> {
+  const token = readBearer(request);
+  if (!token) return json({ ok: true });
+  await env.DB.prepare('DELETE FROM sessions WHERE token_hash = ?').bind(await sha256Hex(token)).run();
+  return json({ ok: true });
 }
 
 async function updateProfile(request: Request, env: Env): Promise<Response> {
@@ -285,6 +404,24 @@ async function logout(request: Request, env: Env): Promise<Response> {
     status: 302,
     headers: { Location: location.toString(), 'Set-Cookie': expireCookie('mcde_session'), ...securityHeaders() }
   });
+}
+
+async function updateDesktopSkin(request: Request, env: Env): Promise<Response> {
+  const session = await requireActiveMutatingSession(request, env);
+  if (session instanceof Response) return session;
+  const modelHeader = request.headers.get('X-MCDE-Skin-Model');
+  const model = modelHeader === 'slim' ? 'slim' : modelHeader === 'classic' ? 'classic' : null;
+  const declaredLength = Number(request.headers.get('Content-Length') ?? 0);
+  if (!model) return json({ error: 'Choose a valid player model.' }, 400);
+  if (declaredLength > MAX_SKIN_BYTES) return json({ error: "That's not a skin, silly!" }, 413);
+  const bytes = new Uint8Array(await request.arrayBuffer());
+  if (bytes.length > MAX_SKIN_BYTES || !isModernSkinPng(bytes))
+    return json({ error: "That's not a skin, silly!" }, 400);
+  const skinBuffer = bytes.buffer.slice(bytes.byteOffset, bytes.byteOffset + bytes.byteLength) as ArrayBuffer;
+  const now = Date.now();
+  await env.DB.prepare('UPDATE accounts SET skin_png = ?, skin_model = ?, updated_at = ? WHERE id = ?')
+    .bind(skinBuffer, model, now, session.id).run();
+  return json({ ok: true, skinUrl: `/skins/${session.id}.png?v=${now}`, skinModel: model, updatedAt: now });
 }
 
 async function requestPasswordReset(request: Request, env: Env): Promise<Response> {
@@ -392,7 +529,7 @@ async function getManagementToken(env: Env): Promise<string | null> {
 }
 
 async function requireSession(request: Request, env: Env): Promise<SessionRow | null> {
-  const token = readCookie(request, 'mcde_session');
+  const token = readBearer(request) ?? readCookie(request, 'mcde_session');
   if (!token) return null;
   const now = Date.now();
   const session = await env.DB.prepare(`SELECT
@@ -407,6 +544,11 @@ async function requireSession(request: Request, env: Env): Promise<SessionRow | 
 }
 
 async function requireMutatingSession(request: Request, env: Env): Promise<SessionRow | Response> {
+  const bearer = readBearer(request);
+  if (bearer) {
+    const session = await requireSession(request, env);
+    return session ?? json({ error: 'Sign in to continue.' }, 401);
+  }
   const origin = request.headers.get('Origin');
   if (origin !== env.SITE_ORIGIN) return json({ error: 'This request came from an untrusted origin.' }, 403);
   const session = await requireSession(request, env);
@@ -414,6 +556,20 @@ async function requireMutatingSession(request: Request, env: Env): Promise<Sessi
   const csrf = request.headers.get('X-CSRF-Token') ?? '';
   if (!timingSafeEqual(csrf, session.csrf_token)) return json({ error: 'The security token was missing or invalid.' }, 403);
   return session;
+}
+
+function readBearer(request: Request): string | null {
+  const authorization = request.headers.get('Authorization') ?? '';
+  const match = /^Bearer ([A-Za-z0-9_-]{32,})$/.exec(authorization);
+  return match?.[1] ?? null;
+}
+
+function desktopResultPage(message: string, success: boolean): Response {
+  const safeMessage = message.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
+  const html = `<!doctype html><html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>${success ? 'Account connected' : 'Sign-in problem'} — Minecraft: D Edition</title><style>body{margin:0;min-height:100vh;display:grid;place-items:center;background:#111;color:#fff;font:20px system-ui,sans-serif}.box{max-width:680px;margin:24px;padding:42px;background:#252525;border:3px solid #777;box-shadow:0 8px 0 #000}h1{margin-top:0;color:${success ? '#7cdb62' : '#ff7373'}}p{line-height:1.55}</style></head><body><main class="box"><h1>${success ? 'Account connected' : 'Unable to connect account'}</h1><p>${safeMessage}</p></main></body></html>`;
+  const headers = securityHeaders();
+  headers['Content-Security-Policy'] = "default-src 'none'; style-src 'unsafe-inline'; base-uri 'none'; frame-ancestors 'none'";
+  return new Response(html, { status: success ? 200 : 400, headers: { 'Content-Type': 'text/html; charset=utf-8', ...headers } });
 }
 
 async function requireActiveMutatingSession(request: Request, env: Env): Promise<SessionRow | Response> {

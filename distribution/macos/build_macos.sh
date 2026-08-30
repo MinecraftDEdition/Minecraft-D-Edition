@@ -39,6 +39,8 @@ common_cxx=(clang++ -std=c++17 -O2 -fvisibility=hidden
     -o "$native_out/image_stb_bridge.o"
 "${common_cxx[@]}" -fobjc-arc -c "$repo/native/macos/update_sparkle_bridge.mm" \
     -o "$native_out/update_sparkle_bridge.o"
+"${common_cxx[@]}" -fobjc-arc -c "$repo/native/macos/web_cocoa_bridge.mm" \
+    -o "$native_out/web_cocoa_bridge.o"
 
 native_objects=(
     "$native_out/platform_sdl_bridge.o"
@@ -46,6 +48,7 @@ native_objects=(
     "$native_out/audio_miniaudio_bridge.o"
     "$native_out/image_stb_bridge.o"
     "$native_out/update_sparkle_bridge.o"
+    "$native_out/web_cocoa_bridge.o"
 )
 d_versions=(--d-version=CORRECT_ABI)
 eos_runtime=""

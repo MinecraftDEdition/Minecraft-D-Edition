@@ -145,6 +145,17 @@ final class InventoryMenuRenderer
                 textures.tooltipBackground,textures.tooltipFrame,font,fontTexture);
     }
 
+    void appendPlayerShowcase(ref FrameMesh frame,int boxX,int boxY,
+        int boxWidth,int boxHeight,int mouseX,int mouseY,float width,float height,
+        PlayerRenderer renderer,const Player player,uint texture,
+        float partialTick,float ageInTicks)const
+    {
+        appendPlayerModel(frame,cast(float)boxX+boxWidth*0.5f,
+            cast(float)boxY+boxHeight*0.4f,cast(float)boxY+boxHeight-8.0f,
+            boxHeight/3.73f,mouseX,mouseY,width,height,renderer,player,
+            texture,partialTick,ageInTicks);
+    }
+
 private:
     static void appendPlayerPreview(ref FrameMesh frame,int left,int top,
         int mouseX,int mouseY,float width,float height,
@@ -153,8 +164,16 @@ private:
     {
         // Exact 26.2 InventoryScreen preview rectangle is (26,8)-(75,78)
         // with scale 30 and atan mouse response divided by 40.
-        const centerX=cast(float)left+50.5f;
-        const centerY=cast(float)top+43.0f;
+        appendPlayerModel(frame,cast(float)left+50.5f,cast(float)top+43.0f,
+            cast(float)top+76.0f,30.0f,mouseX,mouseY,width,height,renderer,
+            player,texture,partialTick,ageInTicks);
+    }
+
+    static void appendPlayerModel(ref FrameMesh frame,float centerX,
+        float centerY,float feetY,float modelScale,int mouseX,int mouseY,
+        float width,float height,PlayerRenderer renderer,const Player player,
+        uint texture,float partialTick,float ageInTicks)
+    {
         const horizontal=atanf((centerX-mouseX)/40.0f);
         const vertical=atanf((centerY-mouseY)/40.0f);
         const horizontalDegrees=horizontal*20.0f;
@@ -175,8 +194,8 @@ private:
         {
             const point=tilt.transformPoint(Vec3(vertex.position[0],
                 vertex.position[1],vertex.position[2]));
-            const screenX=centerX+point.x*30.0f;
-            const screenY=top+76.0f-point.y*30.0f;
+            const screenX=centerX+point.x*modelScale;
+            const screenY=feetY-point.y*modelScale;
             vertex.position=[screenX/width*2.0f-1.0f,
                 1.0f-screenY/height*2.0f,0.5f+point.z*0.05f];
         }

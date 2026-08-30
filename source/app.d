@@ -9,6 +9,7 @@ import minecraftd.client.game_client : GameClient;
 import minecraftd.client.network.eos_service : EosService, EosStatus;
 import minecraftd.platform.dialog : showFatalError;
 import minecraftd.platform.paths : platformPaths;
+import minecraftd.platform.web : acquireSingleInstance;
 
 int main(string[] arguments)
 {
@@ -36,20 +37,16 @@ int main(string[] arguments)
                 : "EOS Connect login timed out while still initializing.\n");
             return 1;
         }
+        const appPaths = platformPaths();
+        if (!acquireSingleInstance(buildPath(appPaths.userData,
+            "minecraft-d-edition.instance")))
+            return 0;
         auto client = new GameClient();
         scope (exit) destroy(client);
-        int localTestIndex;
         string rendererOverride;
-        import std.conv : ConvException, to;
         import std.string : startsWith;
         foreach (argument; arguments[1 .. $])
         {
-            enum prefix = "--local-test-client=";
-            if (argument.startsWith(prefix))
-            {
-                try localTestIndex = to!int(argument[prefix.length .. $]);
-                catch (ConvException) localTestIndex = 0;
-            }
             enum rendererPrefix = "--renderer=";
             if (argument.startsWith(rendererPrefix))
             {
@@ -58,7 +55,7 @@ int main(string[] arguments)
                     rendererOverride = requested.idup;
             }
         }
-        client.run(localTestIndex, rendererOverride);
+        client.run(rendererOverride);
         return 0;
     }
     catch (Throwable failure)

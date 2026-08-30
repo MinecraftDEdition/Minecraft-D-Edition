@@ -73,6 +73,9 @@ final class RemotePlayer : Player
 {
     uint networkId;
     string name;
+    string accountId;
+    string skinVersion;
+    string skinModel = "classic";
     bool mining;
     int miningX;
     int miningY;
@@ -92,6 +95,9 @@ final class RemotePlayer : Player
         }
         networkId = state.id;
         name = state.name;
+        accountId = state.accountId;
+        skinVersion = state.skinVersion;
+        skinModel = state.skinModel;
         previousPosition = position;
         position = state.position;
         velocity = state.velocity;

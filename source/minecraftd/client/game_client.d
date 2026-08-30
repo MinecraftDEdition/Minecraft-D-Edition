@@ -3,10 +3,9 @@ module minecraftd.client.game_client;
 version (Windows)
     import core.sys.windows.com : CoInitializeEx, CoUninitialize,
         COINIT_MULTITHREADED;
-import std.file : thisExePath;
 import std.math : fmin;
 import std.conv : to;
-import std.process : Config, spawnProcess, thisProcessID;
+import std.process : thisProcessID;
 
 import minecraftd.client.player.local_player : LocalPlayer;
 import minecraftd.client.chat.chat_state : ChatState;
@@ -18,6 +17,7 @@ import minecraftd.client.network.multiplayer_client : MultiplayerClient;
 import minecraftd.client.render.game_renderer : GameRenderer;
 import minecraftd.client.render.graphics_device : GraphicsApi;
 import minecraftd.client.render.title_screen_renderer : TitleAction;
+import minecraftd.client.render.title_screen_renderer : AccountMenuAction;
 import minecraftd.client.render.title_screen_renderer : MultiplayerMenuAction;
 import minecraftd.client.render.title_screen_renderer : WorldMenuAction;
 import minecraftd.client.menu.multiplayer_menu_state : MultiplayerField,
@@ -29,11 +29,16 @@ import minecraftd.client.menu.pause_menu : PauseAction, PauseMenuState,
 import minecraftd.client.menu.death_screen : DeathAction, DeathScreenState;
 import minecraftd.client.menu.options_menu : OptionsAction, OptionsMenuState;
 import minecraftd.client.menu.inventory_menu:InventoryMenuState;
+import minecraftd.client.account.account_service : AccountService,
+    AccountSnapshot;
+import minecraftd.client.menu.account_menu_state : AccountDialog,
+    AccountMenuState;
 import minecraftd.platform.clock : monotonicMilliseconds, monotonicSeconds,
     sleepMilliseconds;
 import minecraftd.platform.input;
 import minecraftd.platform.paths : platformPaths;
 import minecraftd.platform.update : startUpdater;
+import minecraftd.platform.web : chooseSkinPng, openExternalUrl;
 import minecraftd.platform.window : CursorShape, GameWindow;
 import minecraftd.server.integrated_game_server : IntegratedGameServer;
 import minecraftd.world.world : World;
@@ -46,7 +51,7 @@ import std.socket : SocketOSException;
 
 final class GameClient
 {
-    void run(int localTestIndex = 0, string rendererOverride = "")
+    void run(string rendererOverride = "")
     {
         version (Windows)
         {
@@ -60,12 +65,10 @@ final class GameClient
         auto options = new OptionsMenuState(paths.userData);
         scope (exit) destroy(options);
         auto window = new GameWindow("Minecraft: D Edition",
-            GameWindow.defaultWidth, GameWindow.defaultHeight, localTestIndex);
+            GameWindow.defaultWidth, GameWindow.defaultHeight);
         scope (exit) destroy(window);
-        if (localTestIndex == 0)
-            startUpdater();
-        if (localTestIndex == 0)
-            window.setFullscreen(options.fullscreen);
+        startUpdater();
+        window.setFullscreen(options.fullscreen);
         auto world = new World();
         scope (exit) destroy(world);
         auto player = new LocalPlayer();
@@ -78,13 +81,17 @@ final class GameClient
         auto renderer = new GameRenderer(window.handle, window.width,
             window.height, paths.resources, world, options, graphicsApi);
         scope (exit) destroy(renderer);
+        auto accounts = new AccountService(paths.userData,paths.cache);
+        scope (exit) destroy(accounts);
+        auto accountMenu = new AccountMenuState();
+        scope (exit) destroy(accountMenu);
         EosService eos;
         scope (exit) if (eos !is null) destroy(eos);
 
         EosService ensureEos()
         {
             if (eos is null)
-                eos = new EosService("Steve");
+                eos = new EosService(playerName(accounts.snapshot));
             return eos;
         }
 
@@ -110,13 +117,12 @@ final class GameClient
         scope (exit) destroy(serverMenu);
         auto worldMenu = new WorldMenuState(paths.userData);
         scope (exit) destroy(worldMenu);
-        bool multiplayerScreen = initialSession && localTestIndex > 0;
-        if (multiplayerScreen)
-            ensureEos();
+        bool multiplayerScreen;
         initialSession = false;
         bool worldScreen;
         bool worldTextMouseSelecting;
         bool serverTextMouseSelecting;
+        string lastAccountMessage;
 
         bool startLocalWorld(const WorldEntry entry)
         {
@@ -134,8 +140,10 @@ final class GameClient
                 connectionEndpoint.port = connectionPort;
                 connectionEndpoint.eos = false;
                 connectionEndpoint.valid = true;
-                gameConnection = new GameConnection("Steve",
-                    connectionHost, connectionPort);
+                const identity=accounts.snapshot;
+                gameConnection = new GameConnection(playerName(identity),
+                    connectionHost,connectionPort,identity.id,
+                    to!string(identity.updatedAt),identity.skinModel);
                 return true;
             }
             catch (SocketOSException)
@@ -170,6 +178,7 @@ final class GameClient
             renderer.tickMenuMusic();
             const cursor = window.cursorPosition();
             const menuTime = cast(float) monotonicMilliseconds() / 1000.0f;
+            accounts.refreshWhenDue();
             if (options.active && !options.fromGame)
             {
                 const hovered = renderer.optionsActionAt(cursor.x,cursor.y);
@@ -206,6 +215,108 @@ final class GameClient
                     }
                 }
                 renderer.renderOptionsScreen(cursor.x,cursor.y,menuTime);
+                continue;
+            }
+            if (accountMenu.active)
+            {
+                auto account = accounts.snapshot();
+                accountMenu.sync(account);
+                if (account.message == "That's not a skin, silly!"
+                    && account.message != lastAccountMessage)
+                    accountMenu.showMessage(account.message);
+                lastAccountMessage = account.message.idup;
+                const hovered = renderer.accountActionAt(cursor.x,cursor.y,
+                    accountMenu,account);
+                window.setCursorShape(hovered==AccountMenuAction.username
+                    ?CursorShape.text:(hovered==AccountMenuAction.none
+                        ?CursorShape.arrow:CursorShape.hand));
+                if (account.loggedIn && accountMenu.editingUsername
+                    && accountMenu.dialog == AccountDialog.none)
+                {
+                    const input=window.consumeTextInput();
+                    const textBackspace=containsCharacter(input,8);
+                    const shortcut=window.shortcutDown();
+                    if(shortcut&&window.pressed('A'))
+                    {window.clearTextInput();accountMenu.selectAll();}
+                    else if(shortcut&&window.pressed('C'))
+                    {
+                        window.clearTextInput();
+                        if(accountMenu.hasSelection)
+                            window.setClipboardText(accountMenu.selectedText);
+                    }
+                    else if(shortcut&&window.pressed('X'))
+                    {
+                        window.clearTextInput();
+                        if(accountMenu.hasSelection
+                            &&window.setClipboardText(accountMenu.selectedText))
+                            accountMenu.cutSelection();
+                    }
+                    else if(shortcut&&window.pressed('V'))
+                    {window.clearTextInput();accountMenu.paste(window.clipboardText());}
+                    else accountMenu.insertCharacters(input);
+                    const selecting=window.down(VK_SHIFT);
+                    if(window.pressed(VK_LEFT)||window.repeated(VK_LEFT))
+                        accountMenu.moveCursor(-1,selecting);
+                    if(window.pressed(VK_RIGHT)||window.repeated(VK_RIGHT))
+                        accountMenu.moveCursor(1,selecting);
+                    if(window.pressed(VK_HOME))accountMenu.moveToStart(selecting);
+                    if(window.pressed(VK_END))accountMenu.moveToEnd(selecting);
+                    if(window.pressed(VK_BACK)||window.repeated(VK_BACK)
+                        ||textBackspace)accountMenu.backspace();
+                    if(window.pressed(VK_DELETE)||window.repeated(VK_DELETE))
+                        accountMenu.deleteForward();
+                    if(window.pressed(VK_RETURN))accountMenu.requestUsernameChange();
+                    if(accountMenu.mouseSelecting&&window.down(VK_LBUTTON))
+                    {
+                        const at=renderer.accountTextCursorAt(cursor.x,accountMenu);
+                        if(at>=0)accountMenu.setCursor(cast(size_t)at,true);
+                    }
+                }
+                else window.clearTextInput();
+                if(!window.down(VK_LBUTTON))accountMenu.mouseSelecting=false;
+                if(window.pressed(VK_ESCAPE))
+                {
+                    if(accountMenu.dialog!=AccountDialog.none)
+                        accountMenu.dismissDialog();
+                    else accountMenu.close();
+                }
+                if(window.pressed(VK_LBUTTON))
+                {
+                    if(hovered!=AccountMenuAction.none)renderer.playUiButtonClick();
+                    final switch(hovered)
+                    {
+                        case AccountMenuAction.cancel: accountMenu.close(); break;
+                        case AccountMenuAction.login: accounts.beginAuthentication(false); break;
+                        case AccountMenuAction.signup: accounts.beginAuthentication(true); break;
+                        case AccountMenuAction.username:
+                            accountMenu.beginEditing();
+                            const at=renderer.accountTextCursorAt(cursor.x,accountMenu);
+                            if(at>=0)accountMenu.setCursor(cast(size_t)at);
+                            accountMenu.mouseSelecting=true;
+                            break;
+                        case AccountMenuAction.changePassword:
+                            openExternalUrl(accounts.passwordUrl()); break;
+                        case AccountMenuAction.changeSkin:
+                            const selected=chooseSkinPng();
+                            if(selected.length)accounts.changeSkin(selected);
+                            break;
+                        case AccountMenuAction.copyId:
+                            window.setClipboardText(account.id); break;
+                        case AccountMenuAction.signOut: accounts.signOut(); break;
+                        case AccountMenuAction.confirmYes:
+                            accounts.changeUsername(accountMenu.usernameInput);
+                            accountMenu.originalUsername=accountMenu.usernameInput.idup;
+                            accountMenu.dismissDialog(); break;
+                        case AccountMenuAction.confirmNo:
+                            accountMenu.usernameInput=accountMenu.originalUsername.idup;
+                            accountMenu.edit.moveToEnd(accountMenu.usernameInput);
+                            accountMenu.dismissDialog(); break;
+                        case AccountMenuAction.okay: accountMenu.dismissDialog(); break;
+                        case AccountMenuAction.none: break;
+                    }
+                }
+                renderer.renderAccountScreen(cursor.x,cursor.y,menuTime,
+                    accountMenu,account,player);
                 continue;
             }
             if (worldScreen)
@@ -481,6 +592,7 @@ final class GameClient
                 if (connectRequested)
                 {
                     gameConnection = connectFromMenu(serverMenu,
+                        accounts.snapshot,
                         eos, connectionEndpoint, connectionHost,
                         connectionPort);
                     // Do not allocate another menu frame between receiving the
@@ -498,13 +610,6 @@ final class GameClient
             const hoveredAction = renderer.titleActionAt(cursor.x, cursor.y);
             window.setCursorShape(hoveredAction == TitleAction.none
                 ? CursorShape.arrow : CursorShape.hand);
-            if (window.down(VK_RSHIFT)
-                && (window.down(VK_OEM_PLUS) || window.down(VK_ADD)))
-            {
-                foreach (count; 1 .. 10)
-                    if (window.pressed('0' + count))
-                        launchLocalClients(count);
-            }
             if (window.pressed(VK_ESCAPE))
             {
                 window.running = false;
@@ -533,6 +638,9 @@ final class GameClient
                         break;
                     case TitleAction.options:
                         options.open(false);
+                        break;
+                    case TitleAction.account:
+                        accountMenu.open(accounts.snapshot);
                         break;
                     case TitleAction.quit:
                         window.running = false;
@@ -1229,7 +1337,7 @@ final class GameClient
                 {
                     reconnectTicks = 0;
                     try multiplayer.replaceConnection(createConnection(eos,
-                        "Steve", connectionEndpoint));
+                        accounts.snapshot, connectionEndpoint));
                     catch (Exception) {}
                 }
                 else if (multiplayer.connected())
@@ -1249,6 +1357,13 @@ final class GameClient
             // leave a newly joined client with only the clear sky and HUD.
             const renderPartialTick = worldPaused ? 1.0f
                 : cast(float) (accumulator / tickSeconds);
+            foreach(remote;multiplayer.remotePlayers())
+            {
+                const skinPath=accounts.ensureRemoteSkin(remote.accountId,
+                    remote.skinVersion);
+                if(skinPath.length)renderer.syncRemoteSkin(remote.accountId,
+                    remote.skinVersion,skinPath);
+            }
             renderer.render(player, chat, multiplayer,
                 renderPartialTick, cast(float) elapsed,
                 pauseMenu, menuCursor.x, menuCursor.y,
@@ -1279,7 +1394,7 @@ private:
     }
 
     static GameConnection connectFromMenu(MultiplayerMenuState menu,
-        EosService eos, out ServerEndpoint selected,
+        AccountSnapshot account,EosService eos, out ServerEndpoint selected,
         out string host, out ushort port)
     {
         const endpoint = parseServerAddress(menu.serverAddress);
@@ -1290,7 +1405,7 @@ private:
         }
         try
         {
-            auto connection = createConnection(eos, "Steve", endpoint);
+            auto connection = createConnection(eos, account, endpoint);
             selected = endpoint;
             if (!endpoint.eos)
             {
@@ -1313,11 +1428,14 @@ private:
         }
     }
 
-    static GameConnection createConnection(EosService eos, string playerName,
+    static GameConnection createConnection(EosService eos,AccountSnapshot account,
         ServerEndpoint endpoint)
     {
+        const name=playerName(account);
+        const versionValue=to!string(account.updatedAt);
         if (!endpoint.eos)
-            return new GameConnection(playerName, endpoint.host, endpoint.port);
+            return new GameConnection(name,endpoint.host,endpoint.port,
+                account.id,versionValue,account.skinModel);
         if (eos is null || !eos.ready)
         {
             if (eos !is null && eos.status == EosStatus.initializing)
@@ -1326,18 +1444,17 @@ private:
             throw new Exception(detail.length ? detail : "EOS is unavailable");
         }
         if(endpoint.localPort!=0&&endpoint.eosUserId==eos.localUserId())
-            return new GameConnection(playerName,"127.0.0.1",endpoint.localPort);
+            return new GameConnection(name,"127.0.0.1",endpoint.localPort,
+                account.id,versionValue,account.skinModel);
         version (MCD_EOS)
-            return new GameConnection(eos, playerName, endpoint);
+            return new GameConnection(eos,name,endpoint,account.id,
+                versionValue,account.skinModel);
         else
             throw new Exception("EOS multiplayer is not included in this build");
     }
 
-    static void launchLocalClients(int requestedCount)
+    static string playerName(const AccountSnapshot account)
     {
-        // The current window is client one, so launch only the remainder.
-        foreach (index; 2 .. requestedCount + 1)
-            spawnProcess([thisExePath(), "--local-test-client="
-                ~ to!string(index)], null, Config.detached);
+        return account.loggedIn&&account.username.length?account.username:"Steve";
     }
 }

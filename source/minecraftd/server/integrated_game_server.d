@@ -84,6 +84,9 @@ private final class ServerPlayer
 {
     uint id;
     string name;
+    string accountId;
+    string skinVersion;
+    string skinModel = "classic";
     LocalPlayer player;
     PlayerInputCommand input;
     PlayerInputCommand[] queuedInputs;
@@ -555,6 +558,9 @@ private:
         PacketReader reader = PacketReader(payload);
         const versionValue = reader.readU16();
         auto requested = sanitizeName(reader.readString());
+        const accountId = reader.readString();
+        const skinVersion = reader.readString();
+        const skinModel = reader.readString();
         if (!reader.valid)
             return;
         if (versionValue != gameProtocolVersion)
@@ -577,6 +583,9 @@ private:
         }
         auto serverPlayer = new ServerPlayer(id, name, spawn,
             world.settings.effectiveGameMode(), world.settings.hardcore);
+        serverPlayer.accountId=accountId.idup;
+        serverPlayer.skinVersion=skinVersion.idup;
+        serverPlayer.skinModel=skinModel=="slim"?"slim":"classic";
         players[id] = serverPlayer;
         peer.playerId = id;
         peer.loggedIn = true;
@@ -1154,6 +1163,9 @@ private:
         const player = serverPlayer.player;
         NetworkPlayerState state;
         state.id = serverPlayer.id; state.name = serverPlayer.name;
+        state.accountId=serverPlayer.accountId;
+        state.skinVersion=serverPlayer.skinVersion;
+        state.skinModel=serverPlayer.skinModel;
         state.position = player.position; state.velocity = player.velocity;
         state.yaw = player.yaw; state.pitch = player.pitch;
         state.bodyYaw = player.bodyYaw;

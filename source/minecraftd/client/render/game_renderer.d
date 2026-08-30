@@ -26,8 +26,10 @@ import minecraftd.client.render.texture_manager : ImageData, TextureManager;
 import minecraftd.client.render.graphics_device : GraphicsApi, GraphicsDevice,
     TextureHandle;
 import minecraftd.client.render.title_screen_renderer : TitleAction,
-    MultiplayerMenuAction, TitleScreenRenderer, TitleTextureSet,
+    AccountMenuAction, MultiplayerMenuAction, TitleScreenRenderer, TitleTextureSet,
     WorldMenuAction;
+import minecraftd.client.account.account_service : AccountSnapshot;
+import minecraftd.client.menu.account_menu_state : AccountMenuState;
 import minecraftd.client.menu.multiplayer_menu_state : MultiplayerField,
     MultiplayerMenuState;
 import minecraftd.client.menu.world_menu_state : WorldField, WorldMenuState;
@@ -103,6 +105,11 @@ final class GameRenderer
     private BlockTextureSet blockTextures;
 
     private TextureHandle steve;
+    private TextureHandle accountSkin;
+    private string accountSkinPath;
+    private long accountSkinRevision = long.min;
+    private TextureHandle[string] remoteSkins;
+    private string[string] remoteSkinVersions;
     private TextureHandle sun;
     private TextureHandle clouds;
     private TextureHandle crosshair;
@@ -183,6 +190,7 @@ final class GameRenderer
             flintTexture.descriptorIndex,
         );
         steve = loadHandle("textures/entity/player/wide/steve.png");
+        accountSkin = steve;
         sun = graphics.uploadTexture(images.loadAdditivePngAsAlpha(
             resources.resolveAsset("minecraft", "textures/environment/celestial/sun.png")));
         auto cloudImage = images.loadPng(
@@ -373,6 +381,17 @@ final class GameRenderer
         return titleScreen.hitTest(width, height, mouseX, mouseY);
     }
 
+    AccountMenuAction accountActionAt(int mouseX,int mouseY,
+        const AccountMenuState state,const AccountSnapshot account)const
+    {
+        return titleScreen.accountHitTest(width,height,mouseX,mouseY,state,account);
+    }
+
+    long accountTextCursorAt(int mouseX,const AccountMenuState state)const
+    {
+        return titleScreen.accountTextCursorAt(width,height,mouseX,state,hudFont);
+    }
+
     MultiplayerMenuAction multiplayerMenuActionAt(int mouseX, int mouseY) const
     {
         return titleScreen.multiplayerHitTest(width, height, mouseX, mouseY);
@@ -476,6 +495,60 @@ final class GameRenderer
         titleScreen.append(frame, width, height, mouseX, mouseY, elapsedSeconds,
             titleTextures, hudFont, fontTexture);
         graphics.render(frame);
+    }
+
+    void renderAccountScreen(int mouseX,int mouseY,float elapsedSeconds,
+        const AccountMenuState state,const AccountSnapshot account,
+        const Player player)
+    {
+        syncAccountSkin(account);
+        frame.clear();
+        titleScreen.appendAccount(frame,width,height,mouseX,mouseY,
+            elapsedSeconds,state,account,titleTextures,hudFont,fontTexture);
+        if(account.loggedIn)
+        {
+            int scale=1;
+            while(scale<8&&width/(scale+1)>=320&&height/(scale+1)>=240)++scale;
+            const logicalWidth=cast(float)width/scale;
+            const logicalHeight=cast(float)height/scale;
+            const center=cast(int)logicalWidth/2;
+            inventoryMenu.appendPlayerShowcase(frame,center-150,74,140,112,
+                mouseX/scale,mouseY/scale,logicalWidth,logicalHeight,players,
+                player,accountSkin.descriptorIndex,1.0f,elapsedSeconds*20.0f);
+        }
+        graphics.render(frame);
+    }
+
+    void syncAccountSkin(const AccountSnapshot account)
+    {
+        if(accountSkinRevision==account.updatedAt
+            &&accountSkinPath==account.skinPath)return;
+        accountSkinRevision=account.updatedAt;
+        accountSkinPath=account.skinPath.idup;
+        accountSkin=steve;
+        if(!account.skinPath.length)return;
+        try
+        {
+            const image=images.loadPng(account.skinPath);
+            if(image.width==64&&image.height==64)
+                accountSkin=graphics.uploadTexture(image);
+        }
+        catch(Exception) {}
+    }
+
+    void syncRemoteSkin(string accountId,string versionValue,string path)
+    {
+        if(!accountId.length||!path.length)return;
+        if(auto found=accountId in remoteSkinVersions)
+            if(*found==versionValue)return;
+        try
+        {
+            const image=images.loadPng(path);
+            if(image.width!=64||image.height!=64)return;
+            remoteSkins[accountId]=graphics.uploadTexture(image);
+            remoteSkinVersions[accountId]=versionValue.idup;
+        }
+        catch(Exception){}
     }
 
     void renderMultiplayerScreen(int mouseX, int mouseY, float elapsedSeconds,
@@ -951,7 +1024,10 @@ final class GameRenderer
                     remote.interpolatedBodyYaw(partialTick)+180.0f,
                     remote.interpolatedDeathTime(partialTick));
             applyHurtTint(geometry, remote.hurtTime, remote.health <= 0.0f);
-            frame.append(geometry, steve.descriptorIndex, viewProjection,
+            uint remoteTexture=steve.descriptorIndex;
+            if(auto custom=remote.accountId in remoteSkins)
+                remoteTexture=custom.descriptorIndex;
+            frame.append(geometry, remoteTexture, viewProjection,
                 remote.gameMode == GameMode.spectator
                     ? DrawLayer.entityShadow : DrawLayer.world, terrainFog);
             if(remote.gameMode!=GameMode.spectator&&!remoteHeld.empty())
@@ -982,7 +1058,7 @@ final class GameRenderer
                     player.interpolatedDeathTime(partialTick));
             applyHurtTint(geometry, player.hurtTime, player.health <= 0.0f);
             if(!(player.health<=0&&player.deathTime>=20))
-                frame.append(geometry, steve.descriptorIndex, viewProjection,
+                frame.append(geometry, accountSkin.descriptorIndex, viewProjection,
                     player.gameMode == GameMode.spectator
                         ? DrawLayer.entityShadow : DrawLayer.world, terrainFog);
             if(player.gameMode!=GameMode.spectator&&!displayedMainHand.empty()
@@ -1013,7 +1089,7 @@ final class GameRenderer
                 const sleeveBit=player.mainHandRight?Player.skinRightSleeve
                     :Player.skinLeftSleeve;
                 frame.append(players.buildFirstPersonArm(
-                        (player.skinParts&sleeveBit)!=0), steve.descriptorIndex,
+                        (player.skinParts&sleeveBit)!=0), accountSkin.descriptorIndex,
                     handProjection, DrawLayer.viewModel);
             }
 
@@ -1100,7 +1176,7 @@ final class GameRenderer
             inventoryMenu.append(frame,width,height,inventoryMouseX,
                 inventoryMouseY,player.inventory,inventoryTextures,blockTextures,
                 hud,hudFont,fontTexture,partialTick,players,player,
-                steve.descriptorIndex,elapsedSeconds*20.0f);
+                accountSkin.descriptorIndex,elapsedSeconds*20.0f);
         graphics.render(frame);
     }
 

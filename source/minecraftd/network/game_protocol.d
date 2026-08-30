@@ -24,7 +24,7 @@ enum GamePacketType : ubyte
 }
 
 enum uint maximumGamePacketBytes = 1024 * 1024;
-enum ushort gameProtocolVersion = 13;
+enum ushort gameProtocolVersion = 14;
 
 enum DamageCause : ubyte
 {
@@ -82,6 +82,9 @@ struct NetworkPlayerState
 {
     uint id;
     string name;
+    string accountId;
+    string skinVersion;
+    string skinModel = "classic";
     Vec3 position;
     Vec3 velocity;
     float yaw;
@@ -199,6 +202,8 @@ struct PacketWriter
     void putPlayer(const NetworkPlayerState player)
     {
         putU32(player.id); putString(player.name);
+        putString(player.accountId); putString(player.skinVersion);
+        putString(player.skinModel);
         putVec3(player.position); putVec3(player.velocity);
         putF32(player.yaw); putF32(player.pitch); putF32(player.bodyYaw);
         putF32(player.walkPosition); putF32(player.walkSpeed);
@@ -300,6 +305,8 @@ struct PacketReader
     {
         NetworkPlayerState result;
         result.id = readU32(); result.name = readString();
+        result.accountId = readString(); result.skinVersion = readString();
+        result.skinModel = readString();
         result.position = readVec3(); result.velocity = readVec3();
         result.yaw = readF32(); result.pitch = readF32(); result.bodyYaw = readF32();
         result.walkPosition = readF32(); result.walkSpeed = readF32();
@@ -400,6 +407,9 @@ unittest
     NetworkPlayerState player;
     player.id = 7;
     player.name = "Steve";
+    player.accountId = "12345678-1234-1234-1234-123456789abc";
+    player.skinVersion = "42";
+    player.skinModel = "slim";
     player.score = 42;
     player.deathTime = 20;
     player.deathMessage = "Steve fell from a high place";
@@ -414,6 +424,8 @@ unittest
     PacketReader stateReader = PacketReader(stateWriter.data);
     const restored = stateReader.readPlayer();
     assert(stateReader.valid && restored.id == 7 && restored.score == 42);
+    assert(restored.accountId==player.accountId&&restored.skinVersion=="42"
+        &&restored.skinModel=="slim");
     assert(restored.deathTime == 20
         && restored.deathMessage == "Steve fell from a high place");
     assert(restored.skinParts == 0x2A && !restored.mainHandRight);

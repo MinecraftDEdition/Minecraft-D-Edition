@@ -3,6 +3,10 @@ module minecraftd.client.render.title_screen_renderer;
 import minecraftd.client.render.font_renderer : FontRenderer;
 import minecraftd.client.menu.multiplayer_menu_state : MultiplayerField,
     MultiplayerMenuState;
+import minecraftd.client.menu.account_menu_state : AccountDialog,
+    AccountMenuState;
+import minecraftd.client.account.account_service : AccountSnapshot,
+    AccountStatus;
 import minecraftd.client.menu.world_menu_state : WorldCreationTab, WorldField,
     WorldMenuScreen, WorldMenuState;
 import minecraftd.world.world_settings : WorldType, difficultyName,
@@ -20,6 +24,23 @@ enum TitleAction : ubyte
     multiplayer,
     options,
     quit,
+    account,
+}
+
+enum AccountMenuAction : ubyte
+{
+    none,
+    cancel,
+    login,
+    signup,
+    username,
+    changePassword,
+    changeSkin,
+    copyId,
+    signOut,
+    confirmYes,
+    confirmNo,
+    okay,
 }
 
 enum MultiplayerMenuAction : ubyte
@@ -105,7 +126,7 @@ final class TitleScreenRenderer
         const logicalMouseY = mouseY / scale;
 
         foreach (action; [TitleAction.singleplayer, TitleAction.multiplayer,
-            TitleAction.options, TitleAction.quit])
+            TitleAction.options, TitleAction.quit, TitleAction.account])
         {
             if (buttonRect(action, logicalWidth, logicalHeight)
                 .contains(logicalMouseX, logicalMouseY))
@@ -152,6 +173,9 @@ final class TitleScreenRenderer
         appendButton(frame, TitleAction.quit, "Quit Game", hovered,
             cast(int) logicalWidth, cast(int) logicalHeight, textures,
             font, fontTexture);
+        appendButton(frame, TitleAction.account, "Account", hovered,
+            cast(int) logicalWidth, cast(int) logicalHeight, textures,
+            font, fontTexture);
 
         if (notice.length != 0)
             appendCenteredText(frame, notice,
@@ -167,6 +191,149 @@ final class TitleScreenRenderer
             cast(int) logicalWidth - font.width(technology) - 2,
             cast(int) logicalHeight - 10, logicalWidth, logicalHeight,
             font, fontTexture, Color(1, 1, 1, 1));
+    }
+
+    AccountMenuAction accountHitTest(uint viewportWidth, uint viewportHeight,
+        int mouseX, int mouseY, const AccountMenuState state,
+        const AccountSnapshot account) const
+    {
+        const scale = guiScale(viewportWidth, viewportHeight);
+        const w = cast(int) viewportWidth / scale;
+        const h = cast(int) viewportHeight / scale;
+        const x = mouseX / scale, y = mouseY / scale, center = w / 2;
+        if (state.dialog == AccountDialog.confirmUsername)
+        {
+            if (MenuRect(center-102,h/2+18,100,20).contains(x,y))
+                return AccountMenuAction.confirmYes;
+            if (MenuRect(center+2,h/2+18,100,20).contains(x,y))
+                return AccountMenuAction.confirmNo;
+            return AccountMenuAction.none;
+        }
+        if (state.dialog == AccountDialog.message)
+            return MenuRect(center-50,h/2+18,100,20).contains(x,y)
+                ? AccountMenuAction.okay : AccountMenuAction.none;
+        if (!account.loggedIn)
+        {
+            if (MenuRect(center-120,72,240,20).contains(x,y))
+                return AccountMenuAction.login;
+            if (MenuRect(center-120,96,240,20).contains(x,y))
+                return AccountMenuAction.signup;
+            if (MenuRect(center-100,148,200,20).contains(x,y))
+                return AccountMenuAction.cancel;
+            return AccountMenuAction.none;
+        }
+        if (MenuRect(center-50,10,100,20).contains(x,y))
+            return AccountMenuAction.cancel;
+        if (MenuRect(center-150,49,140,20).contains(x,y))
+            return AccountMenuAction.username;
+        if (MenuRect(center+10,49,140,20).contains(x,y))
+            return AccountMenuAction.changePassword;
+        if (MenuRect(center+10,73,140,20).contains(x,y))
+            return AccountMenuAction.changeSkin;
+        if (MenuRect(center+10,136,140,20).contains(x,y))
+            return AccountMenuAction.copyId;
+        if (MenuRect(center+10,160,140,20).contains(x,y))
+            return AccountMenuAction.signOut;
+        return AccountMenuAction.none;
+    }
+
+    void appendAccount(ref FrameMesh frame, uint viewportWidth,
+        uint viewportHeight, int mouseX, int mouseY, float elapsedSeconds,
+        const AccountMenuState state, const AccountSnapshot account,
+        const TitleTextureSet textures, const FontRenderer font,
+        uint fontTexture) const
+    {
+        const scale = guiScale(viewportWidth, viewportHeight);
+        const w = cast(float) viewportWidth / scale;
+        const h = cast(float) viewportHeight / scale;
+        const center = cast(int) w / 2;
+        const hovered = accountHitTest(viewportWidth, viewportHeight,
+            mouseX, mouseY, state, account);
+        appendMenuBackground(frame, viewportWidth, viewportHeight,
+            elapsedSeconds, textures, w, h);
+
+        if (!account.loggedIn)
+        {
+            appendCenteredText(frame, "Minecraft: D Edition Account", 30,
+                w,h,font,fontTexture,Color(1,1,1,1));
+            appendMenuButton(frame,center-120,72,240,
+                "Log in to your MCDE account",hovered==AccountMenuAction.login,
+                w,h,textures,font,fontTexture,!account.busy);
+            appendMenuButton(frame,center-120,96,240,
+                "Sign up for an MCDE account",hovered==AccountMenuAction.signup,
+                w,h,textures,font,fontTexture,!account.busy);
+            appendCenteredText(frame,"(Or optionally continue as a guest account)",
+                126,w,h,font,fontTexture,Color(.72f,.72f,.72f,1));
+            appendMenuButton(frame,center-100,148,200,"Cancel",
+                hovered==AccountMenuAction.cancel,w,h,textures,font,fontTexture);
+            if (account.message.length)
+                appendCenteredText(frame,account.message,180,w,h,font,fontTexture,
+                    account.status==AccountStatus.error
+                        ?Color(1,.35f,.35f,1):Color(.75f,.75f,.75f,1));
+            return;
+        }
+
+        appendMenuButton(frame,center-50,10,100,"Cancel",
+            hovered==AccountMenuAction.cancel,w,h,textures,font,fontTexture);
+        appendText(frame,"Username",center-150,38,w,h,font,fontTexture,
+            Color(.75f,.75f,.75f,1));
+        appendTextField(frame,center-150,49,140,state.usernameInput,
+            state.editingUsername,state.edit.cursor,state.edit.selectionAnchor,
+            w,h,textures,font,fontTexture);
+        appendImage(frame,textures.white,center-150,74,140,112,w,h,
+            Vec2(0,0),Vec2(1,1),Color(0,0,0,.88f));
+        appendMenuButton(frame,center+10,49,140,"Change Password...",
+            hovered==AccountMenuAction.changePassword,w,h,textures,font,
+            fontTexture,!account.busy);
+        appendMenuButton(frame,center+10,73,140,"Change Skin...",
+            hovered==AccountMenuAction.changeSkin,w,h,textures,font,
+            fontTexture,!account.busy);
+        appendText(frame,"Player ID",center+10,101,w,h,font,fontTexture,
+            Color(.75f,.75f,.75f,1));
+        appendTextField(frame,center+10,112,140,account.id,false,0,0,w,h,
+            textures,font,fontTexture);
+        appendMenuButton(frame,center+10,136,140,"Copy to clipboard",
+            hovered==AccountMenuAction.copyId,w,h,textures,font,fontTexture);
+        appendMenuButton(frame,center+10,160,140,"Sign Out",
+            hovered==AccountMenuAction.signOut,w,h,textures,font,fontTexture,
+            !account.busy);
+        if (account.message.length)
+            appendCenteredText(frame,account.message,198,w,h,font,fontTexture,
+                Color(.78f,.78f,.78f,1));
+
+        if (state.dialog != AccountDialog.none)
+        {
+            appendImage(frame,textures.white,0,0,cast(int)w,cast(int)h,w,h,
+                Vec2(0,0),Vec2(1,1),Color(0,0,0,.72f));
+            if (state.dialog == AccountDialog.confirmUsername)
+            {
+                appendCenteredText(frame,"Are you sure you want to change",
+                    cast(int)h/2-28,w,h,font,fontTexture,Color(1,1,1,1));
+                appendCenteredText(frame,state.originalUsername~" to "
+                    ~state.usernameInput~"?",cast(int)h/2-14,w,h,font,
+                    fontTexture,Color(1,1,1,1));
+                appendMenuButton(frame,center-102,cast(int)h/2+18,100,"Yes",
+                    hovered==AccountMenuAction.confirmYes,w,h,textures,font,fontTexture);
+                appendMenuButton(frame,center+2,cast(int)h/2+18,100,"No",
+                    hovered==AccountMenuAction.confirmNo,w,h,textures,font,fontTexture);
+            }
+            else
+            {
+                appendCenteredText(frame,state.dialogMessage,cast(int)h/2-18,
+                    w,h,font,fontTexture,Color(1,1,1,1));
+                appendMenuButton(frame,center-50,cast(int)h/2+18,100,"Okay",
+                    hovered==AccountMenuAction.okay,w,h,textures,font,fontTexture);
+            }
+        }
+    }
+
+    long accountTextCursorAt(uint viewportWidth, uint viewportHeight, int mouseX,
+        const AccountMenuState state, const FontRenderer font) const
+    {
+        const scale = guiScale(viewportWidth, viewportHeight);
+        const center = cast(int) viewportWidth / scale / 2;
+        return textFieldCursorAt(state.usernameInput,state.edit.cursor,140,
+            mouseX/scale-(center-150),font);
     }
 
     MultiplayerMenuAction multiplayerHitTest(uint viewportWidth,
@@ -560,6 +727,8 @@ private:
                 return MenuRect(center - 100, firstY + 48, 98, 20);
             case TitleAction.quit:
                 return MenuRect(center + 2, firstY + 48, 98, 20);
+            case TitleAction.account:
+                return MenuRect(center - 100, firstY + 72, 200, 20);
             case TitleAction.none:
                 return MenuRect.init;
         }

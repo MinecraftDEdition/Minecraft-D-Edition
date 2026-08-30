@@ -147,7 +147,8 @@ final class GameConnection
     }
 
     this(string playerName = "Steve", string host = "127.0.0.1",
-        ushort port = defaultPort)
+        ushort port = defaultPort,string accountId="",string skinVersion="",
+        string skinModel="classic")
     {
         inboxMutex = new Mutex();
         sendMutex = new Mutex();
@@ -160,11 +161,14 @@ final class GameConnection
         PacketWriter login;
         login.putU16(gameProtocolVersion);
         login.putString(playerName);
+        login.putString(accountId);login.putString(skinVersion);
+        login.putString(skinModel);
         sendFramed(framePacket(GamePacketType.loginRequest, login.data));
     }
 
     version (MCD_EOS) this(EosService service, string playerName,
-        ServerEndpoint endpoint)
+        ServerEndpoint endpoint,string accountId="",string skinVersion="",
+        string skinModel="classic")
     {
         if (service is null || !service.ready || !endpoint.valid || !endpoint.eos)
             throw new Exception("EOS connection is not ready");
@@ -180,6 +184,8 @@ final class GameConnection
         PacketWriter login;
         login.putU16(gameProtocolVersion);
         login.putString(playerName);
+        login.putString(accountId);login.putString(skinVersion);
+        login.putString(skinModel);
         sendFramed(framePacket(GamePacketType.loginRequest, login.data));
     }
 
