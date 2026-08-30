@@ -1,0 +1,102 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="description" content="Manage your Minecraft D Edition account, username, and player skin.">
+  <title>MCDE Account</title>
+  <link rel="stylesheet" href="/account.css">
+  <script src="/account.js" defer></script>
+</head>
+<body>
+  <header class="topbar">
+    <a class="brand" href="https://minecraftdedition.com" aria-label="Minecraft D Edition home">
+      <span class="brand-mark">D</span>
+      <span>Minecraft D Edition</span>
+    </a>
+    <a class="back-link" href="https://minecraftdedition.com">Back to website</a>
+  </header>
+
+  <main>
+    <section class="hero">
+      <p class="eyebrow">PLAYER SERVICES</p>
+      <h1>Your MCDE account</h1>
+      <p class="lead">One identity for your profile today—and the game itself when account sign-in arrives in a later client update.</p>
+    </section>
+
+    <div id="message" class="message" role="status" hidden></div>
+
+    <section id="loading" class="panel centered">
+      <div class="pixel-spinner" aria-hidden="true"></div>
+      <p>Checking your session…</p>
+    </section>
+
+    <section id="signed-out" class="panel signed-out" hidden>
+      <div>
+        <p class="eyebrow">WELCOME</p>
+        <h2>Create an account or sign in</h2>
+        <p>Authentication is handled by our secure identity provider. Minecraft D Edition never receives or stores your password.</p>
+      </div>
+      <a class="button primary" href="/login">Continue to sign in</a>
+    </section>
+
+    <section id="dashboard" hidden>
+      <div class="dashboard-grid">
+        <article class="panel identity-card">
+          <p class="eyebrow">ACCOUNT</p>
+          <h2 id="display-name">Player profile</h2>
+          <dl>
+            <div><dt>MCDE ID</dt><dd id="account-id"></dd></div>
+            <div><dt>Email</dt><dd id="account-email"></dd></div>
+            <div><dt>Status</dt><dd id="email-status"></dd></div>
+          </dl>
+        </article>
+
+        <article class="panel">
+          <p class="eyebrow">USERNAME</p>
+          <h2>Choose how players see you</h2>
+          <form id="username-form">
+            <label for="username">Username</label>
+            <input id="username" name="username" type="text" minlength="3" maxlength="16" pattern="[A-Za-z0-9_]+" autocomplete="username" required>
+            <p class="hint">3–16 letters, numbers, or underscores.</p>
+            <button class="button primary" type="submit">Save username</button>
+          </form>
+        </article>
+
+        <article class="panel skin-panel">
+          <div>
+            <p class="eyebrow">PLAYER SKIN</p>
+            <h2>Upload your Minecraft skin</h2>
+            <p>Use a modern 64×64 PNG skin. Choose the arm style that matches the artwork.</p>
+          </div>
+          <div class="skin-layout">
+            <div class="skin-preview-wrap">
+              <img id="skin-preview" alt="Current skin texture" hidden>
+              <div id="skin-placeholder" class="skin-placeholder" aria-label="No skin uploaded">?</div>
+            </div>
+            <form id="skin-form">
+              <label for="skin">PNG file</label>
+              <input id="skin" name="skin" type="file" accept="image/png" required>
+              <fieldset>
+                <legend>Player model</legend>
+                <label class="choice"><input type="radio" name="model" value="classic" checked> Classic arms</label>
+                <label class="choice"><input type="radio" name="model" value="slim"> Slim arms</label>
+              </fieldset>
+              <button class="button primary" type="submit">Upload skin</button>
+            </form>
+          </div>
+        </article>
+      </div>
+
+      <form id="logout-form" action="/logout" method="post">
+        <button class="button secondary" type="submit">Sign out</button>
+      </form>
+    </section>
+  </main>
+
+  <footer>
+    <p>Minecraft D Edition is a fan-made project and is not affiliated with Mojang Studios or Microsoft.</p>
+    <a href="/privacy.html">Privacy</a>
+  </footer>
+</body>
+</html>

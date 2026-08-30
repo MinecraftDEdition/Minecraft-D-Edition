@@ -1,0 +1,32 @@
+{
+  "$schema": "node_modules/wrangler/config-schema.json",
+  "name": "minecraft-d-edition-accounts",
+  "main": "src/index.ts",
+  "compatibility_date": "2026-08-29",
+  "workers_dev": true,
+  "routes": [
+    {
+      "pattern": "account.minecraftdedition.com",
+      "custom_domain": true
+    }
+  ],
+  "assets": {
+    "directory": "./public",
+    "binding": "ASSETS",
+    "run_worker_first": ["/login", "/callback", "/logout", "/api/*", "/skins/*"],
+    "not_found_handling": "single-page-application"
+  },
+  "d1_databases": [
+    {
+      "binding": "DB",
+      "database_name": "minecraft-d-edition-accounts",
+      "database_id": "0301dae4-8682-422c-b4b2-e9b7f1f3571e",
+      "migrations_dir": "migrations"
+    }
+  ],
+  "vars": {
+    "SITE_ORIGIN": "https://account.minecraftdedition.com",
+    "AUTH0_DOMAIN": "mcde.us.auth0.com",
+    "AUTH0_CLIENT_ID": "wOzU5tZgVTr40V6zR8kgRk8V0YYb00aM"
+  }
+}

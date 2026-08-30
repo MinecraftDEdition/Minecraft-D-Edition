@@ -91,6 +91,7 @@ h2 { margin-bottom: 1rem; font-size: clamp(2.7rem, 6vw, 5.25rem); text-transform
 .account-panel h3 { margin-bottom: .7rem; font-size: 1.8rem; text-transform: uppercase; }
 .account-panel > p { color: var(--muted); }
 .account-status { color: var(--green-dark) !important; font-size: .72rem; font-weight: 900; letter-spacing: .1em; text-transform: uppercase; }
+.account-button { margin-top: 1rem; }
 .player-face { width: 84px; height: 84px; display: grid; grid-template-columns: 1fr 1fr; gap: 18px; align-items: center; padding: 19px; margin-bottom: 1.5rem; background: #986547; box-shadow: inset 0 -10px 0 #784a34; }
 .player-face span { width: 13px; height: 18px; background: #ece9dc; }
 .disabled-button { display: inline-flex; margin-top: 1rem; padding: .85rem 1rem; background: #c5c5bf; color: #686861; box-shadow: inset 0 -4px 0 #a5a59e; font-weight: 900; text-transform: uppercase; cursor: not-allowed; }

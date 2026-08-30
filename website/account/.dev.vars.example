@@ -1,0 +1,2 @@
+AUTH0_CLIENT_SECRET="set-with-wrangler-secret-put"
+SESSION_SECRET="generate-at-least-32-random-bytes"

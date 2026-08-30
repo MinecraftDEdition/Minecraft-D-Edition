@@ -47,6 +47,9 @@ access. Development and releases use the separate Admin checkout at
 - `tools/` contains local asset-import utilities.
 - `tests/` is reserved for unit and integration tests.
 - `docs/` contains generated import manifests and project notes.
+- `website/account/` contains the Cloudflare Worker account site and protected
+  profile API; Auth0 handles credentials while D1 stores usernames, sessions,
+  and validated player skins.
 
 ## Renderer selection
 
