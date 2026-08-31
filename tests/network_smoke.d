@@ -17,7 +17,8 @@ void main()
     enum ushort port = 25567;
     auto server = new IntegratedGameServer(port);
     scope (exit) destroy(server);
-    auto first = new GameConnection("Steve", "127.0.0.1", port);
+    auto first = new GameConnection("Steve", "127.0.0.1", port,
+        "11111111-1111-1111-1111-111111111111","1","classic");
     scope (exit) destroy(first);
     auto second = new GameConnection("Steve", "127.0.0.1", port);
     scope (exit) destroy(second);
@@ -69,6 +70,31 @@ void main()
         || (firstName == "Steve2" && secondName == "Steve"));
     assert(largestPlayerCount >= 2);
     assert(server.publish().length != 0);
+
+    PacketWriter profile;
+    profile.putString("2");
+    profile.putString("slim");
+    first.send(GamePacketType.profileUpdate,profile.data);
+    bool profileUpdated;
+    foreach (_;0..100)
+    {
+        foreach(packet;second.poll())
+        if(packet.type==GamePacketType.snapshot)
+        {
+            PacketReader reader=PacketReader(packet.payload);
+            reader.readU32();reader.readU32();reader.readBool();
+            const count=reader.readU16();
+            foreach(_player;0..count)
+            {
+                const state=reader.readPlayer();
+                if(state.id==firstId&&state.skinVersion=="2"
+                    &&state.skinModel=="slim")profileUpdated=true;
+            }
+        }
+        if(profileUpdated)break;
+        Thread.sleep(20.msecs);
+    }
+    assert(profileUpdated);
 
     foreach (sequence; 1 .. 6)
     {

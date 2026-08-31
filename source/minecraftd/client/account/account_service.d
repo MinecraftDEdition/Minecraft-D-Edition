@@ -35,6 +35,25 @@ struct AccountSnapshot
     bool loggedIn() const { return status == AccountStatus.loggedIn; }
 }
 
+private struct RemoteSkinFailure
+{
+    uint attempts;
+    uint retryAt;
+}
+
+private uint remoteSkinRetryDelay(uint attempts)
+{
+    // Five seconds initially, doubling to a five-minute ceiling. A missing or
+    // temporarily unavailable public skin must never be retried every frame.
+    uint delay = 5_000;
+    foreach (_; 1 .. attempts)
+    {
+        if (delay >= 300_000) return 300_000;
+        delay *= 2;
+    }
+    return delay > 300_000 ? 300_000 : delay;
+}
+
 final class AccountService
 {
     enum serviceOrigin = "https://account.minecraftdedition.com";
@@ -49,6 +68,7 @@ final class AccountService
     private Mutex remoteMutex;
     private string[string] remoteSkinPaths;
     private bool[string] remoteSkinPending;
+    private RemoteSkinFailure[string] remoteSkinFailures;
     private Thread[] remoteWorkers;
     private shared bool stopping;
     private uint nextRefresh;
@@ -197,12 +217,20 @@ final class AccountService
         const key=(accountId~"-"~revision).idup;
         synchronized(remoteMutex)
         {
+            reapRemoteWorkers();
             if(auto found=key in remoteSkinPaths)return (*found).idup;
             if(key in remoteSkinPending)return "";
+            const now=monotonicMilliseconds();
+            if(auto failure=key in remoteSkinFailures)
+                if(now<failure.retryAt)return "";
+            // Two transfers are enough for a multiplayer join burst. Further
+            // requests remain queued implicitly and are reconsidered next frame.
+            if(remoteWorkers.length>=2)return "";
             const destination=buildPath(remoteSkinDirectory,key~".png");
             if(exists(destination))
             {
                 remoteSkinPaths[key]=destination;
+                remoteSkinFailures.remove(key);
                 return destination;
             }
             remoteSkinPending[key]=true;
@@ -216,11 +244,22 @@ final class AccountService
                     if(response.status==200&&isModernSkin(response.body))
                     {write(destination,response.body);completed=destination;}
                 }
-                catch(Exception){}
+                catch(Throwable){}
                 synchronized(remoteMutex)
                 {
                     remoteSkinPending.remove(key);
-                    if(completed.length)remoteSkinPaths[key]=completed;
+                    if(completed.length)
+                    {
+                        remoteSkinPaths[key]=completed;
+                        remoteSkinFailures.remove(key);
+                    }
+                    else
+                    {
+                        auto previous=key in remoteSkinFailures;
+                        const attempts=previous is null?1:previous.attempts+1;
+                        remoteSkinFailures[key]=RemoteSkinFailure(attempts,
+                            monotonicMilliseconds()+remoteSkinRetryDelay(attempts));
+                    }
                 }
             });
             remoteWorkers~=remoteWorker;
@@ -230,6 +269,23 @@ final class AccountService
     }
 
 private:
+    void reapRemoteWorkers()
+    {
+        size_t index;
+        while(index<remoteWorkers.length)
+        {
+            auto remoteWorker=remoteWorkers[index];
+            if(remoteWorker !is null&&remoteWorker.isRunning)
+            {
+                ++index;
+                continue;
+            }
+            if(remoteWorker !is null)remoteWorker.join();
+            remoteWorkers[index]=remoteWorkers[$-1];
+            remoteWorkers.length--;
+        }
+    }
+
     void startOperation(void delegate() operation)
     {
         synchronized (mutex)
@@ -475,4 +531,12 @@ private:
         const field = value.object[key];
         return field.type == JSONType.integer ? field.integer : 0;
     }
+}
+
+unittest
+{
+    assert(remoteSkinRetryDelay(1)==5_000);
+    assert(remoteSkinRetryDelay(2)==10_000);
+    assert(remoteSkinRetryDelay(7)==300_000);
+    assert(remoteSkinRetryDelay(100)==300_000);
 }

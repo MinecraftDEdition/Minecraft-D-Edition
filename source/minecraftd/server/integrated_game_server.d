@@ -488,6 +488,20 @@ private:
                             pickSelectedBlock(*serverPlayer);
                     }
                     break;
+                case GamePacketType.profileUpdate:
+                    if(auto serverPlayer=packet.peer.playerId in players)
+                    {
+                        PacketReader reader=PacketReader(packet.payload);
+                        const revision=sanitizeSkinVersion(reader.readString());
+                        const model=reader.readString();
+                        if(reader.valid)
+                        {
+                            (*serverPlayer).skinVersion=revision;
+                            (*serverPlayer).skinModel=model=="slim"
+                                ?"slim":"classic";
+                        }
+                    }
+                    break;
                 case GamePacketType.keepAliveReply:
                     break;
                 case GamePacketType.disconnect:
@@ -568,7 +582,7 @@ private:
         const versionValue = reader.readU16();
         auto requested = sanitizeName(reader.readString());
         const accountId = reader.readString();
-        const skinVersion = reader.readString();
+        const skinVersion = sanitizeSkinVersion(reader.readString());
         const skinModel = reader.readString();
         if (!reader.valid)
             return;
@@ -1438,6 +1452,14 @@ private:
                 result ~= cast(char) value;
         }
         return result.idup;
+    }
+
+    string sanitizeSkinVersion(string input)
+    {
+        if(input.length>20)return "";
+        foreach(character;input)
+            if(character<'0'||character>'9')return "";
+        return input.idup;
     }
 
     string uniqueName(string base)

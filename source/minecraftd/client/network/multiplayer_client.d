@@ -222,6 +222,15 @@ final class MultiplayerClient
         connection.send(GamePacketType.chatSubmit, writer.data);
     }
 
+    void sendProfileUpdate(string skinVersion,string skinModel)
+    {
+        if(!connected()||!loginComplete)return;
+        PacketWriter writer;
+        writer.putString(skinVersion);
+        writer.putString(skinModel=="slim"?"slim":"classic");
+        connection.send(GamePacketType.profileUpdate,writer.data);
+    }
+
     void requestDrop(ubyte selectedSlot, bool wholeStack = false)
     {
         if (!connected() || !loginComplete)
@@ -326,6 +335,7 @@ final class MultiplayerClient
                      GamePacketType.playerInput,
                      GamePacketType.playerAction,
                      GamePacketType.chatSubmit,
+                     GamePacketType.profileUpdate,
                      GamePacketType.keepAliveReply:
                     break;
             }

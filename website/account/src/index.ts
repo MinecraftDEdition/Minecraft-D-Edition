@@ -1,3 +1,5 @@
+import { d1BlobBytes } from './skin_blob';
+
 interface Env {
   DB: D1Database;
   ASSETS: Fetcher;
@@ -368,13 +370,16 @@ async function getSkin(url: URL, env: Env): Promise<Response> {
   const match = /^\/skins\/([0-9a-f-]{36})\.png$/i.exec(url.pathname);
   if (!match) return json({ error: 'Skin not found.' }, 404);
   const account = await env.DB.prepare('SELECT skin_png, updated_at FROM accounts WHERE id = ?').bind(match[1])
-    .first<{ skin_png: ArrayBuffer | null; updated_at: number }>();
-  if (!account?.skin_png) return json({ error: 'Skin not found.' }, 404);
+    .first<{ skin_png: number[] | ArrayBuffer | null; updated_at: number }>();
+  if (!account) return json({ error: 'Skin not found.' }, 404);
+  const bytes = d1BlobBytes(account.skin_png);
+  if (!bytes || !isModernSkinPng(bytes)) return json({ error: 'Skin not found.' }, 404);
   const headers = new Headers({ 'Content-Type': 'image/png' });
   headers.set('ETag', `"${account.updated_at}"`);
+  headers.set('Content-Length', String(bytes.byteLength));
   headers.set('Cache-Control', 'public, max-age=300, stale-while-revalidate=3600');
   Object.entries(securityHeaders()).forEach(([key, value]) => headers.set(key, value));
-  return new Response(account.skin_png, { headers });
+  return new Response(Uint8Array.from(bytes).buffer, { headers });
 }
 
 async function logout(request: Request, env: Env): Promise<Response> {

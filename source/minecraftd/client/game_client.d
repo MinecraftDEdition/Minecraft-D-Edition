@@ -143,7 +143,7 @@ final class GameClient
                 const identity=accounts.snapshot;
                 gameConnection = new GameConnection(playerName(identity),
                     connectionHost,connectionPort,identity.id,
-                    to!string(identity.updatedAt),identity.skinModel);
+                    sharedSkinVersion(identity),identity.skinModel);
                 return true;
             }
             catch (SocketOSException)
@@ -729,6 +729,9 @@ final class GameClient
         uint dropHeldTicks;
         bool suppressPrimaryUntilRelease = window.down(VK_LBUTTON);
         bool returnToTitle;
+        auto announcedAccount=accounts.snapshot;
+        string announcedSkinVersion=sharedSkinVersion(announcedAccount);
+        string announcedSkinModel=announcedAccount.skinModel.idup;
 
         void setPauseMenu(bool active)
         {
@@ -791,6 +794,18 @@ final class GameClient
             }
 
             multiplayer.poll(chat);
+            accounts.refreshWhenDue();
+            const refreshedAccount=accounts.snapshot;
+            renderer.syncAccountSkin(refreshedAccount);
+            const refreshedSkinVersion=sharedSkinVersion(refreshedAccount);
+            if(refreshedSkinVersion!=announcedSkinVersion
+                ||refreshedAccount.skinModel!=announcedSkinModel)
+            {
+                multiplayer.sendProfileUpdate(refreshedSkinVersion,
+                    refreshedAccount.skinModel);
+                announcedSkinVersion=refreshedSkinVersion.idup;
+                announcedSkinModel=refreshedAccount.skinModel.idup;
+            }
             if (!deathScreen.active && player.health <= 0.0f
                 && player.gameMode != player.gameMode.spectator)
             {
@@ -1432,7 +1447,7 @@ private:
         ServerEndpoint endpoint)
     {
         const name=playerName(account);
-        const versionValue=to!string(account.updatedAt);
+        const versionValue=sharedSkinVersion(account);
         if (!endpoint.eos)
             return new GameConnection(name,endpoint.host,endpoint.port,
                 account.id,versionValue,account.skinModel);
@@ -1456,5 +1471,11 @@ private:
     static string playerName(const AccountSnapshot account)
     {
         return account.loggedIn&&account.username.length?account.username:"Steve";
+    }
+
+    static string sharedSkinVersion(const AccountSnapshot account)
+    {
+        return account.loggedIn&&account.skinPath.length
+            ?to!string(account.updatedAt):"";
     }
 }

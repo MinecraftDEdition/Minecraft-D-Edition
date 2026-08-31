@@ -21,10 +21,11 @@ enum GamePacketType : ubyte
     playerAction,
     combatEvent,
     dimensionChange,
+    profileUpdate,
 }
 
 enum uint maximumGamePacketBytes = 1024 * 1024;
-enum ushort gameProtocolVersion = 15;
+enum ushort gameProtocolVersion = 16;
 
 enum DamageCause : ubyte
 {

@@ -1068,7 +1068,9 @@ final class GameRenderer
             applyHurtTint(geometry, remote.hurtTime, remote.health <= 0.0f);
             uint remoteTexture=steve.descriptorIndex;
             if(auto custom=remote.accountId in remoteSkins)
-                remoteTexture=custom.descriptorIndex;
+                if(auto revision=remote.accountId in remoteSkinVersions)
+                    if(remote.skinVersion.length&&*revision==remote.skinVersion)
+                        remoteTexture=custom.descriptorIndex;
             frame.append(geometry, remoteTexture, viewProjection,
                 remote.gameMode == GameMode.spectator
                     ? DrawLayer.entityShadow : DrawLayer.world, terrainFog);
