@@ -132,7 +132,8 @@ final class PlayerRenderer
         float headYawDegrees, float headPitchDegrees, float walkPosition,
         float walkSpeed, float attackProgress, bool crouching,
         float ageInTicks, SkinLayers layers, bool holdingItem = false,
-        bool mainHandRight = true, bool swimming = false)
+        bool mainHandRight = true, bool swimming = false,
+        bool slimArms = false)
     {
         Vertex[] result;
         const yaw = bodyYawDegrees * DEG_TO_RAD;
@@ -206,11 +207,14 @@ final class PlayerRenderer
         }
 
         // ModelPart coordinates are pixels divided by 16. The head pivots at
-        // its bottom-center neck joint; wide arms pivot at x=+/-5 pixels.
+        // its bottom-center neck joint. Both arm styles pivot at x=+/-5;
+        // Java's slim model uses a three-pixel arm and lowers its shoulder by
+        // half a pixel compared with the four-pixel classic model.
         const rootOffset = crouching ? Vec3(0,-0.125f,0) : Vec3.init;
         const bodyDrop = crouching ? -3.2f / 16.0f : 0.0f;
         const headDrop = crouching ? -4.2f / 16.0f : 0.0f;
-        const armDrop = crouching ? -3.2f / 16.0f : 0.0f;
+        const armDrop = (crouching ? -3.2f : 0.0f) / 16.0f
+            - (slimArms ? 0.5f / 16.0f : 0.0f);
         const legDrop = crouching ? -0.2f / 16.0f : 0.0f;
         const legForward = crouching ? 4.0f / 16.0f : 0.0f;
         const modelPosition = position + rootOffset;
@@ -224,8 +228,13 @@ final class PlayerRenderer
             1.375f + armDrop, sinf(bodyTwist) * 5.0f / 16.0f);
         auto leftShoulder = Vec3(cosf(bodyTwist) * 5.0f / 16.0f,
             1.375f + armDrop, -sinf(bodyTwist) * 5.0f / 16.0f);
-        const rightArmCenter = rightShoulder + Vec3(-1.0f / 16.0f, -4.0f / 16.0f, 0);
-        const leftArmCenter = leftShoulder + Vec3(1.0f / 16.0f, -4.0f / 16.0f, 0);
+        const armCenterOffset = (slimArms ? 0.5f : 1.0f) / 16.0f;
+        const armSize = Vec3((slimArms ? 3.0f : 4.0f) / 16.0f,
+            0.75f, 0.25f);
+        const rightArmCenter = rightShoulder
+            + Vec3(-armCenterOffset, -4.0f / 16.0f, 0);
+        const leftArmCenter = leftShoulder
+            + Vec3(armCenterOffset, -4.0f / 16.0f, 0);
         const rightLegCenter = Vec3(-0.125f, 0.375f + legDrop, legForward);
         const leftLegCenter = Vec3(0.125f, 0.375f + legDrop, legForward);
         const rightHip = Vec3(-0.11875f, 0.75f + legDrop, legForward);
@@ -235,10 +244,12 @@ final class PlayerRenderer
             bodyPivot, Vec3(crouchBodyX, bodyTwist, 0), bodyUvs());
         addPart(result, modelPosition, yaw, headCenter, Vec3(0.5f,0.5f,0.5f),
             neckPivot, Vec3(-headPitch, headYaw, 0), headUvs());
-        addPart(result, modelPosition, yaw, rightArmCenter, Vec3(0.25f,0.75f,0.25f),
-            rightShoulder, Vec3(rightArmX, rightArmY, rightArmZ), rightArmUvs());
-        addPart(result, modelPosition, yaw, leftArmCenter, Vec3(0.25f,0.75f,0.25f),
-            leftShoulder, Vec3(leftArmX, leftArmY, leftArmZ), leftArmUvs());
+        addPart(result, modelPosition, yaw, rightArmCenter, armSize,
+            rightShoulder, Vec3(rightArmX, rightArmY, rightArmZ),
+            slimArms ? rightSlimArmUvs() : rightArmUvs());
+        addPart(result, modelPosition, yaw, leftArmCenter, armSize,
+            leftShoulder, Vec3(leftArmX, leftArmY, leftArmZ),
+            slimArms ? leftSlimArmUvs() : leftArmUvs());
         addPart(result, modelPosition, yaw, rightLegCenter, Vec3(0.25f,0.75f,0.25f),
             rightHip, Vec3(rightLegX, 0, 0), rightLegUvs());
         addPart(result, modelPosition, yaw, leftLegCenter, Vec3(0.25f,0.75f,0.25f),
@@ -257,12 +268,14 @@ final class PlayerRenderer
                 Vec3(-headPitch, headYaw, 0), hatUvs());
         if (layers.rightSleeve)
             addPart(result, modelPosition, yaw, rightArmCenter,
-                expanded(Vec3(0.25f,0.75f,0.25f), 0.03125f), rightShoulder,
-                Vec3(rightArmX, rightArmY, rightArmZ), rightSleeveUvs());
+                expanded(armSize, 0.03125f), rightShoulder,
+                Vec3(rightArmX, rightArmY, rightArmZ),
+                slimArms ? rightSlimSleeveUvs() : rightSleeveUvs());
         if (layers.leftSleeve)
             addPart(result, modelPosition, yaw, leftArmCenter,
-                expanded(Vec3(0.25f,0.75f,0.25f), 0.03125f), leftShoulder,
-                Vec3(leftArmX, leftArmY, leftArmZ), leftSleeveUvs());
+                expanded(armSize, 0.03125f), leftShoulder,
+                Vec3(leftArmX, leftArmY, leftArmZ),
+                slimArms ? leftSlimSleeveUvs() : leftSleeveUvs());
         if (layers.rightPants)
             addPart(result, modelPosition, yaw, rightLegCenter,
                 expanded(Vec3(0.25f,0.75f,0.25f), 0.03125f), rightHip,
@@ -287,17 +300,23 @@ final class PlayerRenderer
         return result;
     }
 
-    Vertex[] buildFirstPersonArm(bool renderSleeve = true)
+    Vertex[] buildFirstPersonArm(bool renderSleeve = true,
+        bool slimArms = false)
     {
         Vertex[] result;
-        // PlayerModel's right arm is [-3,-2,-2] + [4,12,4] pixels.
-        // ModelPart divides these coordinates by 16 before rendering.
-        addRawBox(result, Vec3(-0.0625f,0.25f,0), Vec3(0.25f,0.75f,0.25f),
-            rightArmUvs(), Mat4.identity(), true);
+        // Classic is [-3,-2,-2] + [4,12,4]; slim is
+        // [-2,-2,-2] + [3,12,4]. ModelPart divides by 16.
+        const centerX = (slimArms ? -0.5f : -1.0f) / 16.0f;
+        const size = Vec3((slimArms ? 3.0f : 4.0f) / 16.0f,
+            0.75f, 0.25f);
+        addRawBox(result, Vec3(centerX,0.25f,0), size,
+            slimArms ? rightSlimArmUvs() : rightArmUvs(),
+            Mat4.identity(), true);
         if (renderSleeve)
-            addRawBox(result, Vec3(-0.0625f,0.25f,0),
-                expanded(Vec3(0.25f,0.75f,0.25f), 0.03125f),
-                rightSleeveUvs(), Mat4.identity(), true);
+            addRawBox(result, Vec3(centerX,0.25f,0),
+                expanded(size, 0.03125f), slimArms
+                    ? rightSlimSleeveUvs() : rightSleeveUvs(),
+                Mat4.identity(), true);
         return result;
     }
 
@@ -390,7 +409,8 @@ final class PlayerRenderer
     /// during walking, crouching, and the attack swing.
     Mat4 thirdPersonHeldItemTransform(bool generated,Vec3 position,
         float bodyYawDegrees,bool rightHand,float walkPosition,float walkSpeed,
-        float attackProgress,bool crouching,float ageInTicks) const
+        float attackProgress,bool crouching,float ageInTicks,
+        bool slimArms = false) const
     {
         float armX=rightHand
             ? -cosf(walkPosition*0.6662f+PI)*walkSpeed
@@ -416,13 +436,15 @@ final class PlayerRenderer
             armZ+=(rightHand?1.0f:-1.0f)*sinf(attackProgress*PI)*0.4f;
         }
         if(crouching)armX-=0.4f;
-        const armDrop=crouching?-3.2f/16.0f:0.0f;
+        const armDrop=(crouching?-3.2f:0.0f)/16.0f
+            -(slimArms?0.5f/16.0f:0.0f);
         const rootOffset=crouching?Vec3(0,-0.125f,0):Vec3.init;
         const shoulder=Vec3(
             (rightHand?-1.0f:1.0f)*cosf(bodyTwist)*5.0f/16.0f,
             1.375f+armDrop,
             (rightHand?1.0f:-1.0f)*sinf(bodyTwist)*5.0f/16.0f);
-        const grip=shoulder+Vec3(rightHand?-1.0f/16.0f:1.0f/16.0f,
+        const gripOffset=(slimArms?0.5f:1.0f)/16.0f;
+        const grip=shoulder+Vec3(rightHand?-gripOffset:gripOffset,
             -10.0f/16.0f,0);
         const center=grip+(generated?Vec3(0,0.13f,0.055f)
             :Vec3(rightHand?-0.055f:0.055f,0.04f,0.075f));
@@ -521,12 +543,16 @@ private:
     BoxUvs bodyUvs() const { return BoxUvs(UvRect(20,20,28,32),UvRect(32,20,40,32),UvRect(28,20,32,32),UvRect(16,20,20,32),UvRect(20,16,28,20),UvRect(28,16,36,20)); }
     BoxUvs rightArmUvs() const { return BoxUvs(UvRect(44,20,48,32),UvRect(52,20,56,32),UvRect(48,20,52,32),UvRect(40,20,44,32),UvRect(44,16,48,20),UvRect(48,16,52,20)); }
     BoxUvs leftArmUvs() const { return BoxUvs(UvRect(36,52,40,64),UvRect(44,52,48,64),UvRect(40,52,44,64),UvRect(32,52,36,64),UvRect(36,48,40,52),UvRect(40,48,44,52)); }
+    BoxUvs rightSlimArmUvs() const { return BoxUvs(UvRect(44,20,47,32),UvRect(51,20,54,32),UvRect(47,20,51,32),UvRect(40,20,44,32),UvRect(44,16,47,20),UvRect(47,16,50,20)); }
+    BoxUvs leftSlimArmUvs() const { return BoxUvs(UvRect(36,52,39,64),UvRect(43,52,46,64),UvRect(39,52,43,64),UvRect(32,52,36,64),UvRect(36,48,39,52),UvRect(39,48,42,52)); }
     BoxUvs rightLegUvs() const { return BoxUvs(UvRect(4,20,8,32),UvRect(12,20,16,32),UvRect(8,20,12,32),UvRect(0,20,4,32),UvRect(4,16,8,20),UvRect(8,16,12,20)); }
     BoxUvs leftLegUvs() const { return BoxUvs(UvRect(20,52,24,64),UvRect(28,52,32,64),UvRect(24,52,28,64),UvRect(16,52,20,64),UvRect(20,48,24,52),UvRect(24,48,28,52)); }
     BoxUvs hatUvs() const { return BoxUvs(UvRect(40,8,48,16),UvRect(56,8,64,16),UvRect(48,8,56,16),UvRect(32,8,40,16),UvRect(40,0,48,8),UvRect(48,0,56,8)); }
     BoxUvs jacketUvs() const { return BoxUvs(UvRect(20,36,28,48),UvRect(32,36,40,48),UvRect(28,36,32,48),UvRect(16,36,20,48),UvRect(20,32,28,36),UvRect(28,32,36,36)); }
     BoxUvs rightSleeveUvs() const { return BoxUvs(UvRect(44,36,48,48),UvRect(52,36,56,48),UvRect(48,36,52,48),UvRect(40,36,44,48),UvRect(44,32,48,36),UvRect(48,32,52,36)); }
     BoxUvs leftSleeveUvs() const { return BoxUvs(UvRect(52,52,56,64),UvRect(60,52,64,64),UvRect(56,52,60,64),UvRect(48,52,52,64),UvRect(52,48,56,52),UvRect(56,48,60,52)); }
+    BoxUvs rightSlimSleeveUvs() const { return BoxUvs(UvRect(44,36,47,48),UvRect(51,36,54,48),UvRect(47,36,51,48),UvRect(40,36,44,48),UvRect(44,32,47,36),UvRect(47,32,50,36)); }
+    BoxUvs leftSlimSleeveUvs() const { return BoxUvs(UvRect(52,52,55,64),UvRect(59,52,62,64),UvRect(55,52,59,64),UvRect(48,52,52,64),UvRect(52,48,55,52),UvRect(55,48,58,52)); }
     BoxUvs rightPantsUvs() const { return BoxUvs(UvRect(4,36,8,48),UvRect(12,36,16,48),UvRect(8,36,12,48),UvRect(0,36,4,48),UvRect(4,32,8,36),UvRect(8,32,12,36)); }
     BoxUvs leftPantsUvs() const { return BoxUvs(UvRect(4,52,8,64),UvRect(12,52,16,64),UvRect(8,52,12,64),UvRect(0,52,4,64),UvRect(4,48,8,52),UvRect(8,48,12,52)); }
 
@@ -534,4 +560,28 @@ private:
     {
         return size + Vec3(amount, amount, amount);
     }
+}
+
+unittest
+{
+    auto renderer = new PlayerRenderer();
+    scope (exit) destroy(renderer);
+    const classic = renderer.buildFirstPersonArm(false, false);
+    const slim = renderer.buildFirstPersonArm(false, true);
+    float classicMin = float.max, classicMax = -float.max;
+    float slimMin = float.max, slimMax = -float.max;
+    foreach (vertex; classic)
+    {
+        if (vertex.position[0] < classicMin) classicMin = vertex.position[0];
+        if (vertex.position[0] > classicMax) classicMax = vertex.position[0];
+    }
+    foreach (vertex; slim)
+    {
+        if (vertex.position[0] < slimMin) slimMin = vertex.position[0];
+        if (vertex.position[0] > slimMax) slimMax = vertex.position[0];
+    }
+    assert(classicMax-classicMin == 4.0f/16.0f);
+    assert(slimMax-slimMin == 3.0f/16.0f);
+    assert(renderer.rightSlimArmUvs().front.right
+        - renderer.rightSlimArmUvs().front.left == 3.0f);
 }

@@ -21,7 +21,7 @@
     <section class="hero">
       <p class="eyebrow">PLAYER SERVICES</p>
       <h1>Your MCDE account</h1>
-      <p class="lead">One identity for your profile today—and the game itself when account sign-in arrives in a later client update.</p>
+      <p class="lead">One identity for your username, skin, and arm style across the website and the game.</p>
     </section>
 
     <div id="message" class="message" role="status" hidden></div>
@@ -76,11 +76,11 @@
           <div>
             <p class="eyebrow">PLAYER SKIN</p>
             <h2>Upload your Minecraft skin</h2>
-            <p>Use a modern 64×64 PNG skin. Choose the arm style that matches the artwork.</p>
+            <p>Use any modern 64×64 PNG skin. Classic uses four-pixel arms; Slim uses three-pixel arms and remains compatible with Classic artwork.</p>
           </div>
           <div class="skin-layout">
             <div class="skin-preview-wrap">
-              <img id="skin-preview" alt="Current skin texture" hidden>
+              <canvas id="skin-preview" width="192" height="192" role="img" aria-label="Current player skin preview" hidden></canvas>
               <div id="skin-placeholder" class="skin-placeholder" aria-label="No skin uploaded">?</div>
             </div>
             <form id="skin-form">
@@ -91,6 +91,7 @@
                 <label class="choice"><input type="radio" name="model" value="classic" checked> Classic arms</label>
                 <label class="choice"><input type="radio" name="model" value="slim"> Slim arms</label>
               </fieldset>
+              <button id="save-model-button" class="button secondary" type="button">Save arm style</button>
               <button class="button primary" type="submit">Upload skin</button>
             </form>
           </div>

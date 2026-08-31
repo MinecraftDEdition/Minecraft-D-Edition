@@ -107,6 +107,7 @@ final class GameRenderer
     private TextureHandle steve;
     private TextureHandle accountSkin;
     private string accountSkinPath;
+    private string accountSkinModel = "classic";
     private long accountSkinRevision = long.min;
     private TextureHandle[string] remoteSkins;
     private string[string] remoteSkinVersions;
@@ -552,7 +553,8 @@ final class GameRenderer
             const center=cast(int)logicalWidth/2;
             inventoryMenu.appendPlayerShowcase(frame,center-150,74,140,112,
                 mouseX/scale,mouseY/scale,logicalWidth,logicalHeight,players,
-                player,accountSkin.descriptorIndex,1.0f,elapsedSeconds*20.0f);
+                player,accountSkin.descriptorIndex,1.0f,elapsedSeconds*20.0f,
+                accountSkinModel=="slim");
         }
         graphics.render(frame);
     }
@@ -560,9 +562,11 @@ final class GameRenderer
     void syncAccountSkin(const AccountSnapshot account)
     {
         if(accountSkinRevision==account.updatedAt
-            &&accountSkinPath==account.skinPath)return;
+            &&accountSkinPath==account.skinPath
+            &&accountSkinModel==account.skinModel)return;
         accountSkinRevision=account.updatedAt;
         accountSkinPath=account.skinPath.idup;
+        accountSkinModel=account.skinModel=="slim"?"slim":"classic";
         accountSkin=steve;
         if(!account.skinPath.length)return;
         try
@@ -1059,7 +1063,8 @@ final class GameRenderer
                     remote.interpolatedWalkAnimationSpeed(partialTick),
                     remote.interpolatedAttackProgress(partialTick), remote.crouching,
                      elapsedSeconds * 20.0f, SkinLayers.fromBits(remote.skinParts),
-                     !remoteHeld.empty(),remote.mainHandRight,remote.swimming);
+                     !remoteHeld.empty(),remote.mainHandRight,remote.swimming,
+                     remote.skinModel=="slim");
             if (remote.gameMode != GameMode.spectator)
                 players.applyDeathPose(geometry,
                     remote.interpolatedPosition(partialTick),
@@ -1080,7 +1085,8 @@ final class GameRenderer
                     remote.mainHandRight,remote.interpolatedWalkAnimationPosition(partialTick),
                     remote.interpolatedWalkAnimationSpeed(partialTick),
                     remote.interpolatedAttackProgress(partialTick),remote.crouching,
-                    elapsedSeconds*20.0f,viewProjection,terrainFog);
+                    elapsedSeconds*20.0f,remote.skinModel=="slim",
+                    viewProjection,terrainFog);
         }
 
         if (perspective != CameraPerspective.firstPerson)
@@ -1096,7 +1102,8 @@ final class GameRenderer
                     player.interpolatedWalkAnimationSpeed(partialTick),
                     player.interpolatedAttackProgress(partialTick), player.crouching,
                      elapsedSeconds * 20.0f, SkinLayers.fromBits(player.skinParts),
-                     !displayedMainHand.empty(),player.mainHandRight,player.swimming);
+                     !displayedMainHand.empty(),player.mainHandRight,player.swimming,
+                     accountSkinModel=="slim");
             if (player.gameMode != GameMode.spectator)
                 players.applyDeathPose(geometry,localPosition,modelBodyYaw,
                     player.interpolatedDeathTime(partialTick));
@@ -1112,7 +1119,8 @@ final class GameRenderer
                     player.interpolatedWalkAnimationPosition(partialTick),
                     player.interpolatedWalkAnimationSpeed(partialTick),
                     player.interpolatedAttackProgress(partialTick),player.crouching,
-                    elapsedSeconds*20.0f,viewProjection,terrainFog);
+                    elapsedSeconds*20.0f,accountSkinModel=="slim",
+                    viewProjection,terrainFog);
         }
         else
         {
@@ -1133,7 +1141,8 @@ final class GameRenderer
                 const sleeveBit=player.mainHandRight?Player.skinRightSleeve
                     :Player.skinLeftSleeve;
                 frame.append(players.buildFirstPersonArm(
-                        (player.skinParts&sleeveBit)!=0), accountSkin.descriptorIndex,
+                        (player.skinParts&sleeveBit)!=0,
+                        accountSkinModel=="slim"), accountSkin.descriptorIndex,
                     handProjection, DrawLayer.viewModel);
             }
 
@@ -1220,7 +1229,8 @@ final class GameRenderer
             inventoryMenu.append(frame,width,height,inventoryMouseX,
                 inventoryMouseY,player.inventory,inventoryTextures,blockTextures,
                 hud,hudFont,fontTexture,partialTick,players,player,
-                accountSkin.descriptorIndex,elapsedSeconds*20.0f);
+                accountSkin.descriptorIndex,elapsedSeconds*20.0f,
+                accountSkinModel=="slim");
         graphics.render(frame);
     }
 
@@ -1325,13 +1335,15 @@ private:
 
     void appendHeldBlock(ItemStack stack,Vec3 position,float bodyYawDegrees,
         bool rightHand,float walkPosition,float walkSpeed,float attackProgress,
-        bool crouching,float ageInTicks,Mat4 viewProjection,FogSettings fog)
+        bool crouching,float ageInTicks,bool slimArms,Mat4 viewProjection,
+        FogSettings fog)
     {
         auto heldMesh=stack.item in itemMeshes;
         if(heldMesh is null)return;
         const model=players.thirdPersonHeldItemTransform(
             stack.item==ItemId.flintAndSteel,position,bodyYawDegrees,rightHand,
-            walkPosition,walkSpeed,attackProgress,crouching,ageInTicks);
+            walkPosition,walkSpeed,attackProgress,crouching,ageInTicks,
+            slimArms);
         foreach(textureIndex,geometry;*heldMesh)
             frame.append(geometry,textureIndex,model*viewProjection,
                 stackLayer(stack.item,textureIndex),fog);

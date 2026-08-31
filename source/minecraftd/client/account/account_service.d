@@ -195,6 +195,34 @@ final class AccountService
         });
     }
 
+    void changeSkinModel(string value)
+    {
+        const requested=value=="slim"?"slim":"classic";
+        startOperation({
+            try
+            {
+                const response=authorizedRequest("POST","/api/profile",
+                    "Content-Type: application/json\r\n",
+                    cast(const(ubyte)[])("{\"skinModel\":\""
+                        ~requested~"\"}"));
+                if(response.status!=200)
+                    throw new Exception(responseError(response.text));
+                const result=parseJSON(response.text);
+                const returnedModel=stringField(result,"skinModel");
+                const updated=longField(result,"updatedAt");
+                synchronized(mutex)
+                {
+                    current.status=AccountStatus.loggedIn;
+                    current.skinModel=returnedModel=="slim"?"slim":"classic";
+                    current.updatedAt=updated>0?updated:current.updatedAt+1;
+                    current.message="Arm style changed successfully.";
+                }
+                nextRefresh=monotonicMilliseconds()+15_000;
+            }
+            catch(Exception error){setError(error.msg);}
+        });
+    }
+
     void signOut()
     {
         startOperation({

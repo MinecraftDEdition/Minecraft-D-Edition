@@ -300,6 +300,10 @@ final class GameClient
                             const selected=chooseSkinPng();
                             if(selected.length)accounts.changeSkin(selected);
                             break;
+                        case AccountMenuAction.classicArms:
+                            accounts.changeSkinModel("classic"); break;
+                        case AccountMenuAction.slimArms:
+                            accounts.changeSkinModel("slim"); break;
                         case AccountMenuAction.copyId:
                             window.setClipboardText(account.id); break;
                         case AccountMenuAction.signOut: accounts.signOut(); break;

@@ -3,6 +3,53 @@ const signedOut = document.querySelector('#signed-out');
 const dashboard = document.querySelector('#dashboard');
 const message = document.querySelector('#message');
 let csrfToken = '';
+let skinPreviewUrl = '';
+
+function selectedSkinModel() {
+  return document.querySelector('input[name="model"]:checked')?.value === 'slim' ? 'slim' : 'classic';
+}
+
+function drawSkinPreview(image, model) {
+  const canvas = document.querySelector('#skin-preview');
+  const context = canvas.getContext('2d');
+  const slim = model === 'slim';
+  const scale = 6;
+  const armWidth = slim ? 3 : 4;
+  const bodyX = (canvas.width - 8 * scale) / 2;
+  const armY = 8 * scale + (slim ? scale / 2 : 0);
+  const rightArmX = bodyX - armWidth * scale;
+  const leftArmX = bodyX + 8 * scale;
+  context.clearRect(0, 0, canvas.width, canvas.height);
+  context.imageSmoothingEnabled = false;
+  const part = (sx, sy, sw, sh, x, y, w = sw, h = sh) => {
+    context.drawImage(image, sx, sy, sw, sh, x, y, w * scale, h * scale);
+  };
+
+  // Front-facing Java skin UVs. Slim deliberately samples the first three
+  // front-arm pixels, so an ordinary Classic 64x64 texture is still usable.
+  part(44, 20, armWidth, 12, rightArmX, armY);
+  part(44, 36, armWidth, 12, rightArmX, armY);
+  part(36, 52, armWidth, 12, leftArmX, armY);
+  part(52, 52, armWidth, 12, leftArmX, armY);
+  part(4, 20, 4, 12, bodyX, 20 * scale);
+  part(4, 36, 4, 12, bodyX, 20 * scale);
+  part(20, 52, 4, 12, bodyX + 4 * scale, 20 * scale);
+  part(4, 52, 4, 12, bodyX + 4 * scale, 20 * scale);
+  part(20, 20, 8, 12, bodyX, 8 * scale);
+  part(20, 36, 8, 12, bodyX, 8 * scale);
+  part(8, 8, 8, 8, bodyX, 0);
+  part(40, 8, 8, 8, bodyX, 0);
+  canvas.hidden = false;
+  document.querySelector('#skin-placeholder').hidden = true;
+}
+
+function renderSkinPreview(url, model = selectedSkinModel()) {
+  if (!url) return;
+  skinPreviewUrl = url;
+  const image = new Image();
+  image.onload = () => drawSkinPreview(image, model);
+  image.src = url;
+}
 
 function showMessage(text, isError = false) {
   message.textContent = text;
@@ -37,12 +84,10 @@ async function loadAccount() {
     document.querySelector('#email-status').textContent = account.emailVerified ? 'Email verified' : 'Email verification needed';
     document.querySelector('#display-name').textContent = account.username || 'Player profile';
     document.querySelector('#username').value = account.username || '';
-    document.querySelector(`input[name="model"][value="${account.skinModel}"]`).checked = true;
+    const model = account.skinModel === 'slim' ? 'slim' : 'classic';
+    document.querySelector(`input[name="model"][value="${model}"]`).checked = true;
     if (account.skinUrl) {
-      const preview = document.querySelector('#skin-preview');
-      preview.src = account.skinUrl;
-      preview.hidden = false;
-      document.querySelector('#skin-placeholder').hidden = true;
+      renderSkinPreview(account.skinUrl, model);
     }
     setAccountActivity(account.active);
     dashboard.hidden = false;
@@ -82,16 +127,37 @@ document.querySelector('#username-form').addEventListener('submit', async (event
 
 document.querySelector('#skin-form').addEventListener('submit', async (event) => {
   event.preventDefault();
-  const button = event.currentTarget.querySelector('button');
+  const button = event.currentTarget.querySelector('button[type="submit"]');
   button.disabled = true;
   try {
     const form = new FormData(event.currentTarget);
     const result = await request('/api/skin', { method: 'POST', body: form });
-    const preview = document.querySelector('#skin-preview');
-    preview.src = result.skinUrl;
-    preview.hidden = false;
-    document.querySelector('#skin-placeholder').hidden = true;
+    renderSkinPreview(result.skinUrl, result.skinModel);
     showMessage('Skin uploaded.');
+  } catch (error) {
+    showMessage(error.message, true);
+  } finally {
+    button.disabled = false;
+  }
+});
+
+document.querySelectorAll('input[name="model"]').forEach((input) => {
+  input.addEventListener('change', () => {
+    if (skinPreviewUrl) renderSkinPreview(skinPreviewUrl);
+  });
+});
+
+document.querySelector('#save-model-button').addEventListener('click', async (event) => {
+  const button = event.currentTarget;
+  button.disabled = true;
+  try {
+    const result = await request('/api/profile', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ skinModel: selectedSkinModel() })
+    });
+    if (skinPreviewUrl) renderSkinPreview(skinPreviewUrl, result.skinModel);
+    showMessage(`${result.skinModel === 'slim' ? 'Slim' : 'Classic'} arms saved.`);
   } catch (error) {
     showMessage(error.message, true);
   } finally {

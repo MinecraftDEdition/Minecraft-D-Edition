@@ -36,6 +36,8 @@ enum AccountMenuAction : ubyte
     username,
     changePassword,
     changeSkin,
+    classicArms,
+    slimArms,
     copyId,
     signOut,
     confirmYes,
@@ -230,6 +232,10 @@ final class TitleScreenRenderer
             return AccountMenuAction.changePassword;
         if (MenuRect(center+10,73,140,20).contains(x,y))
             return AccountMenuAction.changeSkin;
+        if (MenuRect(center-150,201,68,20).contains(x,y))
+            return AccountMenuAction.classicArms;
+        if (MenuRect(center-78,201,68,20).contains(x,y))
+            return AccountMenuAction.slimArms;
         if (MenuRect(center+10,136,140,20).contains(x,y))
             return AccountMenuAction.copyId;
         if (MenuRect(center+10,160,140,20).contains(x,y))
@@ -282,6 +288,16 @@ final class TitleScreenRenderer
             w,h,textures,font,fontTexture);
         appendImage(frame,textures.white,center-150,74,140,112,w,h,
             Vec2(0,0),Vec2(1,1),Color(0,0,0,.88f));
+        appendText(frame,"Arm style",center-150,190,w,h,font,fontTexture,
+            Color(.75f,.75f,.75f,1));
+        appendMenuButton(frame,center-150,201,68,"Classic",
+            hovered==AccountMenuAction.classicArms
+                ||account.skinModel!="slim",w,h,textures,font,fontTexture,
+            !account.busy);
+        appendMenuButton(frame,center-78,201,68,"Slim",
+            hovered==AccountMenuAction.slimArms
+                ||account.skinModel=="slim",w,h,textures,font,fontTexture,
+            !account.busy);
         appendMenuButton(frame,center+10,49,140,"Change Password...",
             hovered==AccountMenuAction.changePassword,w,h,textures,font,
             fontTexture,!account.busy);
@@ -298,7 +314,7 @@ final class TitleScreenRenderer
             hovered==AccountMenuAction.signOut,w,h,textures,font,fontTexture,
             !account.busy);
         if (account.message.length)
-            appendCenteredText(frame,account.message,198,w,h,font,fontTexture,
+            appendCenteredText(frame,account.message,224,w,h,font,fontTexture,
                 Color(.78f,.78f,.78f,1));
 
         if (state.dialog != AccountDialog.none)

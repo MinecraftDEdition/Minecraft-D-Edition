@@ -89,7 +89,8 @@ final class InventoryMenuRenderer
         const InventoryTextureSet textures,const BlockTextureSet blockTextures,
         const HudRenderer itemRenderer,const FontRenderer font,uint fontTexture,
         float partialTick,PlayerRenderer playerRenderer,
-        const Player player,uint playerTexture,float ageInTicks)const
+        const Player player,uint playerTexture,float ageInTicks,
+        bool slimArms = false)const
     {
         const scale=guiScale(viewportWidth,viewportHeight);
         const logicalWidth=cast(float)viewportWidth/scale;
@@ -106,7 +107,7 @@ final class InventoryMenuRenderer
             logicalWidth,logicalHeight);
         appendPlayerPreview(frame,left,top,logicalMouseX,logicalMouseY,
             logicalWidth,logicalHeight,playerRenderer,player,playerTexture,
-            partialTick,ageInTicks);
+            partialTick,ageInTicks,slimArms);
 
         const hovered=hitSlot(viewportWidth,viewportHeight,mouseX,mouseY);
         if(hovered>=0)
@@ -148,31 +149,31 @@ final class InventoryMenuRenderer
     void appendPlayerShowcase(ref FrameMesh frame,int boxX,int boxY,
         int boxWidth,int boxHeight,int mouseX,int mouseY,float width,float height,
         PlayerRenderer renderer,const Player player,uint texture,
-        float partialTick,float ageInTicks)const
+        float partialTick,float ageInTicks,bool slimArms = false)const
     {
         appendPlayerModel(frame,cast(float)boxX+boxWidth*0.5f,
             cast(float)boxY+boxHeight*0.4f,cast(float)boxY+boxHeight-8.0f,
             boxHeight/3.73f,mouseX,mouseY,width,height,renderer,player,
-            texture,partialTick,ageInTicks);
+            texture,partialTick,ageInTicks,slimArms);
     }
 
 private:
     static void appendPlayerPreview(ref FrameMesh frame,int left,int top,
         int mouseX,int mouseY,float width,float height,
         PlayerRenderer renderer,const Player player,uint texture,
-        float partialTick,float ageInTicks)
+        float partialTick,float ageInTicks,bool slimArms)
     {
         // Exact 26.2 InventoryScreen preview rectangle is (26,8)-(75,78)
         // with scale 30 and atan mouse response divided by 40.
         appendPlayerModel(frame,cast(float)left+50.5f,cast(float)top+43.0f,
             cast(float)top+76.0f,30.0f,mouseX,mouseY,width,height,renderer,
-            player,texture,partialTick,ageInTicks);
+            player,texture,partialTick,ageInTicks,slimArms);
     }
 
     static void appendPlayerModel(ref FrameMesh frame,float centerX,
         float centerY,float feetY,float modelScale,int mouseX,int mouseY,
         float width,float height,PlayerRenderer renderer,const Player player,
-        uint texture,float partialTick,float ageInTicks)
+        uint texture,float partialTick,float ageInTicks,bool slimArms)
     {
         const horizontal=atanf((centerX-mouseX)/40.0f);
         const vertical=atanf((centerY-mouseY)/40.0f);
@@ -186,7 +187,8 @@ private:
             player.interpolatedWalkAnimationPosition(partialTick),
             player.interpolatedWalkAnimationSpeed(partialTick),
             player.interpolatedAttackProgress(partialTick),player.crouching,
-            ageInTicks,SkinLayers.fromBits(player.skinParts));
+            ageInTicks,SkinLayers.fromBits(player.skinParts),false,true,false,
+            slimArms);
         const tilt=Mat4.translation(Vec3(0,-0.9f,0))
             *Mat4.rotationX(verticalDegrees*3.14159265f/180.0f)
             *Mat4.translation(Vec3(0,0.9f,0));

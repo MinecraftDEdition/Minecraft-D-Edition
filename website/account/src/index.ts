@@ -1,4 +1,5 @@
 import { d1BlobBytes } from './skin_blob';
+import { normalizeSkinModel } from './skin_model';
 
 interface Env {
   DB: D1Database;
@@ -325,24 +326,43 @@ async function logoutDesktop(request: Request, env: Env): Promise<Response> {
 async function updateProfile(request: Request, env: Env): Promise<Response> {
   const session = await requireActiveMutatingSession(request, env);
   if (session instanceof Response) return session;
-  let body: { username?: unknown };
+  let body: { username?: unknown; skinModel?: unknown };
   try {
-    body = await request.json<{ username?: unknown }>();
+    body = await request.json<{ username?: unknown; skinModel?: unknown }>();
   } catch {
     return json({ error: 'Send a valid JSON request.' }, 400);
   }
+  const hasUsername = body.username !== undefined;
+  const hasSkinModel = body.skinModel !== undefined;
+  if (!hasUsername && !hasSkinModel) return json({ error: 'Choose a profile change to save.' }, 400);
   const username = typeof body.username === 'string' ? body.username.trim() : '';
-  if (!USERNAME.test(username)) {
+  if (hasUsername && !USERNAME.test(username)) {
     return json({ error: 'Usernames must be 3–16 characters using only letters, numbers, and underscores.' }, 400);
   }
+  const skinModel = hasSkinModel ? normalizeSkinModel(body.skinModel) : null;
+  if (hasSkinModel && !skinModel) return json({ error: 'Choose Classic or Slim arms.' }, 400);
+  const now = Date.now();
   try {
-    await env.DB.prepare('UPDATE accounts SET username = ?, username_normalized = ?, updated_at = ? WHERE id = ?')
-      .bind(username, username.toLowerCase(), Date.now(), session.id).run();
+    if (hasUsername && skinModel) {
+      await env.DB.prepare('UPDATE accounts SET username = ?, username_normalized = ?, skin_model = ?, updated_at = ? WHERE id = ?')
+        .bind(username, username.toLowerCase(), skinModel, now, session.id).run();
+    } else if (hasUsername) {
+      await env.DB.prepare('UPDATE accounts SET username = ?, username_normalized = ?, updated_at = ? WHERE id = ?')
+        .bind(username, username.toLowerCase(), now, session.id).run();
+    } else {
+      await env.DB.prepare('UPDATE accounts SET skin_model = ?, updated_at = ? WHERE id = ?')
+        .bind(skinModel, now, session.id).run();
+    }
   } catch (error) {
     if (String(error).toLowerCase().includes('unique')) return json({ error: 'That username is already taken.' }, 409);
     throw error;
   }
-  return json({ ok: true, username });
+  return json({
+    ok: true,
+    username: hasUsername ? username : session.username,
+    skinModel: skinModel ?? session.skin_model,
+    updatedAt: now
+  });
 }
 
 async function updateSkin(request: Request, env: Env): Promise<Response> {
@@ -352,8 +372,7 @@ async function updateSkin(request: Request, env: Env): Promise<Response> {
   if (!contentType.includes('multipart/form-data')) return json({ error: 'Upload a PNG skin file.' }, 400);
   const form = await request.formData();
   const file = form.get('skin');
-  const modelValue = form.get('model');
-  const model = modelValue === 'slim' ? 'slim' : modelValue === 'classic' ? 'classic' : null;
+  const model = normalizeSkinModel(form.get('model'));
   if (!(file instanceof File) || !model) return json({ error: 'Choose a PNG skin and a valid model.' }, 400);
   if (file.size > MAX_SKIN_BYTES) return json({ error: 'Skin files must be 256 KB or smaller.' }, 413);
   const bytes = new Uint8Array(await file.arrayBuffer());
@@ -414,8 +433,7 @@ async function logout(request: Request, env: Env): Promise<Response> {
 async function updateDesktopSkin(request: Request, env: Env): Promise<Response> {
   const session = await requireActiveMutatingSession(request, env);
   if (session instanceof Response) return session;
-  const modelHeader = request.headers.get('X-MCDE-Skin-Model');
-  const model = modelHeader === 'slim' ? 'slim' : modelHeader === 'classic' ? 'classic' : null;
+  const model = normalizeSkinModel(request.headers.get('X-MCDE-Skin-Model'));
   const declaredLength = Number(request.headers.get('Content-Length') ?? 0);
   if (!model) return json({ error: 'Choose a valid player model.' }, 400);
   if (declaredLength > MAX_SKIN_BYTES) return json({ error: "That's not a skin, silly!" }, 413);

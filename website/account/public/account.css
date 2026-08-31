@@ -106,7 +106,8 @@ fieldset { margin: 18px 0; padding: 0; border: 0; }
 
 .skin-layout { margin-top: 28px; display: grid; grid-template-columns: 180px 1fr; gap: 34px; align-items: start; }
 .skin-preview-wrap { width: 180px; height: 180px; padding: 18px; background: #10140e; border: 2px solid var(--line); image-rendering: pixelated; }
-.skin-preview-wrap img { width: 100%; height: 100%; object-fit: contain; image-rendering: pixelated; }
+.skin-preview-wrap canvas { width: 100%; height: 100%; object-fit: contain; image-rendering: pixelated; }
+.skin-panel form .button + .button { margin-top: 12px; }
 .skin-placeholder { width: 100%; height: 100%; display: grid; place-items: center; background: #252e21; color: #6f7b69; font: 900 60px/1 monospace; }
 #logout-form { margin-top: 18px; }
 #delete-form { max-width: 520px; }
