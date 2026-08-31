@@ -160,14 +160,15 @@ final class PlayerRenderer
             leftLegX=-rightLegX;
         }
 
-        // HumanoidModel ArmPose.ITEM: the carrying arm is held slightly
-        // forward while retaining half of its natural walk swing.
+        // HumanoidModel ArmPose.ITEM: Java's model Y axis points downward, so
+        // its -PI/10 carrying pitch becomes +PI/10 in our Y-up model space.
+        // Keeping Java's unreflected sign points the hand behind the player.
         if (holdingItem)
         {
             if (mainHandRight)
-                rightArmX = rightArmX * 0.5f - PI / 10.0f;
+                rightArmX = rightArmX * 0.5f + PI / 10.0f;
             else
-                leftArmX = leftArmX * 0.5f - PI / 10.0f;
+                leftArmX = leftArmX * 0.5f + PI / 10.0f;
         }
 
         // HumanoidModel.setupAttackAnimation: twist the chest first, move both
@@ -394,7 +395,9 @@ final class PlayerRenderer
         float armX=rightHand
             ? -cosf(walkPosition*0.6662f+PI)*walkSpeed
             : -cosf(walkPosition*0.6662f)*walkSpeed;
-        armX=armX*0.5f-PI/10.0f;
+        // Match buildSteve's reflected HumanoidModel ArmPose.ITEM pitch so
+        // the held mesh remains attached to the forward-pointing hand.
+        armX=armX*0.5f+PI/10.0f;
         float armY=0;
         float armZ=rightHand
             ? -(cosf(ageInTicks*0.09f)*0.05f+0.05f)
