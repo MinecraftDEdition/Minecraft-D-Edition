@@ -184,6 +184,21 @@ final class GameRenderer
             load("textures/block/stone.png"),
             load("textures/block/obsidian.png"),
             load("textures/block/netherrack.png"),
+            load("textures/block/bricks.png"),
+            load("textures/block/oak_planks.png"),
+            load("textures/block/spruce_planks.png"),
+            load("textures/block/birch_planks.png"),
+            load("textures/block/jungle_planks.png"),
+            load("textures/block/acacia_planks.png"),
+            load("textures/block/dark_oak_planks.png"),
+            load("textures/block/mangrove_planks.png"),
+            load("textures/block/cherry_planks.png"),
+            load("textures/block/bamboo_planks.png"),
+            load("textures/block/pale_oak_planks.png"),
+            load("textures/block/crimson_planks.png"),
+            load("textures/block/warped_planks.png"),
+            load("textures/block/cobblestone.png"),
+            load("textures/block/glass.png"),
             waterStillFrames[0],
             waterFlowFrames[0],
             portalFrames[0],
@@ -286,6 +301,21 @@ final class GameRenderer
             blockTextures);
         itemMeshes[ItemId.netherrack] = blocks.buildItem(BlockId.netherrack,
             blockTextures);
+        itemMeshes[ItemId.bricks] = blocks.buildItem(BlockId.bricks, blockTextures);
+        itemMeshes[ItemId.oakPlanks] = blocks.buildItem(BlockId.oakPlanks, blockTextures);
+        itemMeshes[ItemId.sprucePlanks] = blocks.buildItem(BlockId.sprucePlanks, blockTextures);
+        itemMeshes[ItemId.birchPlanks] = blocks.buildItem(BlockId.birchPlanks, blockTextures);
+        itemMeshes[ItemId.junglePlanks] = blocks.buildItem(BlockId.junglePlanks, blockTextures);
+        itemMeshes[ItemId.acaciaPlanks] = blocks.buildItem(BlockId.acaciaPlanks, blockTextures);
+        itemMeshes[ItemId.darkOakPlanks] = blocks.buildItem(BlockId.darkOakPlanks, blockTextures);
+        itemMeshes[ItemId.mangrovePlanks] = blocks.buildItem(BlockId.mangrovePlanks, blockTextures);
+        itemMeshes[ItemId.cherryPlanks] = blocks.buildItem(BlockId.cherryPlanks, blockTextures);
+        itemMeshes[ItemId.bambooPlanks] = blocks.buildItem(BlockId.bambooPlanks, blockTextures);
+        itemMeshes[ItemId.paleOakPlanks] = blocks.buildItem(BlockId.paleOakPlanks, blockTextures);
+        itemMeshes[ItemId.crimsonPlanks] = blocks.buildItem(BlockId.crimsonPlanks, blockTextures);
+        itemMeshes[ItemId.warpedPlanks] = blocks.buildItem(BlockId.warpedPlanks, blockTextures);
+        itemMeshes[ItemId.cobblestone] = blocks.buildItem(BlockId.cobblestone, blockTextures);
+        itemMeshes[ItemId.glass] = blocks.buildItem(BlockId.glass, blockTextures);
         itemMeshes[ItemId.flintAndSteel] = blocks.buildGeneratedItem(
             blockTextures.flintAndSteel,flintImage);
         uint[8] poofTextures;
@@ -315,6 +345,14 @@ final class GameRenderer
         particles = new ParticleSystem(world, ParticleTextureSet(
             blockTextures.grassSide, blockTextures.dirt, blockTextures.stone,
             blockTextures.obsidian, blockTextures.netherrack,
+            blockTextures.bricks, blockTextures.oakPlanks,
+            blockTextures.sprucePlanks, blockTextures.birchPlanks,
+            blockTextures.junglePlanks, blockTextures.acaciaPlanks,
+            blockTextures.darkOakPlanks, blockTextures.mangrovePlanks,
+            blockTextures.cherryPlanks, blockTextures.bambooPlanks,
+            blockTextures.paleOakPlanks, blockTextures.crimsonPlanks,
+            blockTextures.warpedPlanks, blockTextures.cobblestone,
+            blockTextures.glass,
             load("textures/particle/critical_hit.png"),poofTextures,
             portalTextures,splashTextures,load("textures/particle/bubble.png"),
             bubblePopTextures));
@@ -898,8 +936,9 @@ final class GameRenderer
                 clouds.descriptorIndex, viewProjection, DrawLayer.world, cloudFog);
 
         foreach (textureIndex, geometry; blockMeshes)
-            frame.append(geometry, textureIndex, viewProjection,
-                DrawLayer.world, terrainFog);
+            if (textureIndex != blockTextures.glass)
+                frame.append(geometry, textureIndex, viewProjection,
+                    DrawLayer.world, terrainFog);
         if (portalMesh.length && portalFrames.length)
         {
             const portalFrame = cast(size_t)(elapsedSeconds * 20.0f)
@@ -907,6 +946,9 @@ final class GameRenderer
             frame.append(portalMesh,portalFrames[portalFrame],viewProjection,
                 DrawLayer.world,terrainFog);
         }
+        if (auto glassGeometry = blockTextures.glass in blockMeshes)
+            frame.append(*glassGeometry, blockTextures.glass, viewProjection,
+                DrawLayer.translucent, terrainFog);
         const waterFrame=cast(size_t)(elapsedSeconds*10.0f);
         const stillTexture=waterStillFrames.length
             ?waterStillFrames[waterFrame%waterStillFrames.length]
@@ -995,7 +1037,7 @@ final class GameRenderer
                     + Vec3(0,bob,0));
             foreach (textureIndex, geometry; *mesh)
                 frame.append(geometry, textureIndex, model * viewProjection,
-                    DrawLayer.world, terrainFog);
+                    stackLayer(item.item, textureIndex), terrainFog);
         }
 
         foreach (remote; multiplayer.remotePlayers())
@@ -1290,7 +1332,13 @@ private:
             walkPosition,walkSpeed,attackProgress,crouching,ageInTicks);
         foreach(textureIndex,geometry;*heldMesh)
             frame.append(geometry,textureIndex,model*viewProjection,
-                DrawLayer.world,fog);
+                stackLayer(stack.item,textureIndex),fog);
+    }
+
+    DrawLayer stackLayer(ItemId item, uint textureIndex) const
+    {
+        return item == ItemId.glass || textureIndex == blockTextures.glass
+            ? DrawLayer.translucent : DrawLayer.world;
     }
 
     void appendMenuBlur()

@@ -105,11 +105,7 @@ final class SoundManager
     void playStep(BlockId block,Vec3 position)
     {
         const type = soundType(block);
-        const choices = type.family == "grass" ? 6
-            : (type.family == "stone" ? 6 : 4);
-        const path = type.family == "netherrack"
-            ? "block/netherrack/step" ~ randomChoice(6) ~ ".ogg"
-            : "step/" ~ type.family ~ randomChoice(choices) ~ ".ogg";
+        const path = blockStepPath(type.family);
         playAt(path,position,
             type.volume * 0.15f, type.pitch * (0.9f + randomFloat() * 0.2f),
             soundVolume);
@@ -151,9 +147,7 @@ final class SoundManager
     void playBreak(BlockId block, Vec3 position)
     {
         const type = soundType(block);
-        const path = type.family == "netherrack"
-            ? "block/netherrack/break" ~ randomChoice(6) ~ ".ogg"
-            : "dig/" ~ type.family ~ randomChoice(4) ~ ".ogg";
+        const path = blockBreakPath(type.family);
         playAt(path, position,
             (type.volume + 1.0f) * 0.5f,
             type.pitch * (0.72f + randomFloat() * 0.16f));
@@ -162,9 +156,7 @@ final class SoundManager
     void playPlace(BlockId block,Vec3 position)
     {
         const type = soundType(block);
-        const path = type.family == "netherrack"
-            ? "block/netherrack/break" ~ randomChoice(6) ~ ".ogg"
-            : "dig/" ~ type.family ~ randomChoice(4) ~ ".ogg";
+        const path = blockPlacePath(type.family);
         playAt(path,position,
             (type.volume + 1.0f) * 0.5f, type.pitch * 0.8f, soundVolume);
     }
@@ -172,11 +164,7 @@ final class SoundManager
     void playHit(BlockId block, Vec3 position)
     {
         const type = soundType(block);
-        const choices = type.family == "grass" ? 6
-            : (type.family == "stone" ? 6 : 4);
-        const path = type.family == "netherrack"
-            ? "block/netherrack/step" ~ randomChoice(6) ~ ".ogg"
-            : "step/" ~ type.family ~ randomChoice(choices) ~ ".ogg";
+        const path = blockStepPath(type.family);
         playAt(path, position,
             type.volume * 0.25f, type.pitch * 0.5f);
     }
@@ -186,6 +174,50 @@ final class SoundManager
         play("damage/hit" ~ randomChoice(3) ~ ".ogg", 1.0f,
             0.9f + randomFloat() * 0.2f, playerVolume);
     }
+
+private:
+    string blockBreakPath(string family)
+    {
+        if (family == "glass")
+            return "random/glass" ~ randomChoice(3) ~ ".ogg";
+        if (family == "netherrack")
+            return "block/netherrack/break" ~ randomChoice(6) ~ ".ogg";
+        if (family == "cherry_wood" || family == "bamboo_wood"
+            || family == "nether_wood")
+        {
+            const choices = family == "nether_wood" ? 4 : 5;
+            return "block/" ~ family ~ "/break" ~ randomChoice(choices) ~ ".ogg";
+        }
+        return "dig/" ~ family ~ randomChoice(4) ~ ".ogg";
+    }
+
+    string blockPlacePath(string family)
+    {
+        // Java's glass place event uses the stone dig recordings; only its
+        // break event uses the distinctive glass shatter samples.
+        if (family == "glass")
+            return "dig/stone" ~ randomChoice(4) ~ ".ogg";
+        return blockBreakPath(family);
+    }
+
+    string blockStepPath(string family)
+    {
+        if (family == "glass")
+            family = "stone";
+        if (family == "netherrack")
+            return "block/netherrack/step" ~ randomChoice(6) ~ ".ogg";
+        if (family == "cherry_wood" || family == "bamboo_wood"
+            || family == "nether_wood")
+        {
+            const choices = family == "nether_wood" ? 5 : 6;
+            return "block/" ~ family ~ "/step" ~ randomChoice(choices) ~ ".ogg";
+        }
+        const choices = family == "grass" || family == "stone"
+            || family == "wood" ? 6 : 4;
+        return "step/" ~ family ~ randomChoice(choices) ~ ".ogg";
+    }
+
+public:
 
     void playFall(bool big)
     {

@@ -119,11 +119,20 @@ private final class ServerPlayer
         player.hardcore = hardcore;
         player.flying = gameMode == GameMode.spectator;
         player.dimension = DimensionId.overworld;
-        // Temporary test convenience requested for the first dimension pass.
-        // Creative still starts without building blocks; Pick Block remains
-        // the normal way to obtain those.
         if (gameMode == GameMode.creative)
-            player.inventory.hotbar[0] = ItemStack(ItemId.flintAndSteel, 1);
+        {
+            const starterItems = [
+                ItemId.flintAndSteel, ItemId.bricks, ItemId.oakPlanks,
+                ItemId.sprucePlanks, ItemId.birchPlanks, ItemId.junglePlanks,
+                ItemId.acaciaPlanks, ItemId.darkOakPlanks,
+                ItemId.mangrovePlanks, ItemId.cherryPlanks,
+                ItemId.bambooPlanks, ItemId.paleOakPlanks,
+                ItemId.crimsonPlanks, ItemId.warpedPlanks,
+                ItemId.cobblestone, ItemId.glass,
+            ];
+            foreach (index, item; starterItems)
+                player.inventory.storage[index] = ItemStack(item, 1);
+        }
     }
 }
 

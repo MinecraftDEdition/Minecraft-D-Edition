@@ -19,6 +19,21 @@ enum BlockId : ubyte
     waterFlow6,
     waterFlow7,
     waterFalling,
+    bricks,
+    oakPlanks,
+    sprucePlanks,
+    birchPlanks,
+    junglePlanks,
+    acaciaPlanks,
+    darkOakPlanks,
+    mangrovePlanks,
+    cherryPlanks,
+    bambooPlanks,
+    paleOakPlanks,
+    crimsonPlanks,
+    warpedPlanks,
+    cobblestone,
+    glass,
 }
 
 struct BlockSoundType
@@ -45,18 +60,33 @@ BlockSoundType soundType(BlockId block)
              BlockId.waterFlow3, BlockId.waterFlow4, BlockId.waterFlow5,
              BlockId.waterFlow6, BlockId.waterFlow7, BlockId.waterFalling:
             return BlockSoundType("stone", 0.0f, 1.0f);
+        case BlockId.bricks, BlockId.cobblestone:
+            return BlockSoundType("stone", 1.0f, 1.0f);
+        case BlockId.oakPlanks, BlockId.sprucePlanks, BlockId.birchPlanks,
+             BlockId.junglePlanks, BlockId.acaciaPlanks, BlockId.darkOakPlanks,
+             BlockId.mangrovePlanks, BlockId.paleOakPlanks:
+            return BlockSoundType("wood", 1.0f, 1.0f);
+        case BlockId.cherryPlanks:
+            return BlockSoundType("cherry_wood", 1.0f, 1.0f);
+        case BlockId.bambooPlanks:
+            return BlockSoundType("bamboo_wood", 1.0f, 1.0f);
+        case BlockId.crimsonPlanks, BlockId.warpedPlanks:
+            return BlockSoundType("nether_wood", 1.0f, 1.0f);
+        case BlockId.glass:
+            return BlockSoundType("glass", 1.0f, 1.0f);
     }
 }
 
 bool isOpaque(BlockId block)
 {
     return block != BlockId.air && block != BlockId.netherPortalX
-        && block != BlockId.netherPortalZ && !isWater(block);
+        && block != BlockId.netherPortalZ && block != BlockId.glass
+        && !isWater(block);
 }
 
 bool isSolid(BlockId block)
 {
-    return isOpaque(block);
+    return isOpaque(block) || block == BlockId.glass;
 }
 
 bool isNetherPortal(BlockId block)
@@ -116,6 +146,14 @@ float hardness(BlockId block)
              BlockId.waterFlow3, BlockId.waterFlow4, BlockId.waterFlow5,
              BlockId.waterFlow6, BlockId.waterFlow7, BlockId.waterFalling:
             return -1.0f;
+        case BlockId.bricks, BlockId.oakPlanks, BlockId.sprucePlanks,
+             BlockId.birchPlanks, BlockId.junglePlanks, BlockId.acaciaPlanks,
+             BlockId.darkOakPlanks, BlockId.mangrovePlanks,
+             BlockId.cherryPlanks, BlockId.bambooPlanks,
+             BlockId.paleOakPlanks, BlockId.crimsonPlanks,
+             BlockId.warpedPlanks, BlockId.cobblestone:
+            return 2.0f;
+        case BlockId.glass: return 0.3f;
     }
 }
 
@@ -127,7 +165,8 @@ float bareHandDestroyProgress(BlockId block)
     const value = hardness(block);
     if (value < 0.0f)
         return 0.0f;
-    const correctTool = block != BlockId.stone && block != BlockId.obsidian;
+    const correctTool = block != BlockId.stone && block != BlockId.obsidian
+        && block != BlockId.bricks && block != BlockId.cobblestone;
     return 1.0f / value / (correctTool ? 30.0f : 100.0f);
 }
 
@@ -171,7 +210,13 @@ FallSurface fallSurface(BlockId block)
              BlockId.netherPortalZ, BlockId.waterSource, BlockId.waterFlow1,
              BlockId.waterFlow2, BlockId.waterFlow3, BlockId.waterFlow4,
              BlockId.waterFlow5, BlockId.waterFlow6, BlockId.waterFlow7,
-             BlockId.waterFalling:
+             BlockId.waterFalling, BlockId.bricks, BlockId.oakPlanks,
+             BlockId.sprucePlanks, BlockId.birchPlanks, BlockId.junglePlanks,
+             BlockId.acaciaPlanks, BlockId.darkOakPlanks,
+             BlockId.mangrovePlanks, BlockId.cherryPlanks,
+             BlockId.bambooPlanks, BlockId.paleOakPlanks,
+             BlockId.crimsonPlanks, BlockId.warpedPlanks,
+             BlockId.cobblestone, BlockId.glass:
             return FallSurface.normal;
     }
 }
@@ -196,4 +241,11 @@ unittest
     assert(waterLevel(BlockId.waterFlow7)==7);
     assert(fabsf(waterHeight(BlockId.waterSource)-8.0f/9.0f)<0.00001f);
     assert(fabsf(waterHeight(BlockId.waterFlow7)-1.0f/9.0f)<0.00001f);
+    assert(isSolid(BlockId.glass) && !isOpaque(BlockId.glass));
+    assert(hardness(BlockId.glass) == 0.3f);
+    assert(hardness(BlockId.bricks) == 2.0f);
+    assert(soundType(BlockId.cherryPlanks).family == "cherry_wood");
+    assert(soundType(BlockId.bambooPlanks).family == "bamboo_wood");
+    assert(soundType(BlockId.crimsonPlanks).family == "nether_wood");
+    assert(soundType(BlockId.glass).family == "glass");
 }

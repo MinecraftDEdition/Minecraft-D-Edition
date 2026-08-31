@@ -16,6 +16,21 @@ struct ParticleTextureSet
     uint stone;
     uint obsidian;
     uint netherrack;
+    uint bricks;
+    uint oakPlanks;
+    uint sprucePlanks;
+    uint birchPlanks;
+    uint junglePlanks;
+    uint acaciaPlanks;
+    uint darkOakPlanks;
+    uint mangrovePlanks;
+    uint cherryPlanks;
+    uint bambooPlanks;
+    uint paleOakPlanks;
+    uint crimsonPlanks;
+    uint warpedPlanks;
+    uint cobblestone;
+    uint glass;
     uint criticalHit;
     uint[8] poof;
     uint[8] portal;
@@ -556,6 +571,21 @@ private:
             case BlockId.stone: return textures.stone;
             case BlockId.obsidian: return textures.obsidian;
             case BlockId.netherrack: return textures.netherrack;
+            case BlockId.bricks: return textures.bricks;
+            case BlockId.oakPlanks: return textures.oakPlanks;
+            case BlockId.sprucePlanks: return textures.sprucePlanks;
+            case BlockId.birchPlanks: return textures.birchPlanks;
+            case BlockId.junglePlanks: return textures.junglePlanks;
+            case BlockId.acaciaPlanks: return textures.acaciaPlanks;
+            case BlockId.darkOakPlanks: return textures.darkOakPlanks;
+            case BlockId.mangrovePlanks: return textures.mangrovePlanks;
+            case BlockId.cherryPlanks: return textures.cherryPlanks;
+            case BlockId.bambooPlanks: return textures.bambooPlanks;
+            case BlockId.paleOakPlanks: return textures.paleOakPlanks;
+            case BlockId.crimsonPlanks: return textures.crimsonPlanks;
+            case BlockId.warpedPlanks: return textures.warpedPlanks;
+            case BlockId.cobblestone: return textures.cobblestone;
+            case BlockId.glass: return textures.glass;
             case BlockId.air, BlockId.netherPortalX, BlockId.netherPortalZ:
                 return textures.dirt;
             case BlockId.waterSource, BlockId.waterFlow1, BlockId.waterFlow2,

@@ -11,6 +11,21 @@ enum ItemId : ubyte
     obsidian,
     netherrack,
     flintAndSteel,
+    bricks,
+    oakPlanks,
+    sprucePlanks,
+    birchPlanks,
+    junglePlanks,
+    acaciaPlanks,
+    darkOakPlanks,
+    mangrovePlanks,
+    cherryPlanks,
+    bambooPlanks,
+    paleOakPlanks,
+    crimsonPlanks,
+    warpedPlanks,
+    cobblestone,
+    glass,
 }
 
 struct ItemStack
@@ -119,7 +134,7 @@ struct Inventory
 
     /// Java-style Pick Block. Existing hotbar stacks are selected, existing
     /// storage stacks are swapped into the active hotbar slot, and Creative
-    /// creates a full stack only when the item is not already present.
+    /// creates one item only when the item is not already present.
     bool pickBlock(ItemId item, ref int selectedSlot, bool creative)
     {
         if (item == ItemId.none)
@@ -146,7 +161,7 @@ struct Inventory
         }
         if (!creative)
             return false;
-        hotbar[selectedSlot] = ItemStack(item, maximumStack, 5);
+        hotbar[selectedSlot] = ItemStack(item, 1, 5);
         return true;
     }
 
@@ -356,6 +371,21 @@ string itemName(ItemId item)
         case ItemId.obsidian: return "Obsidian";
         case ItemId.netherrack: return "Netherrack";
         case ItemId.flintAndSteel: return "Flint and Steel";
+        case ItemId.bricks: return "Bricks";
+        case ItemId.oakPlanks: return "Oak Planks";
+        case ItemId.sprucePlanks: return "Spruce Planks";
+        case ItemId.birchPlanks: return "Birch Planks";
+        case ItemId.junglePlanks: return "Jungle Planks";
+        case ItemId.acaciaPlanks: return "Acacia Planks";
+        case ItemId.darkOakPlanks: return "Dark Oak Planks";
+        case ItemId.mangrovePlanks: return "Mangrove Planks";
+        case ItemId.cherryPlanks: return "Cherry Planks";
+        case ItemId.bambooPlanks: return "Bamboo Planks";
+        case ItemId.paleOakPlanks: return "Pale Oak Planks";
+        case ItemId.crimsonPlanks: return "Crimson Planks";
+        case ItemId.warpedPlanks: return "Warped Planks";
+        case ItemId.cobblestone: return "Cobblestone";
+        case ItemId.glass: return "Glass";
     }
 }
 
@@ -384,6 +414,21 @@ ItemId blockItem(BlockId block)
         case BlockId.stone: return ItemId.stone;
         case BlockId.obsidian: return ItemId.obsidian;
         case BlockId.netherrack: return ItemId.netherrack;
+        case BlockId.bricks: return ItemId.bricks;
+        case BlockId.oakPlanks: return ItemId.oakPlanks;
+        case BlockId.sprucePlanks: return ItemId.sprucePlanks;
+        case BlockId.birchPlanks: return ItemId.birchPlanks;
+        case BlockId.junglePlanks: return ItemId.junglePlanks;
+        case BlockId.acaciaPlanks: return ItemId.acaciaPlanks;
+        case BlockId.darkOakPlanks: return ItemId.darkOakPlanks;
+        case BlockId.mangrovePlanks: return ItemId.mangrovePlanks;
+        case BlockId.cherryPlanks: return ItemId.cherryPlanks;
+        case BlockId.bambooPlanks: return ItemId.bambooPlanks;
+        case BlockId.paleOakPlanks: return ItemId.paleOakPlanks;
+        case BlockId.crimsonPlanks: return ItemId.crimsonPlanks;
+        case BlockId.warpedPlanks: return ItemId.warpedPlanks;
+        case BlockId.cobblestone: return ItemId.cobblestone;
+        case BlockId.glass: return ItemId.glass;
         case BlockId.netherPortalX, BlockId.netherPortalZ: return ItemId.none;
         case BlockId.waterSource, BlockId.waterFlow1, BlockId.waterFlow2,
              BlockId.waterFlow3, BlockId.waterFlow4, BlockId.waterFlow5,
@@ -403,6 +448,21 @@ BlockId placedBlock(ItemId item)
         case ItemId.obsidian: return BlockId.obsidian;
         case ItemId.netherrack: return BlockId.netherrack;
         case ItemId.flintAndSteel: return BlockId.air;
+        case ItemId.bricks: return BlockId.bricks;
+        case ItemId.oakPlanks: return BlockId.oakPlanks;
+        case ItemId.sprucePlanks: return BlockId.sprucePlanks;
+        case ItemId.birchPlanks: return BlockId.birchPlanks;
+        case ItemId.junglePlanks: return BlockId.junglePlanks;
+        case ItemId.acaciaPlanks: return BlockId.acaciaPlanks;
+        case ItemId.darkOakPlanks: return BlockId.darkOakPlanks;
+        case ItemId.mangrovePlanks: return BlockId.mangrovePlanks;
+        case ItemId.cherryPlanks: return BlockId.cherryPlanks;
+        case ItemId.bambooPlanks: return BlockId.bambooPlanks;
+        case ItemId.paleOakPlanks: return BlockId.paleOakPlanks;
+        case ItemId.crimsonPlanks: return BlockId.crimsonPlanks;
+        case ItemId.warpedPlanks: return BlockId.warpedPlanks;
+        case ItemId.cobblestone: return BlockId.cobblestone;
+        case ItemId.glass: return BlockId.glass;
     }
 }
 
@@ -414,7 +474,20 @@ ItemId bareHandDrop(BlockId block)
     {
         case BlockId.grass, BlockId.dirt: return ItemId.dirt;
         case BlockId.netherrack: return ItemId.netherrack;
+        case BlockId.oakPlanks: return ItemId.oakPlanks;
+        case BlockId.sprucePlanks: return ItemId.sprucePlanks;
+        case BlockId.birchPlanks: return ItemId.birchPlanks;
+        case BlockId.junglePlanks: return ItemId.junglePlanks;
+        case BlockId.acaciaPlanks: return ItemId.acaciaPlanks;
+        case BlockId.darkOakPlanks: return ItemId.darkOakPlanks;
+        case BlockId.mangrovePlanks: return ItemId.mangrovePlanks;
+        case BlockId.cherryPlanks: return ItemId.cherryPlanks;
+        case BlockId.bambooPlanks: return ItemId.bambooPlanks;
+        case BlockId.paleOakPlanks: return ItemId.paleOakPlanks;
+        case BlockId.crimsonPlanks: return ItemId.crimsonPlanks;
+        case BlockId.warpedPlanks: return ItemId.warpedPlanks;
         case BlockId.air, BlockId.stone, BlockId.obsidian,
+             BlockId.bricks, BlockId.cobblestone, BlockId.glass,
              BlockId.netherPortalX, BlockId.netherPortalZ: return ItemId.none;
         case BlockId.waterSource, BlockId.waterFlow1, BlockId.waterFlow2,
              BlockId.waterFlow3, BlockId.waterFlow4, BlockId.waterFlow5,
@@ -458,7 +531,7 @@ unittest
     int selected = 2;
     assert(creative.pickBlock(ItemId.stone, selected, true));
     assert(selected == 2 && creative.hotbar[2].item == ItemId.stone
-        && creative.hotbar[2].count == Inventory.maximumStack);
+        && creative.hotbar[2].count == 1);
     creative.hotbar[5] = ItemStack(ItemId.dirt, 17);
     assert(creative.pickBlock(ItemId.dirt, selected, true) && selected == 5);
     creative.storage[3] = ItemStack(ItemId.grassBlock, 9);
@@ -466,4 +539,8 @@ unittest
     assert(creative.pickBlock(ItemId.grassBlock, selected, true));
     assert(creative.hotbar[1].item == ItemId.grassBlock
         && creative.hotbar[1].count == 9 && creative.storage[3].empty());
+    assert(blockItem(BlockId.glass) == ItemId.glass);
+    assert(placedBlock(ItemId.warpedPlanks) == BlockId.warpedPlanks);
+    assert(bareHandDrop(BlockId.oakPlanks) == ItemId.oakPlanks);
+    assert(bareHandDrop(BlockId.glass) == ItemId.none);
 }

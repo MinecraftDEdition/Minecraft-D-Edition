@@ -292,6 +292,21 @@ private:
                 top = side = textures.obsidian; break;
             case ItemId.netherrack:
                 top = side = textures.netherrack; break;
+            case ItemId.bricks: top = side = textures.bricks; break;
+            case ItemId.oakPlanks: top = side = textures.oakPlanks; break;
+            case ItemId.sprucePlanks: top = side = textures.sprucePlanks; break;
+            case ItemId.birchPlanks: top = side = textures.birchPlanks; break;
+            case ItemId.junglePlanks: top = side = textures.junglePlanks; break;
+            case ItemId.acaciaPlanks: top = side = textures.acaciaPlanks; break;
+            case ItemId.darkOakPlanks: top = side = textures.darkOakPlanks; break;
+            case ItemId.mangrovePlanks: top = side = textures.mangrovePlanks; break;
+            case ItemId.cherryPlanks: top = side = textures.cherryPlanks; break;
+            case ItemId.bambooPlanks: top = side = textures.bambooPlanks; break;
+            case ItemId.paleOakPlanks: top = side = textures.paleOakPlanks; break;
+            case ItemId.crimsonPlanks: top = side = textures.crimsonPlanks; break;
+            case ItemId.warpedPlanks: top = side = textures.warpedPlanks; break;
+            case ItemId.cobblestone: top = side = textures.cobblestone; break;
+            case ItemId.glass: top = side = textures.glass; break;
             case ItemId.flintAndSteel:
             {
                 const centerX = x + 8.0f;

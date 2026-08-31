@@ -24,7 +24,7 @@ enum GamePacketType : ubyte
 }
 
 enum uint maximumGamePacketBytes = 1024 * 1024;
-enum ushort gameProtocolVersion = 14;
+enum ushort gameProtocolVersion = 15;
 
 enum DamageCause : ubyte
 {
