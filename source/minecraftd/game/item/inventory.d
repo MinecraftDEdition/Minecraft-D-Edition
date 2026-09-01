@@ -26,6 +26,7 @@ enum ItemId : ubyte
     warpedPlanks,
     cobblestone,
     glass,
+    bedrock,
 }
 
 struct ItemStack
@@ -386,6 +387,7 @@ string itemName(ItemId item)
         case ItemId.warpedPlanks: return "Warped Planks";
         case ItemId.cobblestone: return "Cobblestone";
         case ItemId.glass: return "Glass";
+        case ItemId.bedrock: return "Bedrock";
     }
 }
 
@@ -429,6 +431,7 @@ ItemId blockItem(BlockId block)
         case BlockId.warpedPlanks: return ItemId.warpedPlanks;
         case BlockId.cobblestone: return ItemId.cobblestone;
         case BlockId.glass: return ItemId.glass;
+        case BlockId.bedrock: return ItemId.bedrock;
         case BlockId.netherPortalX, BlockId.netherPortalZ: return ItemId.none;
         case BlockId.waterSource, BlockId.waterFlow1, BlockId.waterFlow2,
              BlockId.waterFlow3, BlockId.waterFlow4, BlockId.waterFlow5,
@@ -463,6 +466,7 @@ BlockId placedBlock(ItemId item)
         case ItemId.warpedPlanks: return BlockId.warpedPlanks;
         case ItemId.cobblestone: return BlockId.cobblestone;
         case ItemId.glass: return BlockId.glass;
+        case ItemId.bedrock: return BlockId.bedrock;
     }
 }
 
@@ -488,7 +492,8 @@ ItemId bareHandDrop(BlockId block)
         case BlockId.warpedPlanks: return ItemId.warpedPlanks;
         case BlockId.air, BlockId.stone, BlockId.obsidian,
              BlockId.bricks, BlockId.cobblestone, BlockId.glass,
-             BlockId.netherPortalX, BlockId.netherPortalZ: return ItemId.none;
+             BlockId.netherPortalX, BlockId.netherPortalZ,
+             BlockId.bedrock: return ItemId.none;
         case BlockId.waterSource, BlockId.waterFlow1, BlockId.waterFlow2,
              BlockId.waterFlow3, BlockId.waterFlow4, BlockId.waterFlow5,
              BlockId.waterFlow6, BlockId.waterFlow7, BlockId.waterFalling:
@@ -540,6 +545,8 @@ unittest
     assert(creative.hotbar[1].item == ItemId.grassBlock
         && creative.hotbar[1].count == 9 && creative.storage[3].empty());
     assert(blockItem(BlockId.glass) == ItemId.glass);
+    assert(blockItem(BlockId.bedrock) == ItemId.bedrock);
+    assert(placedBlock(ItemId.bedrock) == BlockId.bedrock);
     assert(placedBlock(ItemId.warpedPlanks) == BlockId.warpedPlanks);
     assert(bareHandDrop(BlockId.oakPlanks) == ItemId.oakPlanks);
     assert(bareHandDrop(BlockId.glass) == ItemId.none);

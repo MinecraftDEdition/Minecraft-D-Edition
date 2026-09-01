@@ -11,6 +11,9 @@ import std.string : toStringz;
 import std.string : split;
 import std.utf : toUTF16, toUTF16z, toUTF8;
 
+import minecraftd.platform.desktop.gamepad : SdlGamepad;
+import minecraftd.platform.input : GamepadState;
+
 private __gshared int pendingWheelDelta;
 private __gshared wchar[256] pendingCharacters;
 private __gshared size_t pendingCharacterCount;
@@ -102,11 +105,14 @@ final class GameWindow
     bool running = true;
     bool mouseCaptured = false;
     bool fullscreen;
+    bool cursorVisible = true;
 
     private string statePath;
     private WINDOWPLACEMENT windowedPlacement;
     private LONG_PTR windowedStyle;
     private bool persistWindowState = true;
+    private SdlGamepad gamepadBackend;
+    private GamepadState gamepad;
 
     this(string title, int width = defaultWidth, int height = defaultHeight,
         int localTestIndex = 0)
@@ -186,11 +192,17 @@ final class GameWindow
             enterFullscreen();
         updateClientSize();
         pendingClientWidth = pendingClientHeight = 0;
+        gamepadBackend = new SdlGamepad();
         setMouseCapture(true);
     }
 
     ~this()
     {
+        if (gamepadBackend !is null)
+        {
+            gamepadBackend.shutdown();
+            gamepadBackend = null;
+        }
         setMouseCapture(false);
         if (persistWindowState)
             saveState();
@@ -218,6 +230,12 @@ final class GameWindow
             closeRequested = false;
             running = false;
         }
+        pollGamepad();
+    }
+
+    GamepadState gamepadState() const
+    {
+        return gamepad;
     }
 
     bool consumeResize(out int resizedWidth, out int resizedHeight)
@@ -319,6 +337,17 @@ final class GameWindow
             SetCursor(desiredCursor);
     }
 
+    void setCursorVisible(bool visible)
+    {
+        if (mouseCaptured || cursorVisible == visible)
+            return;
+        if (visible)
+            while (ShowCursor(TRUE) < 0) {}
+        else
+            while (ShowCursor(FALSE) >= 0) {}
+        cursorVisible = visible;
+    }
+
     void toggleFullscreen()
     {
         if (fullscreen)
@@ -398,15 +427,23 @@ final class GameWindow
             ClientToScreen(handle, &center);
             SetCursorPos(center.x, center.y);
             while (ShowCursor(FALSE) >= 0) {}
+            cursorVisible = false;
         }
         else
         {
             ReleaseCapture();
             while (ShowCursor(TRUE) < 0) {}
+            cursorVisible = true;
         }
     }
 
 private:
+    void pollGamepad()
+    {
+        gamepad = gamepadBackend is null
+            ? GamepadState.init : gamepadBackend.poll();
+    }
+
     struct SavedState
     {
         bool valid;

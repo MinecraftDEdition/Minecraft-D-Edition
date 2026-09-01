@@ -16,6 +16,7 @@ struct ParticleTextureSet
     uint stone;
     uint obsidian;
     uint netherrack;
+    uint bedrock;
     uint bricks;
     uint oakPlanks;
     uint sprucePlanks;
@@ -571,6 +572,7 @@ private:
             case BlockId.stone: return textures.stone;
             case BlockId.obsidian: return textures.obsidian;
             case BlockId.netherrack: return textures.netherrack;
+            case BlockId.bedrock: return textures.bedrock;
             case BlockId.bricks: return textures.bricks;
             case BlockId.oakPlanks: return textures.oakPlanks;
             case BlockId.sprucePlanks: return textures.sprucePlanks;

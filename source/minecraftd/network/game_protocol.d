@@ -22,10 +22,15 @@ enum GamePacketType : ubyte
     combatEvent,
     dimensionChange,
     profileUpdate,
+    chunkData,
+    chunkUnload,
 }
 
 enum uint maximumGamePacketBytes = 1024 * 1024;
-enum ushort gameProtocolVersion = 16;
+enum ushort gameProtocolVersion = 19;
+
+enum ubyte chunkEncodingRaw = 0;
+enum ubyte chunkEncodingRle = 1;
 
 enum DamageCause : ubyte
 {
@@ -33,6 +38,7 @@ enum DamageCause : ubyte
     generic,
     fall,
     drown,
+    voidDamage,
 }
 
 enum CombatEventType : ubyte
@@ -75,6 +81,10 @@ struct PlayerInputCommand
     bool flightTogglePressed = false;
     ubyte skinParts = 0x3F;
     bool mainHandRight = true;
+    float moveForward = 0.0f;
+    float moveStrafe = 0.0f;
+    ubyte viewDistance = 6;
+    ubyte simulationDistance = 5;
 
     bool down(ubyte flag) const { return (flags & flag) != 0; }
 }
@@ -364,6 +374,60 @@ uint decodeFrameLength(const(ubyte)[] header)
     return reader.readU32();
 }
 
+/// Compact the long same-block runs common in generated chunks. The wire
+/// representation is a sequence of big-endian (run length, block id) triples.
+ubyte[] encodeChunkRuns(const(ubyte)[] source)
+{
+    ubyte[] result;
+    result.reserve(source.length / 4);
+    size_t cursor;
+    while (cursor < source.length)
+    {
+        const value = source[cursor];
+        size_t length = 1;
+        while (cursor + length < source.length
+            && source[cursor + length] == value
+            && length < ushort.max)
+            ++length;
+        result ~= cast(ubyte)(length >> 8);
+        result ~= cast(ubyte)length;
+        result ~= value;
+        cursor += length;
+    }
+    return result;
+}
+
+/// Decode a chunk run stream into an exact-size allocation. Invalid or
+/// oversized streams are rejected before they can reach the world renderer.
+bool decodeChunkRuns(const(ubyte)[] encoded, size_t expectedLength,
+    out ubyte[] result)
+{
+    result = null;
+    if (encoded.length % 3 != 0)
+        return false;
+    result.reserve(expectedLength);
+    foreach (cursor; 0 .. encoded.length / 3)
+    {
+        const offset = cursor * 3;
+        const length = (cast(size_t)encoded[offset] << 8)
+            | cast(size_t)encoded[offset + 1];
+        if (length == 0 || result.length + length > expectedLength)
+        {
+            result = null;
+            return false;
+        }
+        const previousLength = result.length;
+        result.length += length;
+        result[previousLength .. $] = encoded[offset + 2];
+    }
+    if (result.length != expectedLength)
+    {
+        result = null;
+        return false;
+    }
+    return true;
+}
+
 ubyte[] encodeInput(PlayerInputCommand input)
 {
     PacketWriter writer;
@@ -373,6 +437,16 @@ ubyte[] encodeInput(PlayerInputCommand input)
     writer.putBool(input.attackPressed);
     writer.putBool(input.flightTogglePressed);
     writer.putU8(input.skinParts); writer.putBool(input.mainHandRight);
+    // Optional trailing axes preserve compatibility: older servers ignore
+    // them, while newer servers derive digital axes for older clients.
+    const forwardAxis=input.moveForward!=0?input.moveForward:
+        ((input.down(inputForward)?1.0f:0.0f)
+            -(input.down(inputBack)?1.0f:0.0f));
+    const strafeAxis=input.moveStrafe!=0?input.moveStrafe:
+        ((input.down(inputRight)?1.0f:0.0f)
+            -(input.down(inputLeft)?1.0f:0.0f));
+    writer.putF32(forwardAxis); writer.putF32(strafeAxis);
+    writer.putU8(input.viewDistance);writer.putU8(input.simulationDistance);
     return framePacket(GamePacketType.playerInput, writer.data);
 }
 
@@ -386,8 +460,31 @@ PlayerInputCommand decodeInput(const(ubyte)[] payload, out bool valid)
     result.attackPressed = reader.readBool();
     result.flightTogglePressed = reader.readBool();
     result.skinParts = reader.readU8(); result.mainHandRight = reader.readBool();
+    if (reader.cursor + 8 <= reader.data.length)
+    {
+        result.moveForward = sanitizeAxis(reader.readF32());
+        result.moveStrafe = sanitizeAxis(reader.readF32());
+    }
+    else
+    {
+        result.moveForward = (result.down(inputForward) ? 1.0f : 0.0f)
+            - (result.down(inputBack) ? 1.0f : 0.0f);
+        result.moveStrafe = (result.down(inputRight) ? 1.0f : 0.0f)
+            - (result.down(inputLeft) ? 1.0f : 0.0f);
+    }
+    if(reader.cursor+2<=reader.data.length)
+    {
+        result.viewDistance=reader.readU8();
+        result.simulationDistance=reader.readU8();
+    }
     valid = reader.valid;
     return result;
+}
+
+private float sanitizeAxis(float value) pure nothrow
+{
+    if (value != value) return 0.0f;
+    return value < -1.0f ? -1.0f : (value > 1.0f ? 1.0f : value);
 }
 
 unittest
@@ -396,6 +493,10 @@ unittest
         3, true, 90.0f, -12.0f, true);
     input.skinParts = 0x15;
     input.mainHandRight = false;
+    input.moveForward = 0.42f;
+    input.moveStrafe = -0.75f;
+    input.viewDistance = 9;
+    input.simulationDistance = 7;
     auto encoded = encodeInput(input);
     assert(decodeFrameLength(encoded[0 .. 4]) == encoded.length - 4);
     bool valid;
@@ -404,6 +505,8 @@ unittest
         && decoded.attackPressed);
     assert(decoded.down(inputForward) && decoded.down(inputJump));
     assert(decoded.skinParts == 0x15 && !decoded.mainHandRight);
+    assert(decoded.moveForward == 0.42f && decoded.moveStrafe == -0.75f);
+    assert(decoded.viewDistance==9&&decoded.simulationDistance==7);
 
     NetworkPlayerState player;
     player.id = 7;
@@ -436,4 +539,17 @@ unittest
         && restored.inventory.storage[4].count==37);
     assert(restored.inventory.carried.item==ItemId.dirt
         && restored.inventory.carried.count==12);
+
+    ubyte[] chunkLike;
+    chunkLike.length = 70_000;
+    chunkLike[0 .. 65_535] = 4;
+    chunkLike[65_535 .. $] = 7;
+    const compressed = encodeChunkRuns(chunkLike);
+    ubyte[] expanded;
+    assert(compressed.length == 6);
+    assert(decodeChunkRuns(compressed, chunkLike.length, expanded));
+    assert(expanded == chunkLike);
+    assert(!decodeChunkRuns([0, 0, 4], 1, expanded));
+    assert(!decodeChunkRuns([0, 2, 4], 1, expanded));
+    assert(!decodeChunkRuns([0, 1], 1, expanded));
 }

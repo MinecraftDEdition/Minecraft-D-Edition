@@ -124,7 +124,8 @@ PortalRectangle findFrame(World world, int x, int y, int z, PortalAxis axis)
     const dx = axis == PortalAxis.x ? 1 : 0;
     const dz = axis == PortalAxis.z ? 1 : 0;
     int bottomY = y;
-    while (bottomY > 0 && validInterior(world.getBlock(x, bottomY - 1, z))
+    while (bottomY > world.minimumBuildY()
+        && validInterior(world.getBlock(x, bottomY - 1, z))
         && y - bottomY < maximumPortalHeight)
         --bottomY;
 
@@ -190,7 +191,8 @@ PortalRectangle findExisting(World world, int x, int y, int z, PortalAxis axis)
     const dx = axis == PortalAxis.x ? 1 : 0;
     const dz = axis == PortalAxis.z ? 1 : 0;
     int minY = y;
-    while (minY > 0 && world.getBlock(x, minY - 1, z) == portalBlock)
+    while (minY > world.minimumBuildY()
+        && world.getBlock(x, minY - 1, z) == portalBlock)
         --minY;
     int minX = x, minZ = z;
     while (world.getBlock(minX - dx, minY, minZ - dz) == portalBlock)

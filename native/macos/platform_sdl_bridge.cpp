@@ -336,6 +336,11 @@ void mcdPlatformSetCursor(void* value, int shape) {
     if (context->cursors[shape]) SDL_SetCursor(context->cursors[shape]);
 }
 
+void mcdPlatformSetCursorVisible(void*, int visible) {
+    if (visible) SDL_ShowCursor();
+    else SDL_HideCursor();
+}
+
 void mcdPlatformSetFullscreen(void* value, int enabled) {
     auto* context = static_cast<WindowContext*>(value);
     if (context) SDL_SetWindowFullscreen(context->window, enabled != 0);

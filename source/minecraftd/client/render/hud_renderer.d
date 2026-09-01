@@ -307,6 +307,7 @@ private:
             case ItemId.warpedPlanks: top = side = textures.warpedPlanks; break;
             case ItemId.cobblestone: top = side = textures.cobblestone; break;
             case ItemId.glass: top = side = textures.glass; break;
+            case ItemId.bedrock: top = side = textures.bedrock; break;
             case ItemId.flintAndSteel:
             {
                 const centerX = x + 8.0f;

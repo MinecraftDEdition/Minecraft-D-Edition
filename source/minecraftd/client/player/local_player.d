@@ -32,6 +32,18 @@ final class LocalPlayer : Player
         bool jumping, bool crouchRequested, bool sprinting,
         bool authoritativeDamage = false)
     {
+        simulateTick(world,
+            (forward ? 1.0f : 0.0f) - (back ? 1.0f : 0.0f),
+            (right ? 1.0f : 0.0f) - (left ? 1.0f : 0.0f),
+            jumping, crouchRequested, sprinting, authoritativeDamage);
+    }
+
+    /// Analog movement overload used by controllers. Keyboard callers retain
+    /// the boolean overload above, while both paths share identical physics.
+    void simulateTick(World world, float forwardAxis, float strafeAxis,
+        bool jumping, bool crouchRequested, bool sprinting,
+        bool authoritativeDamage = false)
+    {
         beginTick();
         previousVisualCorrection = visualCorrection;
         visualCorrection = visualCorrection * 0.6f;
@@ -54,8 +66,8 @@ final class LocalPlayer : Player
         else if (crouching && world.isUnobstructed(standingBoundingBox()))
             crouching = false;
 
-        float forwardAxis = (forward ? 1.0f : 0.0f) - (back ? 1.0f : 0.0f);
-        float strafeAxis = (right ? 1.0f : 0.0f) - (left ? 1.0f : 0.0f);
+        forwardAxis = clamp(forwardAxis, -1.0f, 1.0f);
+        strafeAxis = clamp(strafeAxis, -1.0f, 1.0f);
         const magnitude = sqrtf(forwardAxis * forwardAxis + strafeAxis * strafeAxis);
         if (magnitude > 1.0f)
         {
@@ -311,8 +323,15 @@ final class LocalPlayer : Player
 
     void look(float deltaX, float deltaY)
     {
-        yaw += deltaX * 0.12f;
-        pitch = clamp(pitch + deltaY * 0.12f, -89.9f, 89.9f);
+        lookDegrees(deltaX * 0.12f, deltaY * 0.12f);
+    }
+
+    /// Applies an already time-scaled camera rotation. Controller look speed
+    /// is expressed in degrees per second, unlike raw mouse motion.
+    void lookDegrees(float deltaYaw, float deltaPitch)
+    {
+        yaw += deltaYaw;
+        pitch = clamp(pitch + deltaPitch, -89.9f, 89.9f);
         constrainHeadToNeck();
     }
 

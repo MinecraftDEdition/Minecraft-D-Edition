@@ -408,7 +408,8 @@ unsigned long long mdGetGPUDescriptorHandleStart(void* heap) {
 void* mdCreateGraphicsPipeline(void* d, void* root, const void* vs, size_t vsSize,
                                const void* ps, size_t psSize, unsigned rtvFormat,
                                unsigned dsvFormat, int depthEnabled,
-                               int depthWriteEnabled, int blendMode) {
+                               int depthWriteEnabled, int blendMode,
+                               int cullBackFaces) {
     D3D12_INPUT_ELEMENT_DESC input[] = {
         {"POSITION", 0, DXGI_FORMAT_R32G32B32_FLOAT, 0, 0, D3D12_INPUT_CLASSIFICATION_PER_VERTEX_DATA, 0},
         {"TEXCOORD", 0, DXGI_FORMAT_R32G32_FLOAT, 0, 12, D3D12_INPUT_CLASSIFICATION_PER_VERTEX_DATA, 0},
@@ -420,7 +421,8 @@ void* mdCreateGraphicsPipeline(void* d, void* root, const void* vs, size_t vsSiz
     pso.PS = {ps, psSize};
     pso.InputLayout = {input, _countof(input)};
     pso.RasterizerState.FillMode = D3D12_FILL_MODE_SOLID;
-    pso.RasterizerState.CullMode = D3D12_CULL_MODE_NONE;
+    pso.RasterizerState.CullMode = cullBackFaces
+        ? D3D12_CULL_MODE_BACK : D3D12_CULL_MODE_NONE;
     pso.RasterizerState.DepthClipEnable = TRUE;
     auto& blend = pso.BlendState.RenderTarget[0];
     blend.BlendEnable = TRUE;

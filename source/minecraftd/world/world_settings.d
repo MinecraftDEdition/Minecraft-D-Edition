@@ -69,6 +69,9 @@ struct WorldSettings
     bool hardcore;
     bool allowCommands;
     bool generateStructures = true;
+    bool generateCaves = true;
+    bool generateRivers = true;
+    bool generateOceans = true;
     bool bonusChest;
     Vec3 spawn = Vec3(32.5f, 16.0f, 32.5f);
 
@@ -128,6 +131,9 @@ void saveWorldMetadata(string directory, const WorldSettings settings)
         ~ "hardcore=" ~ (settings.hardcore ? "1" : "0") ~ "\n"
         ~ "commands=" ~ (settings.allowCommands ? "1" : "0") ~ "\n"
         ~ "structures=" ~ (settings.generateStructures ? "1" : "0") ~ "\n"
+        ~ "caves=" ~ (settings.generateCaves ? "1" : "0") ~ "\n"
+        ~ "rivers=" ~ (settings.generateRivers ? "1" : "0") ~ "\n"
+        ~ "oceans=" ~ (settings.generateOceans ? "1" : "0") ~ "\n"
         ~ "bonus=" ~ (settings.bonusChest ? "1" : "0") ~ "\n"
         ~ "spawnx=" ~ to!string(settings.spawn.x) ~ "\n"
         ~ "spawny=" ~ to!string(settings.spawn.y) ~ "\n"
@@ -162,6 +168,9 @@ WorldSettings loadWorldMetadata(string directory)
                 case "hardcore": settings.hardcore = value == "1"; break;
                 case "commands": settings.allowCommands = value == "1"; break;
                 case "structures": settings.generateStructures = value != "0"; break;
+                case "caves": settings.generateCaves = value != "0"; break;
+                case "rivers": settings.generateRivers = value != "0"; break;
+                case "oceans": settings.generateOceans = value != "0"; break;
                 case "bonus": settings.bonusChest = value == "1"; break;
                 case "spawnx": settings.spawn.x = to!float(value); break;
                 case "spawny": settings.spawn.y = to!float(value); break;

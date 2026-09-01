@@ -58,7 +58,7 @@ enum WorldMenuAction : ubyte
 {
     none, worldList, play, create, edit, deleteWorld, recreate, cancel,
     tabGame, tabWorld, tabMore, name, seed, mode, difficulty, commands,
-    worldType, structures, bonusChest, gameRules, dataPacks,
+    worldType, structures, bonusChest, caves, rivers, oceans, gameRules, dataPacks,
     confirmCreate, cancelCreate, confirmDelete, cancelDelete,
 }
 
@@ -481,6 +481,9 @@ final class TitleScreenRenderer
                 if (MenuRect(center-150,105,300,20).contains(x,y)) return WorldMenuAction.worldType;
                 if (MenuRect(center-150,138,148,20).contains(x,y)) return WorldMenuAction.structures;
                 if (MenuRect(center+2,138,148,20).contains(x,y)) return WorldMenuAction.bonusChest;
+                if (MenuRect(center-150,162,148,20).contains(x,y)) return WorldMenuAction.caves;
+                if (MenuRect(center+2,162,148,20).contains(x,y)) return WorldMenuAction.rivers;
+                if (MenuRect(center-150,186,300,20).contains(x,y)) return WorldMenuAction.oceans;
                 break;
             case WorldCreationTab.more:
                 if (MenuRect(center-150,68,300,20).contains(x,y)) return WorldMenuAction.gameRules;
@@ -573,6 +576,9 @@ final class TitleScreenRenderer
                 appendMenuButton(frame,center-150,105,300,"World Type: "~(state.draft.worldType==WorldType.normal?"Normal":"Flat"),hovered==WorldMenuAction.worldType,w,h,textures,font,fontTexture,!state.editing);
                 appendMenuButton(frame,center-150,138,148,"Structures: "~(state.draft.generateStructures?"ON":"OFF"),hovered==WorldMenuAction.structures,w,h,textures,font,fontTexture,!state.editing);
                 appendMenuButton(frame,center+2,138,148,"Bonus Chest: "~(state.draft.bonusChest?"ON":"OFF"),hovered==WorldMenuAction.bonusChest,w,h,textures,font,fontTexture,!state.editing);
+                appendMenuButton(frame,center-150,162,148,"Caves: "~(state.draft.generateCaves?"ON":"OFF"),hovered==WorldMenuAction.caves,w,h,textures,font,fontTexture,!state.editing);
+                appendMenuButton(frame,center+2,162,148,"Rivers: "~(state.draft.generateRivers?"ON":"OFF"),hovered==WorldMenuAction.rivers,w,h,textures,font,fontTexture,!state.editing);
+                appendMenuButton(frame,center-150,186,300,"Oceans: "~(state.draft.generateOceans?"ON":"OFF"),hovered==WorldMenuAction.oceans,w,h,textures,font,fontTexture,!state.editing);
                 break;
             case WorldCreationTab.more:
                 appendMenuButton(frame,center-150,68,300,"Game Rules",hovered==WorldMenuAction.gameRules,w,h,textures,font,fontTexture);

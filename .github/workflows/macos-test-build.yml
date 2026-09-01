@@ -145,10 +145,27 @@ jobs:
 
       - name: Generate signed update feed
         env:
+          GH_TOKEN: ${{ github.token }}
           SPARKLE_PRIVATE_KEY: ${{ secrets.MACOS_SPARKLE_ED25519 }}
         run: |
           release_dir='distribution/macos/build/release'
+          previous_dir="$RUNNER_TEMP/mde-previous-macos"
           mkdir -p "$release_dir"
+          mkdir -p "$previous_dir"
+
+          # Sparkle creates a signed binary delta when both the previous and
+          # current archives are present. A missing previous release is valid
+          # for the first publication and simply produces a full update.
+          if gh release download Test \
+              --repo "$GITHUB_REPOSITORY" \
+              --pattern 'Minecraft.D.Edition-macOS-arm64.dmg' \
+              --dir "$previous_dir"; then
+            cp "$previous_dir/Minecraft.D.Edition-macOS-arm64.dmg" \
+              "$release_dir/Minecraft.D.Edition-macOS-previous-arm64.dmg"
+          else
+            echo 'No previous macOS release was available; publishing a full update only.'
+          fi
+
           cp distribution/macos/build/Minecraft.D.Edition-macOS-arm64.dmg \
             "$release_dir/Minecraft.D.Edition-macOS-arm64.dmg"
           printf '%s\n' "$SPARKLE_PRIVATE_KEY" | \
@@ -156,7 +173,7 @@ jobs:
               --ed-key-file - \
               --download-url-prefix \
                 'https://github.com/MinecraftDEdition/Minecraft-D-Edition/releases/download/Test/' \
-              --maximum-deltas 0 \
+              --maximum-deltas 1 \
               -o "$release_dir/mde-macos-appcast.xml" \
               "$release_dir"
           python3 - <<'PY'
@@ -171,6 +188,11 @@ jobs:
           appcast.write_text(contents.replace(old_title, new_title, 1), encoding="utf-8")
           PY
 
+          if [[ -f "$release_dir/Minecraft.D.Edition-macOS-previous-arm64.dmg" ]]; then
+            grep -q 'sparkle:deltaFrom' "$release_dir/mde-macos-appcast.xml"
+            find "$release_dir" -maxdepth 1 -name '*.delta' -print -quit | grep -q .
+          fi
+
       - name: Upload Mac test installer
         uses: actions/upload-artifact@v6
         with:
@@ -178,6 +200,7 @@ jobs:
           path: |
             distribution/macos/build/release/Minecraft.D.Edition-macOS-arm64.dmg
             distribution/macos/build/release/mde-macos-appcast.xml
+            distribution/macos/build/release/*.delta
           if-no-files-found: error
           retention-days: 14
 
@@ -186,8 +209,13 @@ jobs:
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
-          gh release upload Test \
-            distribution/macos/build/release/Minecraft.D.Edition-macOS-arm64.dmg \
-            distribution/macos/build/release/mde-macos-appcast.xml \
-            --clobber \
+          release_dir='distribution/macos/build/release'
+          assets=(
+            "$release_dir/Minecraft.D.Edition-macOS-arm64.dmg"
+            "$release_dir/mde-macos-appcast.xml"
+          )
+          while IFS= read -r -d '' delta; do
+            assets+=("$delta")
+          done < <(find "$release_dir" -maxdepth 1 -name '*.delta' -print0)
+          gh release upload Test "${assets[@]}" --clobber \
             --repo "$GITHUB_REPOSITORY"

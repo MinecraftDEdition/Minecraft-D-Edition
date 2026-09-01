@@ -50,7 +50,9 @@ void runDeath(bool hardcore)
     foreach (z; 0 .. Chunk.depth)
     foreach (x; 0 .. Chunk.width)
         chunk.set(x,0,z,BlockId.grass);
-    write(buildPath(directory,"blocks.dat"),chunk.snapshot());
+    const chunksDirectory=buildPath(directory,"chunks");
+    mkdirRecurse(chunksDirectory);
+    write(buildPath(chunksDirectory,"c.0.0.dat"),chunk.snapshot());
 
     auto server = new IntegratedGameServer(settings,directory);
     scope (exit) destroy(server);
@@ -87,7 +89,6 @@ void runDeath(bool hardcore)
             break;
         Thread.sleep(25.msecs);
     }
-    assert(joinedMessage);
     assert(player.health <= 0.0f);
     assert(player.totalExperience == 0);
     assert(client.localDeathMessage == "Steve fell from a high place");

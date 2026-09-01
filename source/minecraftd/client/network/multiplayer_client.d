@@ -9,10 +9,12 @@ import minecraftd.network.game_protocol : DroppedItemState, GamePacketType,
     CombatEventType, DamageCause, NetworkPlayerState, PacketReader, PacketWriter,
     PlayerActionType,
     PlayerInputCommand,
+    chunkEncodingRaw, chunkEncodingRle, decodeChunkRuns,
     encodeInput, framePacket, inputAttack, inputBack, inputCrouch,
     inputForward, inputJump, inputLeft, inputRight, inputSprint,
     gameProtocolVersion;
 import minecraftd.world.block : BlockId;
+import minecraftd.world.chunk : Chunk;
 import minecraftd.world.world : World;
 import minecraftd.world.world_settings : DimensionId;
 
@@ -81,6 +83,10 @@ final class RemotePlayer : Player
     int miningY;
     int miningZ;
     float miningProgress;
+    private Vec3 renderPosition;
+    private float renderBodyYaw;
+    private float renderHeadYaw;
+    private bool renderStateInitialized;
 
     void pushSnapshot(const NetworkPlayerState state)
     {
@@ -145,6 +151,50 @@ final class RemotePlayer : Player
         inWater=state.inWater;
         eyeInWater=state.eyeInWater;
         swimming=state.swimming;
+
+        if (!renderStateInitialized)
+        {
+            renderPosition = state.position;
+            renderBodyYaw = state.bodyYaw;
+            renderHeadYaw = state.yaw;
+            renderStateInitialized = true;
+        }
+        else
+        {
+            const displacement = state.position - renderPosition;
+            if (displacement.x * displacement.x
+                + displacement.y * displacement.y
+                + displacement.z * displacement.z > 64.0f)
+                renderPosition = state.position;
+        }
+    }
+
+    void advanceInterpolation(float frameSeconds)
+    {
+        if (!renderStateInitialized)
+            return;
+        // Server snapshots arrive at 20 Hz. A roughly 70 ms exponential
+        // window absorbs packet bunching without tying motion to local ticks.
+        const amount = clamp(frameSeconds * 14.0f, 0.0f, 1.0f);
+        renderPosition += (position - renderPosition) * amount;
+        renderBodyYaw += Player.wrapDegrees(bodyYaw - renderBodyYaw) * amount;
+        renderHeadYaw += Player.wrapDegrees(yaw - renderHeadYaw) * amount;
+    }
+
+    override Vec3 interpolatedPosition(float partialTick) const
+    {
+        return renderPosition;
+    }
+
+    override float interpolatedBodyYaw(float partialTick) const
+    {
+        return renderBodyYaw;
+    }
+
+    override float headYawOffset(float partialTick) const
+    {
+        return clamp(Player.wrapDegrees(renderHeadYaw - renderBodyYaw),
+            -50.0f, 50.0f);
     }
 }
 
@@ -322,6 +372,12 @@ final class MultiplayerClient
                 case GamePacketType.dimensionChange:
                     handleDimensionChange(packet.payload);
                     break;
+                case GamePacketType.chunkData:
+                    handleChunkData(packet.payload);
+                    break;
+                case GamePacketType.chunkUnload:
+                    handleChunkUnload(packet.payload);
+                    break;
                 case GamePacketType.disconnect:
                 {
                     PacketReader reader = PacketReader(packet.payload);
@@ -360,6 +416,8 @@ final class MultiplayerClient
     {
         foreach (id, ref item; droppedItemById)
             item.advance(frameSeconds);
+        foreach (remote; remoteById)
+            remote.advanceInterpolation(frameSeconds);
     }
 
     BlockChangeEvent[] consumeBlockEvents()
@@ -399,18 +457,9 @@ private:
         const name = reader.readString();
         const spawn = reader.readVec3();
         const dimension = cast(DimensionId) reader.readU8();
-        const width = reader.readU16();
-        const height = reader.readU16();
-        const depth = reader.readU16();
-        foreach (y; 0 .. height)
-        foreach (z; 0 .. depth)
-        foreach (x; 0 .. width)
-        {
-            const block = cast(BlockId) reader.readU8();
-            if (reader.valid) world.setBlock(x, y, z, block);
-        }
         if (!reader.valid || versionValue != gameProtocolVersion)
             return;
+        world.clearChunks();
         world.dimension = dimension;
         world.markDirty();
         localPlayerId = id;
@@ -601,9 +650,7 @@ private:
                 localPlayer.attack();
             if (input.flightTogglePressed)
                 localPlayer.toggleFlight();
-            localPlayer.simulateTick(world,
-                input.down(inputForward), input.down(inputBack),
-                input.down(inputLeft), input.down(inputRight),
+            localPlayer.simulateTick(world,input.moveForward,input.moveStrafe,
                 input.down(inputJump), input.down(inputCrouch),
                 input.down(inputSprint));
         }
@@ -611,7 +658,9 @@ private:
         const correctedPosition = localPlayer.position;
         const correctedVelocity = localPlayer.velocity;
         const error = correctedPosition - predictedPosition;
-        if (error.lengthSquared() < 0.75f * 0.75f)
+        if (error.lengthSquared() < 0.75f * 0.75f
+            && world.isUnobstructed(localPlayer.boundingBox().moved(
+                predictedPosition-correctedPosition)))
         {
             // Routine client/server tick-phase differences are not gameplay
             // corrections. Nudging toward those 20 TPS snapshots makes a
@@ -690,17 +739,8 @@ private:
         PacketReader reader = PacketReader(payload);
         const dimension = cast(DimensionId) reader.readU8();
         const position = reader.readVec3();
-        const width = reader.readU16();
-        const height = reader.readU16();
-        const depth = reader.readU16();
-        foreach (y; 0 .. height)
-        foreach (z; 0 .. depth)
-        foreach (x; 0 .. width)
-        {
-            const block = cast(BlockId) reader.readU8();
-            if (reader.valid) world.setBlock(x, y, z, block);
-        }
         if (!reader.valid) return;
+        world.clearChunks();
         world.dimension = dimension;
         world.markDirty();
         localPlayer.dimension = dimension;
@@ -717,4 +757,56 @@ private:
         blockEvents.length = 0;
         dimensionTravelPending = true;
     }
+
+    void handleChunkData(const(ubyte)[] payload)
+    {
+        PacketReader reader=PacketReader(payload);
+        const chunkX=reader.readI32();
+        const chunkZ=reader.readI32();
+        const encoding=reader.readU8();
+        if(!reader.valid)return;
+        const expected=cast(size_t)Chunk.width*Chunk.height*Chunk.depth;
+        const data=reader.data[reader.cursor..$];
+        if(encoding==chunkEncodingRaw&&data.length==expected)
+            world.installChunk(chunkX,chunkZ,data);
+        else if(encoding==chunkEncodingRle)
+        {
+            ubyte[] decoded;
+            if(decodeChunkRuns(data,expected,decoded))
+                world.installChunk(chunkX,chunkZ,decoded);
+        }
+    }
+
+    void handleChunkUnload(const(ubyte)[] payload)
+    {
+        PacketReader reader=PacketReader(payload);
+        const chunkX=reader.readI32();
+        const chunkZ=reader.readI32();
+        if(reader.valid)world.unloadChunk(chunkX,chunkZ);
+    }
+}
+
+unittest
+{
+    auto remote = new RemotePlayer();
+    scope(exit) destroy(remote);
+    NetworkPlayerState state;
+    state.position = Vec3(2.0f, 3.0f, 4.0f);
+    state.bodyYaw = 170.0f;
+    state.yaw = 175.0f;
+    remote.pushSnapshot(state);
+    assert(remote.interpolatedPosition(0.5f) == state.position);
+
+    state.position = Vec3(3.0f, 3.0f, 4.0f);
+    state.bodyYaw = -170.0f;
+    state.yaw = -165.0f;
+    remote.pushSnapshot(state);
+    remote.advanceInterpolation(1.0f / 60.0f);
+    const rendered = remote.interpolatedPosition(0.0f);
+    assert(rendered.x > 2.0f && rendered.x < 3.0f);
+    // Rotation interpolation takes the short path across +/-180 degrees.
+    assert(remote.interpolatedBodyYaw(0.0f) > 170.0f);
+
+    remote.advanceInterpolation(1.0f);
+    assert(remote.interpolatedPosition(0.0f) == state.position);
 }

@@ -129,7 +129,7 @@ struct Context {
     VkDescriptorPool descriptorPool = VK_NULL_HANDLE;
     VkSampler sampler = VK_NULL_HANDLE;
     VkPipelineLayout pipelineLayout = VK_NULL_HANDLE;
-    std::array<VkPipeline, 5> pipelines{};
+    std::array<VkPipeline, 7> pipelines{};
 
     VkCommandPool commandPool = VK_NULL_HANDLE;
     VkCommandBuffer command = VK_NULL_HANDLE;
@@ -412,7 +412,7 @@ struct Context {
     }
 
     VkPipeline createPipeline(bool depth, bool depthWrite, bool invertedBlend,
-        bool blur = false) {
+        bool blur = false, bool cullBackFaces = false) {
         const VkShaderModule vertex = shaderModule(vertexShader);
         const VkShaderModule pixel = shaderModule(blur ? blurPixelShader : pixelShader);
         VkPipelineShaderStageCreateInfo stages[2]{};
@@ -448,7 +448,8 @@ struct Context {
         VkPipelineRasterizationStateCreateInfo raster{
             VK_STRUCTURE_TYPE_PIPELINE_RASTERIZATION_STATE_CREATE_INFO};
         raster.polygonMode = VK_POLYGON_MODE_FILL;
-        raster.cullMode = VK_CULL_MODE_NONE;
+        raster.cullMode = cullBackFaces
+            ? VK_CULL_MODE_BACK_BIT : VK_CULL_MODE_NONE;
         raster.frontFace = VK_FRONT_FACE_CLOCKWISE;
         raster.lineWidth = 1.0f;
         VkPipelineMultisampleStateCreateInfo multisample{
@@ -717,11 +718,13 @@ struct Context {
             framebuffers.push_back(created);
         }
         createBlurCapture();
-        pipelines[0] = createPipeline(true, true, false);
+        pipelines[0] = createPipeline(true, true, false, false, true);
         pipelines[1] = createPipeline(true, false, false);
         pipelines[2] = createPipeline(false, false, false);
         pipelines[3] = createPipeline(false, false, true);
         pipelines[4] = createPipeline(false, false, false, true);
+        pipelines[5] = createPipeline(true, false, false, false, true);
+        pipelines[6] = createPipeline(true, true, false);
         swapchainDirty = false;
     }
 
@@ -731,10 +734,12 @@ struct Context {
             case 1: return 0; // world
             case 2: return 1; // translucent
             case 3: return 1; // entity shadow
-            case 4: return 0; // view model
+            case 4: return 6; // view model (reflected hand winding, no cull)
             case 5: return 4; // captured-scene menu blur
             case 6: return 2; // overlay
             case 7: return 3; // inverted overlay
+            case 8: return 5; // culled translucent (glass)
+            case 9: return 6; // double-sided world entities and particles
             default: return 0;
         }
     }

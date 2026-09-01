@@ -25,7 +25,7 @@ void* mdCreateGraphicsPipeline(void* device, void* rootSignature,
     const(void)* vertexShader, SIZE_T vertexShaderSize,
     const(void)* pixelShader, SIZE_T pixelShaderSize,
     uint renderTargetFormat, uint depthFormat, int depthEnabled,
-    int depthWriteEnabled, int blendMode);
+    int depthWriteEnabled, int blendMode, int cullBackFaces);
 int mdUploadBuffer(void* resource, const(void)* data, SIZE_T size);
 void mdCreateRenderTargetView(void* device, void* resource, SIZE_T handle);
 void mdCreateDepthStencilView(void* device, void* resource, SIZE_T handle);

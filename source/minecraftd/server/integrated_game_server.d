@@ -5,10 +5,12 @@ import core.stdc.math : atan2f, cosf, floorf, sinf;
 import core.sync.mutex : Mutex;
 import core.thread : Thread;
 import core.time : Duration, MonoTime, msecs;
+import std.conv : to;
+import std.datetime.systime : Clock;
 import std.socket : AddressFamily, getAddress, InternetAddress, ProtocolType,
     Socket, SocketOption, SocketOptionLevel, SocketOSException,
     SocketShutdown, SocketType, TcpSocket;
-import std.path : buildPath;
+import std.path : buildPath, dirName;
 
 import minecraftd.client.network.game_connection : GameConnection;
 import minecraftd.client.player.local_player : LocalPlayer;
@@ -22,11 +24,14 @@ import minecraftd.network.game_protocol : DroppedItemState, GamePacketType,
     CombatEventType, DamageCause, NetworkPlayerState, PacketReader, PacketWriter,
     PlayerActionType,
     PlayerInputCommand,
+    chunkEncodingRaw, chunkEncodingRle, encodeChunkRuns,
     decodeFrameLength, decodeInput, framePacket, inputAttack, inputBack,
     inputCrouch, inputForward, inputJump, inputLeft, inputRight, inputSprint,
     gameProtocolVersion, maximumGamePacketBytes;
+import minecraftd.server.host_commands : BanList, HostCommandKind,
+    parseHostCommand;
 import minecraftd.world.block : BlockId, bareHandDestroyProgress;
-import minecraftd.world.chunk : Chunk;
+import minecraftd.world.chunk : Chunk, ChunkCoordinate, chunkCoordinate;
 import minecraftd.world.world : GenerationProgress, World;
 import minecraftd.world.nether_portal : PortalAxis, PortalRectangle,
     createTestPortal, createTestPortalFrame, igniteNetherPortal,
@@ -40,6 +45,8 @@ private final class ServerPeer
     uint playerId;
     uint lastHeardTick;
     bool loggedIn;
+    bool[ChunkCoordinate] sentChunks;
+    DimensionId sentDimension = DimensionId.overworld;
 
     this(Socket socket)
     {
@@ -87,6 +94,7 @@ private final class ServerPlayer
     string accountId;
     string skinVersion;
     string skinModel = "classic";
+    bool host;
     LocalPlayer player;
     PlayerInputCommand input;
     PlayerInputCommand[] queuedInputs;
@@ -103,6 +111,8 @@ private final class ServerPlayer
     GameMode respawnGameMode;
     string deathMessage;
     DimensionId dimension = DimensionId.overworld;
+    ubyte viewDistance = 6;
+    ubyte simulationDistance = 5;
     uint portalTicks;
     bool portalLatched;
     PortalRectangle overworldPortal;
@@ -166,6 +176,10 @@ final class IntegratedGameServer
     private uint savedNetherRevision;
     private ushort listeningPort;
     private string sharedAddress;
+    private BanList worldBans;
+    private BanList universalBans;
+    private string hostAccountId;
+    private bool hostAssigned;
 
     this(ushort port = 0)
     {
@@ -184,6 +198,12 @@ private:
         peersMutex = new Mutex();
         inboundMutex = new Mutex();
         world = ownedWorld;
+        const worldBanPath = world.saveDirectory.length
+            ? buildPath(world.saveDirectory, "bans.tsv") : "";
+        const universalBanPath = world.saveDirectory.length
+            ? buildPath(dirName(world.saveDirectory), "host-bans.tsv") : "";
+        worldBans = new BanList(worldBanPath);
+        universalBans = new BanList(universalBanPath);
         if (world.saveDirectory.length)
             netherWorld = new World(world.settings,
                 buildPath(world.saveDirectory, "DIM-1"), DimensionId.nether);
@@ -201,8 +221,8 @@ private:
             createTestPortalFrame(world, cast(int)spawn.x + 3,
                 cast(int)spawn.y, cast(int)spawn.z + 3, PortalAxis.x);
         }
-        savedNetherRevision = netherWorld.revision;
-        savedWorldRevision = world.revision;
+        savedNetherRevision = netherWorld.contentRevision;
+        savedWorldRevision = world.contentRevision;
         listener = new TcpSocket();
         listener.setOption(SocketOptionLevel.SOCKET, SocketOption.REUSEADDR, 1);
         // A port of zero lets Windows allocate a distinct endpoint per world,
@@ -266,6 +286,8 @@ public:
         netherWorld.save();
         destroy(netherWorld);
         destroy(world);
+        destroy(worldBans);
+        destroy(universalBans);
     }
 
 private:
@@ -382,28 +404,59 @@ private:
         tickDroppedItems();
         if (serverTick % 5 == 0)
         {
-            foreach(change;world.tickWater())
+            Vec3[] overworldCenters,netherCenters;
+            int overworldSimulation=5,netherSimulation=5;
+            foreach(serverPlayer;players)
+            {
+                if(serverPlayer.dimension==DimensionId.overworld)
+                {
+                    overworldCenters~=serverPlayer.player.position;
+                    if(serverPlayer.simulationDistance>overworldSimulation)
+                        overworldSimulation=serverPlayer.simulationDistance;
+                }
+                else
+                {
+                    netherCenters~=serverPlayer.player.position;
+                    if(serverPlayer.simulationDistance>netherSimulation)
+                        netherSimulation=serverPlayer.simulationDistance;
+                }
+            }
+            foreach(change;world.tickWaterAround(overworldCenters,
+                overworldSimulation))
                 broadcastBlockChange(change.x,change.y,change.z,change.oldBlock,
                     change.newBlock,0,DimensionId.overworld);
-            foreach(change;netherWorld.tickWater())
+            foreach(change;netherWorld.tickWaterAround(netherCenters,
+                netherSimulation))
                 broadcastBlockChange(change.x,change.y,change.z,change.oldBlock,
                     change.newBlock,0,DimensionId.nether);
         }
-        if (serverTick % 20 == 0 && world.revision != savedWorldRevision)
+        if (serverTick % 100 == 0
+            && world.contentRevision != savedWorldRevision)
         {
-            world.save();
-            savedWorldRevision = world.revision;
+            world.saveDirtyChunks();
+            savedWorldRevision = world.contentRevision;
         }
-        if (serverTick % 20 == 0
-            && netherWorld.revision != savedNetherRevision)
+        if (serverTick % 100 == 0
+            && netherWorld.contentRevision != savedNetherRevision)
         {
-            netherWorld.save();
-            savedNetherRevision = netherWorld.revision;
+            netherWorld.saveDirtyChunks();
+            savedNetherRevision = netherWorld.contentRevision;
         }
         removeTimedOutPeers();
         if (serverTick % 40 == 0)
             sendKeepAlives();
+
+        // Time-sensitive state always enters each ordered connection before
+        // background terrain. Otherwise several large chunk packets can hold
+        // movement and block changes behind them (TCP/EOS head-of-line delay).
         broadcastSnapshots();
+        synchronized(peersMutex)
+        foreach(peer;peers)
+            if(peer.loggedIn&&peer.socket !is null)
+                if(auto serverPlayer=peer.playerId in players)
+                    syncPeerChunks(peer,*serverPlayer);
+        trimInactiveChunks(world,DimensionId.overworld);
+        trimInactiveChunks(netherWorld,DimensionId.nether);
     }
 
     void processInbound()
@@ -441,8 +494,14 @@ private:
                         PacketReader reader = PacketReader(packet.payload);
                         const message = sanitizeChat(reader.readString());
                         if (reader.valid && message.length)
-                            broadcastChat("<" ~ (*serverPlayer).name ~ "> " ~ message,
-                                false);
+                        {
+                            if (message[0] == '/')
+                                handleHostCommand(packet.peer, *serverPlayer,
+                                    message);
+                            else
+                                broadcastChat("<" ~ (*serverPlayer).name ~ "> "
+                                    ~ message, false);
+                        }
                     }
                     break;
                 case GamePacketType.playerAction:
@@ -504,6 +563,9 @@ private:
                     break;
                 case GamePacketType.keepAliveReply:
                     break;
+                case GamePacketType.chunkData:
+                case GamePacketType.chunkUnload:
+                    break;
                 case GamePacketType.disconnect:
                     disconnectPeer(packet.peer);
                     break;
@@ -523,6 +585,10 @@ private:
     void simulateInput(ServerPlayer serverPlayer, PlayerInputCommand input)
     {
         serverPlayer.input = input;
+        serverPlayer.viewDistance=input.viewDistance<2?2:
+            (input.viewDistance>12?12:input.viewDistance);
+        serverPlayer.simulationDistance=input.simulationDistance<5?5:
+            (input.simulationDistance>12?12:input.simulationDistance);
         auto player = serverPlayer.player;
         if (player.health <= 0.0f)
         {
@@ -544,17 +610,30 @@ private:
             player.toggleFlight();
         if (input.down(inputAttack) || input.attackPressed) player.attack();
         auto activeWorld = worldFor(serverPlayer.dimension);
-        player.simulateTick(activeWorld,
-            input.down(inputForward), input.down(inputBack),
-            input.down(inputLeft), input.down(inputRight),
+        player.simulateTick(activeWorld, input.moveForward, input.moveStrafe,
             input.down(inputJump), input.down(inputCrouch),
             input.down(inputSprint), true);
+        const border=cast(float)activeWorld.horizontalBorder();
+        if(player.position.x < -border)player.position.x=-border;
+        if(player.position.x > border)player.position.x=border;
+        if(player.position.z < -border)player.position.z=-border;
+        if(player.position.z > border)player.position.z=border;
         if (player.health < healthBeforeMovement)
         {
             const cause=player.drowningDamageDue?DamageCause.drown:DamageCause.fall;
             recordDamage(serverPlayer, cause);
             if (player.health <= 0.0f)
                 handleDeath(serverPlayer, cause, "");
+        }
+        if(player.health>0.0f&&player.gameMode!=GameMode.spectator
+            &&player.position.y<activeWorld.voidDamageY()
+            &&serverTick%10==0)
+        {
+            player.health-=4.0f;
+            if(player.health<0.0f)player.health=0.0f;
+            recordDamage(serverPlayer,DamageCause.voidDamage);
+            if(player.health<=0.0f)
+                handleDeath(serverPlayer,DamageCause.voidDamage,"");
         }
         if (updatePortal(serverPlayer))
         {
@@ -594,6 +673,22 @@ private:
             disconnectPeer(peer);
             return;
         }
+        const recognizedHost = !hostAssigned
+            || (hostAccountId.length && accountId == hostAccountId);
+        const now = Clock.currTime.toUnixTime();
+        if (!recognizedHost && accountId.length
+            && (universalBans.contains(accountId, now)
+                || worldBans.contains(accountId, now)))
+        {
+            disconnectWithReason(peer,
+                "You are banned from this host's world");
+            return;
+        }
+        if (!hostAssigned)
+        {
+            hostAssigned = true;
+            hostAccountId = accountId.idup;
+        }
         const id = nextPlayerId++;
         const name = uniqueName(requested.length ? requested : "Steve");
         const playersAlreadyPresent = players.length;
@@ -607,6 +702,7 @@ private:
         auto serverPlayer = new ServerPlayer(id, name, spawn,
             world.settings.effectiveGameMode(), world.settings.hardcore);
         serverPlayer.accountId=accountId.idup;
+        serverPlayer.host=recognizedHost;
         serverPlayer.skinVersion=skinVersion.idup;
         serverPlayer.skinModel=skinModel=="slim"?"slim":"classic";
         players[id] = serverPlayer;
@@ -617,14 +713,10 @@ private:
         response.putU16(gameProtocolVersion);
         response.putU32(id); response.putString(name); response.putVec3(spawn);
         response.putU8(cast(ubyte) DimensionId.overworld);
-        response.putU16(cast(ushort) Chunk.width);
-        response.putU16(cast(ushort) Chunk.height);
-        response.putU16(cast(ushort) Chunk.depth);
-        foreach (y; 0 .. Chunk.height)
-        foreach (z; 0 .. Chunk.depth)
-        foreach (x; 0 .. Chunk.width)
-            response.putU8(cast(ubyte) world.getBlock(x, y, z));
         sendTo(peer, framePacket(GamePacketType.loginAccepted, response.data));
+        peer.sentChunks.clear();
+        peer.sentDimension=DimensionId.overworld;
+        syncPeerChunks(peer,serverPlayer,9);
         // Opening an empty integrated world is not a multiplayer join event.
         // Once anybody is already present, broadcast to everyone (including
         // the newcomer), matching Java's visible self-join message on servers.
@@ -1064,6 +1156,10 @@ private:
             case DamageCause.drown:
                 serverPlayer.deathMessage = serverPlayer.name ~ " drowned";
                 break;
+            case DamageCause.voidDamage:
+                serverPlayer.deathMessage = serverPlayer.name
+                    ~ " fell out of the world";
+                break;
             case DamageCause.generic:
                 serverPlayer.deathMessage = attackerName.length
                     ? serverPlayer.name ~ " was slain by " ~ attackerName
@@ -1316,6 +1412,104 @@ private:
         broadcast(framePacket(GamePacketType.chatBroadcast, writer.data));
     }
 
+    void handleHostCommand(ServerPeer senderPeer, ServerPlayer sender,
+        string message)
+    {
+        if (!sender.host)
+        {
+            sendSystemMessage(senderPeer,
+                "You do not have permission to use host commands");
+            return;
+        }
+
+        const command = parseHostCommand(message);
+        if (command.kind == HostCommandKind.invalid)
+        {
+            sendSystemMessage(senderPeer, command.error);
+            return;
+        }
+        if (command.kind == HostCommandKind.none)
+            return;
+        if (command.accountId == sender.accountId
+            || (hostAccountId.length && command.accountId == hostAccountId))
+        {
+            sendSystemMessage(senderPeer,
+                "The host cannot target their own account");
+            return;
+        }
+
+        if (command.kind == HostCommandKind.kick)
+        {
+            auto target = findPeerByAccount(command.accountId);
+            if (target is null)
+            {
+                sendSystemMessage(senderPeer,
+                    "No connected player has that account ID");
+                return;
+            }
+            disconnectWithReason(target, "Kicked by the world host");
+            sendSystemMessage(senderPeer, "Kicked " ~ command.accountId);
+            return;
+        }
+
+        if (command.kind == HostCommandKind.unban)
+        {
+            const removed = worldBans.unban(command.accountId)
+                | universalBans.unban(command.accountId);
+            sendSystemMessage(senderPeer, removed
+                ? "Unbanned " ~ command.accountId
+                : "That account was not banned");
+            return;
+        }
+
+        const now = Clock.currTime.toUnixTime();
+        long expiresAt;
+        if (command.durationSeconds > 0)
+            expiresAt = command.durationSeconds > long.max - now
+                ? long.max : now + command.durationSeconds;
+        auto bans = command.universal ? universalBans : worldBans;
+        bans.ban(command.accountId, expiresAt);
+        auto target = findPeerByAccount(command.accountId);
+        if (target !is null)
+            disconnectWithReason(target, expiresAt == 0
+                ? "Permanently banned by the world host"
+                : "Temporarily banned by the world host");
+        sendSystemMessage(senderPeer, "Banned " ~ command.accountId
+            ~ (command.universal ? " from all of your worlds" : " from this world")
+            ~ (expiresAt == 0 ? " permanently" : " for "
+                ~ to!string(command.durationSeconds) ~ " seconds"));
+    }
+
+    void sendSystemMessage(ServerPeer peer, string message)
+    {
+        PacketWriter writer;
+        writer.putBool(true);
+        writer.putString(message);
+        sendTo(peer, framePacket(GamePacketType.chatBroadcast, writer.data));
+    }
+
+    ServerPeer findPeerByAccount(string accountId)
+    {
+        synchronized (peersMutex)
+        foreach (peer; peers)
+        {
+            if (!peer.loggedIn || peer.socket is null) continue;
+            auto candidate = peer.playerId in players;
+            if (candidate !is null && (*candidate).accountId == accountId)
+                return peer;
+        }
+        return null;
+    }
+
+    void disconnectWithReason(ServerPeer peer, string reason)
+    {
+        PacketWriter writer;
+        writer.putString(reason);
+        try peer.send(framePacket(GamePacketType.disconnect, writer.data));
+        catch (SocketOSException) {}
+        disconnectPeer(peer);
+    }
+
     void sendPickup(uint playerId, Vec3 position, DimensionId dimension)
     {
         PacketWriter writer;
@@ -1331,10 +1525,11 @@ private:
 
     static bool containsBlock(World candidate, BlockId wanted)
     {
-        foreach (y; 0 .. Chunk.height)
-        foreach (z; 0 .. Chunk.depth)
-        foreach (x; 0 .. Chunk.width)
-            if (candidate.getBlock(x,y,z) == wanted) return true;
+        foreach (coordinate;candidate.loadedChunkCoordinates())
+        foreach (y;candidate.minimumBuildY()..candidate.maximumBuildY()+1)
+        foreach (localZ;0..Chunk.depth)foreach(localX;0..Chunk.width)
+            if (candidate.getBlock(coordinate.x*Chunk.width+localX,y,
+                coordinate.z*Chunk.depth+localZ) == wanted) return true;
         return false;
     }
 
@@ -1344,13 +1539,6 @@ private:
         PacketWriter writer;
         writer.putU8(cast(ubyte) serverPlayer.dimension);
         writer.putVec3(serverPlayer.player.position);
-        writer.putU16(cast(ushort) Chunk.width);
-        writer.putU16(cast(ushort) Chunk.height);
-        writer.putU16(cast(ushort) Chunk.depth);
-        foreach (y; 0 .. Chunk.height)
-        foreach (z; 0 .. Chunk.depth)
-        foreach (x; 0 .. Chunk.width)
-            writer.putU8(cast(ubyte) activeWorld.getBlock(x, y, z));
         synchronized (peersMutex)
         foreach (peer; peers)
             if (peer.loggedIn && peer.playerId == serverPlayer.id
@@ -1359,8 +1547,118 @@ private:
                 try peer.send(framePacket(GamePacketType.dimensionChange,
                     writer.data));
                 catch (SocketOSException) {}
+                peer.sentChunks.clear();
+                peer.sentDimension=serverPlayer.dimension;
+                syncPeerChunks(peer,serverPlayer,9);
                 break;
             }
+    }
+
+    void sendChunkData(ServerPeer peer, World source,
+        ChunkCoordinate coordinate)
+    {
+        const loaded=source.chunkAt(coordinate.x,coordinate.z);
+        if(loaded is null)return;
+        const snapshot=loaded.snapshot();
+        const compressed=encodeChunkRuns(snapshot);
+        PacketWriter writer;
+        writer.putI32(coordinate.x);writer.putI32(coordinate.z);
+        if(compressed.length<snapshot.length)
+        {
+            writer.putU8(chunkEncodingRle);
+            writer.data~=compressed;
+        }
+        else
+        {
+            writer.putU8(chunkEncodingRaw);
+            writer.data~=snapshot;
+        }
+        sendTo(peer,framePacket(GamePacketType.chunkData,writer.data));
+    }
+
+    void sendChunkUnload(ServerPeer peer,ChunkCoordinate coordinate)
+    {
+        PacketWriter writer;
+        writer.putI32(coordinate.x);writer.putI32(coordinate.z);
+        sendTo(peer,framePacket(GamePacketType.chunkUnload,writer.data));
+    }
+
+    void syncPeerChunks(ServerPeer peer,ServerPlayer serverPlayer,
+        int maximumSends=1)
+    {
+        auto source=worldFor(serverPlayer.dimension);
+        if(peer.sentDimension!=serverPlayer.dimension)
+        {
+            peer.sentChunks.clear();
+            peer.sentDimension=serverPlayer.dimension;
+        }
+        const radius=cast(int)serverPlayer.viewDistance;
+        source.ensureChunksAround(serverPlayer.player.position,radius,2);
+        const centerX=chunkCoordinate(cast(int)floorf(
+            serverPlayer.player.position.x));
+        const centerZ=chunkCoordinate(cast(int)floorf(
+            serverPlayer.player.position.z));
+
+        ChunkCoordinate[] unloads;
+        foreach(coordinate,present;peer.sentChunks)
+        {
+            int dx=coordinate.x-centerX;if(dx<0)dx=-dx;
+            int dz=coordinate.z-centerZ;if(dz<0)dz=-dz;
+            if(dx>radius+1||dz>radius+1)unloads~=coordinate;
+        }
+        foreach(coordinate;unloads)
+        {
+            sendChunkUnload(peer,coordinate);
+            peer.sentChunks.remove(coordinate);
+        }
+
+        foreach(sendIndex;0..maximumSends)
+        {
+            bool found;
+            ChunkCoordinate best;
+            int bestDistance=int.max;
+            foreach(coordinate;source.loadedChunkCoordinates())
+            {
+                if(coordinate in peer.sentChunks)continue;
+                int dx=coordinate.x-centerX;if(dx<0)dx=-dx;
+                int dz=coordinate.z-centerZ;if(dz<0)dz=-dz;
+                if(dx>radius||dz>radius)continue;
+                const distance=dx*dx+dz*dz;
+                if(!found||distance<bestDistance)
+                {found=true;best=coordinate;bestDistance=distance;}
+            }
+            if(!found)break;
+            sendChunkData(peer,source,best);
+            peer.sentChunks[best]=true;
+        }
+    }
+
+    void trimInactiveChunks(World source,DimensionId dimension)
+    {
+        bool hasViewer;
+        foreach(serverPlayer;players)
+            if(serverPlayer.dimension==dimension){hasViewer=true;break;}
+        if(!hasViewer)return;
+        int removed;
+        foreach(coordinate;source.loadedChunkCoordinates())
+        {
+            bool keep;
+            foreach(serverPlayer;players)
+            {
+                if(serverPlayer.dimension!=dimension)continue;
+                const centerX=chunkCoordinate(cast(int)floorf(
+                    serverPlayer.player.position.x));
+                const centerZ=chunkCoordinate(cast(int)floorf(
+                    serverPlayer.player.position.z));
+                const radius=cast(int)serverPlayer.viewDistance+2;
+                int dx=coordinate.x-centerX;if(dx<0)dx=-dx;
+                int dz=coordinate.z-centerZ;if(dz<0)dz=-dz;
+                if(dx<=radius&&dz<=radius){keep=true;break;}
+            }
+            if(keep)continue;
+            source.unloadChunk(coordinate.x,coordinate.z,true);
+            if(++removed>=2)break;
+        }
     }
 
     void broadcastToDimension(const(ubyte)[] packet, DimensionId dimension)

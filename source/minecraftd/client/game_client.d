@@ -9,6 +9,8 @@ import std.process : thisProcessID;
 
 import minecraftd.client.player.local_player : LocalPlayer;
 import minecraftd.client.chat.chat_state : ChatState;
+import minecraftd.client.input.ui_navigation : UiDirection, UiHitTest,
+    UiNavigation;
 import minecraftd.client.network.game_connection : GameConnection,
     ServerEndpoint, parseServerAddress;
 import minecraftd.client.network.eos_service : EosHostBridge, EosService,
@@ -67,6 +69,7 @@ final class GameClient
         auto window = new GameWindow("Minecraft: D Edition",
             GameWindow.defaultWidth, GameWindow.defaultHeight);
         scope (exit) destroy(window);
+        UiNavigation uiNavigation;
         startUpdater();
         window.setFullscreen(options.fullscreen);
         auto world = new World();
@@ -176,7 +179,88 @@ final class GameClient
                 renderer.resize(window.width, window.height);
             }
             renderer.tickMenuMusic();
-            const cursor = window.cursorPosition();
+            const gamepad = window.gamepadState();
+            const mouseCursor = window.cursorPosition();
+            uiNavigation.observe(mouseCursor, gamepad);
+            ulong navigationToken;
+            int navigationNone;
+            UiHitTest navigationHitTest;
+            const navigationAccount = accounts.snapshot;
+            if (options.active && !options.fromGame)
+            {
+                navigationToken = 100 + cast(ulong)options.screen;
+                navigationHitTest = (int x,int y) => cast(int)
+                    renderer.optionsActionAt(x,y);
+            }
+            else if (accountMenu.active)
+            {
+                navigationToken = 200 + cast(ulong)accountMenu.dialog * 4
+                    + (navigationAccount.loggedIn ? 1 : 0);
+                navigationHitTest = (int x,int y) => cast(int)
+                    renderer.accountActionAt(x,y,accountMenu,navigationAccount);
+            }
+            else if (worldScreen)
+            {
+                navigationToken = 300 + cast(ulong)worldMenu.screen * 8
+                    + cast(ulong)worldMenu.tab;
+                navigationHitTest = (int x,int y) => cast(int)
+                    renderer.worldMenuActionAt(x,y,worldMenu);
+            }
+            else if (multiplayerScreen)
+            {
+                navigationToken = 400;
+                navigationHitTest = (int x,int y) => cast(int)
+                    renderer.multiplayerMenuActionAt(x,y);
+            }
+            else
+            {
+                navigationToken = 500;
+                navigationHitTest = (int x,int y) => cast(int)
+                    renderer.titleActionAt(x,y);
+            }
+            uiNavigation.prepare(navigationToken,navigationNone,
+                navigationHitTest,window.width,window.height);
+            const navigationDirection = uiNavigation.takeDirection(gamepad,
+                monotonicMilliseconds());
+            bool navigationConsumed;
+            if (worldScreen && worldMenu.screen == WorldMenuScreen.selection
+                && cast(WorldMenuAction)uiNavigation.focusedId
+                    == WorldMenuAction.worldList
+                && (navigationDirection == UiDirection.up
+                    || navigationDirection == UiDirection.down)
+                && worldMenu.worlds.length)
+            {
+                const delta = navigationDirection == UiDirection.down ? 1 : -1;
+                worldMenu.selected += delta;
+                if (worldMenu.selected < 0) worldMenu.selected = 0;
+                if (worldMenu.selected >= worldMenu.worlds.length)
+                    worldMenu.selected = cast(int)worldMenu.worlds.length - 1;
+                navigationConsumed = true;
+            }
+            if (options.active && !options.fromGame
+                && (navigationDirection == UiDirection.left
+                    || navigationDirection == UiDirection.right))
+            {
+                const focused = cast(OptionsAction)uiNavigation.focusedId;
+                if (options.slider(focused))
+                {
+                    options.adjustSliderStep(focused,
+                        navigationDirection == UiDirection.right ? 1 : -1,
+                        window.width,window.height);
+                    renderer.applyOptions();
+                    navigationConsumed = true;
+                }
+            }
+            if (!navigationConsumed)
+                uiNavigation.move(navigationDirection);
+            const cursor = uiNavigation.cursor(mouseCursor);
+            window.setCursorVisible(!uiNavigation.usingController);
+            const uiAcceptPressed = window.pressed(VK_LBUTTON)
+                || gamepad.pressed(GamepadButton.a);
+            const uiPrimaryDown = window.down(VK_LBUTTON)
+                || gamepad.down(GamepadButton.a);
+            const uiCancelPressed = window.pressed(VK_ESCAPE)
+                || gamepad.pressed(GamepadButton.b);
             const menuTime = cast(float) monotonicMilliseconds() / 1000.0f;
             accounts.refreshWhenDue();
             if (options.active && !options.fromGame)
@@ -193,16 +277,16 @@ final class GameClient
                     if (captured == VK_ESCAPE) options.cancelBindingCapture();
                     else if (captured >= 0) options.captureKey(captured);
                 }
-                else if (window.pressed(VK_ESCAPE))
+                else if (uiCancelPressed)
                     options.back();
                 else if (hovered != OptionsAction.none
-                    && options.slider(hovered) && window.down(VK_LBUTTON))
+                    && options.slider(hovered) && uiPrimaryDown)
                 {
-                    if (window.pressed(VK_LBUTTON)) renderer.playUiButtonClick();
+                    if (uiAcceptPressed) renderer.playUiButtonClick();
                     options.adjustSlider(hovered,cursor.x,window.width,window.height);
                     renderer.applyOptions();
                 }
-                else if (window.pressed(VK_LBUTTON)
+                else if (uiAcceptPressed
                     && hovered != OptionsAction.none)
                 {
                     renderer.playUiButtonClick();
@@ -266,21 +350,21 @@ final class GameClient
                     if(window.pressed(VK_DELETE)||window.repeated(VK_DELETE))
                         accountMenu.deleteForward();
                     if(window.pressed(VK_RETURN))accountMenu.requestUsernameChange();
-                    if(accountMenu.mouseSelecting&&window.down(VK_LBUTTON))
+                    if(accountMenu.mouseSelecting&&uiPrimaryDown)
                     {
                         const at=renderer.accountTextCursorAt(cursor.x,accountMenu);
                         if(at>=0)accountMenu.setCursor(cast(size_t)at,true);
                     }
                 }
                 else window.clearTextInput();
-                if(!window.down(VK_LBUTTON))accountMenu.mouseSelecting=false;
-                if(window.pressed(VK_ESCAPE))
+                if(!uiPrimaryDown)accountMenu.mouseSelecting=false;
+                if(uiCancelPressed)
                 {
                     if(accountMenu.dialog!=AccountDialog.none)
                         accountMenu.dismissDialog();
                     else accountMenu.close();
                 }
-                if(window.pressed(VK_LBUTTON))
+                if(uiAcceptPressed)
                 {
                     if(hovered!=AccountMenuAction.none)renderer.playUiButtonClick();
                     final switch(hovered)
@@ -373,7 +457,7 @@ final class GameClient
                 if (window.pressed(VK_DELETE) || window.repeated(VK_DELETE))
                     worldMenu.deleteForward();
 
-                if (window.pressed(VK_LBUTTON) && textAction)
+                if (uiAcceptPressed && textAction)
                 {
                     const clickedField = hovered == WorldMenuAction.name
                         ? WorldField.name : WorldField.seed;
@@ -384,16 +468,16 @@ final class GameClient
                         worldMenu.setCursor(cast(size_t) textCursor);
                     worldTextMouseSelecting = true;
                 }
-                else if (worldTextMouseSelecting && window.down(VK_LBUTTON))
+                else if (worldTextMouseSelecting && uiPrimaryDown)
                 {
                     const textCursor = renderer.worldTextCursorAt(cursor.x,
                         worldMenu, worldMenu.field);
                     if (textCursor >= 0)
                         worldMenu.setCursor(cast(size_t) textCursor, true);
                 }
-                if (!window.down(VK_LBUTTON))
+                if (!uiPrimaryDown)
                     worldTextMouseSelecting = false;
-                if (window.pressed(VK_ESCAPE))
+                if (uiCancelPressed)
                 {
                     if (worldMenu.screen == WorldMenuScreen.selection)
                         worldScreen = false;
@@ -405,14 +489,17 @@ final class GameClient
                         worldMenu.refresh();
                     }
                 }
-                if (window.pressed(VK_LBUTTON))
+                if (uiAcceptPressed)
                 {
                     if (hovered != WorldMenuAction.none) renderer.playUiButtonClick();
                     final switch (hovered)
                     {
                         case WorldMenuAction.worldList:
-                            const row = renderer.worldRowAt(cursor.y,worldMenu);
-                            if (row >= 0) worldMenu.selected = row;
+                            if (!uiNavigation.usingController)
+                            {
+                                const row = renderer.worldRowAt(cursor.y,worldMenu);
+                                if (row >= 0) worldMenu.selected = row;
+                            }
                             break;
                         case WorldMenuAction.play:
                             if (worldMenu.hasSelection)
@@ -444,6 +531,15 @@ final class GameClient
                             break;
                         case WorldMenuAction.bonusChest:
                             if(!worldMenu.editing) worldMenu.draft.bonusChest=!worldMenu.draft.bonusChest;
+                            break;
+                        case WorldMenuAction.caves:
+                            if(!worldMenu.editing)worldMenu.draft.generateCaves=!worldMenu.draft.generateCaves;
+                            break;
+                        case WorldMenuAction.rivers:
+                            if(!worldMenu.editing)worldMenu.draft.generateRivers=!worldMenu.draft.generateRivers;
+                            break;
+                        case WorldMenuAction.oceans:
+                            if(!worldMenu.editing)worldMenu.draft.generateOceans=!worldMenu.draft.generateOceans;
                             break;
                         case WorldMenuAction.gameRules:
                             worldMenu.notice="Game-rule editing will expand as rule systems are added.";
@@ -541,7 +637,7 @@ final class GameClient
                 if (window.pressed(VK_TAB))
                     serverMenu.selectNextField();
 
-                if (window.pressed(VK_LBUTTON) && overText)
+                if (uiAcceptPressed && overText)
                 {
                     const clickedField = hovered == MultiplayerMenuAction.serverName
                         ? MultiplayerField.serverName : MultiplayerField.serverAddress;
@@ -552,24 +648,24 @@ final class GameClient
                         serverMenu.setCursor(cast(size_t) textCursor);
                     serverTextMouseSelecting = true;
                 }
-                else if (serverTextMouseSelecting && window.down(VK_LBUTTON))
+                else if (serverTextMouseSelecting && uiPrimaryDown)
                 {
                     const textCursor = renderer.multiplayerTextCursorAt(cursor.x,
                         serverMenu, serverMenu.activeField);
                     if (textCursor >= 0)
                         serverMenu.setCursor(cast(size_t) textCursor, true);
                 }
-                if (!window.down(VK_LBUTTON))
+                if (!uiPrimaryDown)
                     serverTextMouseSelecting = false;
 
                 bool connectRequested = window.pressed(VK_RETURN);
-                if (window.pressed(VK_ESCAPE))
+                if (uiCancelPressed)
                 {
                     multiplayerScreen = false;
                     serverMenu.error = "";
                     serverTextMouseSelecting = false;
                 }
-                if (window.pressed(VK_LBUTTON))
+                if (uiAcceptPressed)
                 {
                     final switch (hovered)
                     {
@@ -614,12 +710,12 @@ final class GameClient
             const hoveredAction = renderer.titleActionAt(cursor.x, cursor.y);
             window.setCursorShape(hoveredAction == TitleAction.none
                 ? CursorShape.arrow : CursorShape.hand);
-            if (window.pressed(VK_ESCAPE))
+            if (uiCancelPressed)
             {
                 window.running = false;
                 break;
             }
-            if (window.pressed(VK_LBUTTON))
+            if (uiAcceptPressed)
             {
                 if (hoveredAction != TitleAction.none)
                     renderer.playUiButtonClick();
@@ -677,7 +773,10 @@ final class GameClient
         {
             window.pumpMessages();
             tickEos();
-            if (window.pressed(VK_ESCAPE)) break;
+            const loadingGamepad = window.gamepadState();
+            if (window.pressed(VK_ESCAPE)
+                || loadingGamepad.pressed(GamepadButton.b)
+                || loadingGamepad.pressed(GamepadButton.menu)) break;
             int loadingWidth, loadingHeight;
             if (window.consumeResize(loadingWidth,loadingHeight))
                 renderer.resize(loadingWidth,loadingHeight);
@@ -726,12 +825,14 @@ final class GameClient
         bool pendingFlightToggle;
         bool crouchToggleState;
         bool sprintLatched;
+        bool controllerSprintLatched;
         bool attackToggleState;
         bool useToggleState;
         bool chatMouseSelecting;
         uint lastJumpTapMilliseconds;
         uint dropHeldTicks;
-        bool suppressPrimaryUntilRelease = window.down(VK_LBUTTON);
+        bool suppressPrimaryUntilRelease = window.down(VK_LBUTTON)
+            || window.gamepadState().rightTrigger > 0;
         bool returnToTitle;
         auto announcedAccount=accounts.snapshot;
         string announcedSkinVersion=sharedSkinVersion(announcedAccount);
@@ -785,6 +886,88 @@ final class GameClient
                 eosHostBridge.pump();
             if (!window.running)
                 break;
+            const current = monotonicSeconds();
+            const frameSeconds = fmin(current - previous, 0.25);
+            previous = current;
+            const gamepad = window.gamepadState();
+            const controllerDeadzone = options.number("controllerDeadzone",.05f);
+            const controllerLeftX = controllerAxis(gamepad.leftX,
+                controllerDeadzone);
+            const controllerLeftY = controllerAxis(gamepad.leftY,
+                controllerDeadzone);
+            const controllerRightX = controllerAxis(gamepad.rightX,
+                controllerDeadzone);
+            const controllerRightY = controllerAxis(gamepad.rightY,
+                controllerDeadzone);
+            const controllerUiActive = options.active || deathScreen.active
+                || inventoryMenu.active || pauseMenu.active || chat.active;
+            const mouseCursor = window.cursorPosition();
+            uiNavigation.observe(mouseCursor,gamepad,controllerUiActive);
+            Point uiCursor = mouseCursor;
+            UiHitTest gameNavigationHitTest;
+            ulong gameNavigationToken;
+            int gameNavigationNone;
+            bool gameNavigationActive;
+            if(options.active&&options.fromGame)
+            {
+                gameNavigationActive=true;
+                gameNavigationToken=600+cast(ulong)options.screen;
+                gameNavigationHitTest=(int x,int y)=>cast(int)
+                    renderer.optionsActionAt(x,y);
+            }
+            else if(deathScreen.active)
+            {
+                gameNavigationActive=true;
+                gameNavigationToken=700+(deathScreen.hardcore?1:0);
+                gameNavigationHitTest=(int x,int y)=>cast(int)
+                    renderer.deathActionAt(x,y,deathScreen);
+            }
+            else if(inventoryMenu.active)
+            {
+                gameNavigationActive=true;
+                gameNavigationToken=800;
+                gameNavigationNone=-1;
+                gameNavigationHitTest=(int x,int y)=>
+                    renderer.inventorySlotAt(x,y);
+            }
+            else if(pauseMenu.active)
+            {
+                gameNavigationActive=true;
+                gameNavigationToken=900+cast(ulong)pauseMenu.screen;
+                const canPublish=integratedServer !is null;
+                gameNavigationHitTest=(int x,int y)=>cast(int)
+                    renderer.pauseActionAt(x,y,canPublish,pauseMenu);
+            }
+            if(gameNavigationActive)
+            {
+                uiNavigation.prepare(gameNavigationToken,gameNavigationNone,
+                    gameNavigationHitTest,window.width,window.height);
+                const direction=uiNavigation.takeDirection(gamepad,
+                    monotonicMilliseconds());
+                bool consumed;
+                if(options.active&&options.fromGame
+                    &&(direction==UiDirection.left
+                        ||direction==UiDirection.right))
+                {
+                    const focused=cast(OptionsAction)uiNavigation.focusedId;
+                    if(options.slider(focused))
+                    {
+                        options.adjustSliderStep(focused,
+                            direction==UiDirection.right?1:-1,
+                            window.width,window.height);
+                        renderer.applyOptions();
+                        consumed=true;
+                    }
+                }
+                if(!consumed)uiNavigation.move(direction);
+                uiCursor=uiNavigation.cursor(mouseCursor);
+            }
+            if(controllerUiActive)
+                window.setCursorVisible(!uiNavigation.usingController);
+            const uiAcceptPressed = window.pressed(VK_LBUTTON)
+                || gamepad.pressed(GamepadButton.a);
+            const uiPrimaryDown = window.down(VK_LBUTTON)
+                || gamepad.down(GamepadButton.a);
             int resizedWidth;
             int resizedHeight;
             if (window.consumeResize(resizedWidth, resizedHeight))
@@ -798,6 +981,12 @@ final class GameClient
             }
 
             multiplayer.poll(chat);
+            if (!multiplayer.loginComplete
+                && multiplayer.disconnectReason.length)
+            {
+                renderer.setTitleNotice(multiplayer.disconnectReason);
+                returnToTitle = true;
+            }
             accounts.refreshWhenDue();
             const refreshedAccount=accounts.snapshot;
             renderer.syncAccountSkin(refreshedAccount);
@@ -847,9 +1036,14 @@ final class GameClient
                 renderer.applyDimensionTravel(player.dimension);
 
             const openChatPressed = window.pressed(
-                options.key(OptionsAction.bindChat));
-            const escapePressed = window.pressed(VK_ESCAPE);
-            const enterPressed = window.pressed(VK_RETURN);
+                options.key(OptionsAction.bindChat))
+                || gamepad.pressed(GamepadButton.dpadUp)
+                || gamepad.pressed(GamepadButton.view);
+            const escapePressed = window.pressed(VK_ESCAPE)
+                || gamepad.pressed(GamepadButton.menu)
+                || (controllerUiActive && gamepad.pressed(GamepadButton.b));
+            const enterPressed = window.pressed(VK_RETURN)
+                || (chat.active && gamepad.pressed(GamepadButton.a));
             const leftPressed = window.pressed(VK_LEFT);
             const rightPressed = window.pressed(VK_RIGHT);
             const homePressed = window.pressed(VK_HOME);
@@ -858,29 +1052,36 @@ final class GameClient
             const backspacePressed = window.pressed(VK_BACK)
                 || window.repeated(VK_BACK);
             const perspectivePressed = window.pressed(
-                options.key(OptionsAction.bindPerspective));
+                options.key(OptionsAction.bindPerspective))
+                || gamepad.pressed(GamepadButton.rightStick);
             const attackPressed = window.pressed(
-                options.key(OptionsAction.bindAttack));
+                options.key(OptionsAction.bindAttack))
+                || gamepad.rightTriggerPressed;
             const pickBlockPressed = window.pressed(
-                options.key(OptionsAction.bindPickBlock));
+                options.key(OptionsAction.bindPickBlock))
+                || gamepad.pressed(GamepadButton.x);
             const dropPressed = window.pressed(
-                options.key(OptionsAction.bindDrop));
+                options.key(OptionsAction.bindDrop))
+                || gamepad.pressed(GamepadButton.dpadDown);
             const jumpPressed = window.pressed(
-                options.key(OptionsAction.bindJump));
+                options.key(OptionsAction.bindJump))
+                || gamepad.pressed(GamepadButton.a);
             const inventoryPressed=window.pressed(
-                options.key(OptionsAction.bindInventory));
-            if (!window.down(VK_LBUTTON))
+                options.key(OptionsAction.bindInventory))
+                || gamepad.pressed(GamepadButton.y);
+            if (!window.down(VK_LBUTTON) && gamepad.rightTrigger <= 0)
                 suppressPrimaryUntilRelease = false;
             if (!chat.active && !pauseMenu.active && !deathScreen.active)
-                pendingUse = pendingUse || (window.pressed(
+                pendingUse = pendingUse || ((window.pressed(
                     options.key(OptionsAction.bindUse))
+                    || gamepad.leftTriggerPressed)
                     && player.gameMode != player.gameMode.adventure
                     && player.gameMode != player.gameMode.spectator);
 
             if (options.active && options.fromGame)
             {
                 window.clearTextInput();
-                const cursor = window.cursorPosition();
+                const cursor = uiCursor;
                 const hovered = renderer.optionsActionAt(cursor.x,cursor.y);
                 window.setCursorShape(hovered == OptionsAction.none
                     || !options.allowCursorChanges ? CursorShape.arrow
@@ -896,13 +1097,13 @@ final class GameClient
                 else if (escapePressed)
                     options.back();
                 else if (hovered != OptionsAction.none
-                    && options.slider(hovered) && window.down(VK_LBUTTON))
+                    && options.slider(hovered) && uiPrimaryDown)
                 {
-                    if (window.pressed(VK_LBUTTON)) renderer.playUiButtonClick();
+                    if (uiAcceptPressed) renderer.playUiButtonClick();
                     options.adjustSlider(hovered,cursor.x,window.width,window.height);
                     renderer.applyOptions();
                 }
-                else if (window.pressed(VK_LBUTTON)
+                else if (uiAcceptPressed
                     && hovered != OptionsAction.none)
                 {
                     renderer.playUiButtonClick();
@@ -918,12 +1119,12 @@ final class GameClient
             else if (deathScreen.active)
             {
                 window.clearTextInput();
-                const cursor = window.cursorPosition();
+                const cursor = uiCursor;
                 const hovered = renderer.deathActionAt(cursor.x,cursor.y,
                     deathScreen);
                 window.setCursorShape(hovered == DeathAction.none
                     ? CursorShape.arrow : CursorShape.hand);
-                if (window.pressed(VK_LBUTTON)
+                if (uiAcceptPressed
                     && hovered != DeathAction.none)
                 {
                     renderer.playUiButtonClick();
@@ -945,7 +1146,7 @@ final class GameClient
             else if(inventoryMenu.active)
             {
                 window.clearTextInput();
-                const cursor=window.cursorPosition();
+                const cursor=uiCursor;
                 const hovered=renderer.inventorySlotAt(cursor.x,cursor.y);
                 window.setCursorShape(CursorShape.arrow);
                 if(escapePressed||inventoryPressed)
@@ -967,8 +1168,11 @@ final class GameClient
                                 cast(ubyte)hovered,cast(ubyte)slot);
                     foreach(button;0..2)
                     {
-                        const key=button==0?VK_LBUTTON:VK_RBUTTON;
-                        if(!window.pressed(key))continue;
+                        const pressed=button==0
+                            ?uiAcceptPressed
+                            :(window.pressed(VK_RBUTTON)
+                                ||gamepad.leftTriggerPressed);
+                        if(!pressed)continue;
                         if(hovered>=0)
                         {
                             if(button==0&&window.down(VK_SHIFT))
@@ -996,7 +1200,7 @@ final class GameClient
             else if (pauseMenu.active)
             {
                 window.clearTextInput();
-                const cursor = window.cursorPosition();
+                const cursor = uiCursor;
                 const canPublish = integratedServer !is null;
                 const hovered = renderer.pauseActionAt(cursor.x, cursor.y,
                     canPublish, pauseMenu);
@@ -1012,7 +1216,7 @@ final class GameClient
                         pauseMenu.notice = "";
                     }
                 }
-                else if (window.pressed(VK_LBUTTON))
+                else if (uiAcceptPressed)
                 {
                     if (hovered != PauseAction.none)
                         renderer.playUiButtonClick();
@@ -1100,19 +1304,19 @@ final class GameClient
             }
             else if (chat.active)
             {
-                const mouse = window.cursorPosition();
+                const mouse = uiCursor;
                 const chatTextInput = window.consumeTextInput();
                 const chatTextBackspace = containsCharacter(chatTextInput, 8);
-                const mouseCursor = renderer.chatCursorAt(mouse.x, mouse.y, chat);
-                if (window.pressed(VK_LBUTTON) && mouseCursor >= 0)
+                const chatCursorIndex = renderer.chatCursorAt(mouse.x, mouse.y, chat);
+                if (uiAcceptPressed && chatCursorIndex >= 0)
                 {
-                    chat.setCursor(cast(size_t) mouseCursor);
+                    chat.setCursor(cast(size_t) chatCursorIndex);
                     chatMouseSelecting = true;
                 }
-                else if (chatMouseSelecting && window.down(VK_LBUTTON)
-                    && mouseCursor >= 0)
-                    chat.setCursor(cast(size_t) mouseCursor, true);
-                if (!window.down(VK_LBUTTON))
+                else if (chatMouseSelecting && uiPrimaryDown
+                    && chatCursorIndex >= 0)
+                    chat.setCursor(cast(size_t) chatCursorIndex, true);
+                if (!uiPrimaryDown)
                     chatMouseSelecting = false;
 
                 const shortcut = window.shortcutDown();
@@ -1195,7 +1399,8 @@ final class GameClient
             if (controlsActive)
             {
                 if (options.integer("sneakMode",0)==1
-                    && window.pressed(options.key(OptionsAction.bindSneak)))
+                    && (window.pressed(options.key(OptionsAction.bindSneak))
+                        || gamepad.pressed(GamepadButton.b)))
                     crouchToggleState=!crouchToggleState;
                 if (window.pressed(options.key(OptionsAction.bindSprint)))
                 {
@@ -1204,11 +1409,15 @@ final class GameClient
                     else
                         sprintLatched=true;
                 }
+                if (gamepad.pressed(GamepadButton.leftStick))
+                    controllerSprintLatched = true;
                 if (options.integer("attackMode",0)==1
-                    && window.pressed(options.key(OptionsAction.bindAttack)))
+                    && (window.pressed(options.key(OptionsAction.bindAttack))
+                        || gamepad.rightTriggerPressed))
                     attackToggleState=!attackToggleState;
                 if (options.integer("useMode",0)==1
-                    && window.pressed(options.key(OptionsAction.bindUse)))
+                    && (window.pressed(options.key(OptionsAction.bindUse))
+                        || gamepad.leftTriggerPressed))
                     useToggleState=!useToggleState;
             }
             if (controlsActive && jumpPressed
@@ -1226,10 +1435,23 @@ final class GameClient
             }
             const mouse = controlsActive ? window.mouseDelta() : Point(0, 0);
             if (controlsActive)
+            {
                 player.look(cast(float) mouse.x * options.mouseSensitivity
                         * (options.invertMouseX ? -1.0f : 1.0f),
                     cast(float) mouse.y * options.mouseSensitivity
                         * (options.invertMouse ? -1.0f : 1.0f));
+                // Controller speed is measured directly in degrees/second.
+                // At full deflection the 15% default is 348 degrees/second;
+                // the options slider spans 240..960 degrees/second.
+                const controllerDegreesPerSecond = 240.0f
+                    + options.number("controllerSensitivity",.15f) * 720.0f;
+                player.lookDegrees(controllerRightX * controllerDegreesPerSecond
+                        * cast(float)frameSeconds,
+                    -controllerRightY * controllerDegreesPerSecond
+                        * cast(float)frameSeconds
+                        * (options.boolean("invertControllerY",false)
+                            ? -1.0f : 1.0f));
+            }
             if (controlsActive && perspectivePressed)
                 renderer.cyclePerspective();
             if (controlsActive && pickBlockPressed
@@ -1257,10 +1479,14 @@ final class GameClient
                 if (player.selectedSlot < 0)
                     player.selectedSlot += 9;
             }
-
-            const current = monotonicSeconds();
-            const frameSeconds = fmin(current - previous, 0.25);
-            previous = current;
+            if (controlsActive && gamepad.pressed(GamepadButton.leftBumper))
+                player.selectedSlot = (player.selectedSlot + 8) % 9;
+            if (controlsActive && gamepad.pressed(GamepadButton.rightBumper))
+                player.selectedSlot = (player.selectedSlot + 1) % 9;
+            if (controlsActive && gamepad.pressed(GamepadButton.dpadLeft))
+                player.selectedSlot = (player.selectedSlot + 8) % 9;
+            if (controlsActive && gamepad.pressed(GamepadButton.dpadRight))
+                player.selectedSlot = (player.selectedSlot + 1) % 9;
             // An open menu only freezes a genuinely singleplayer integrated
             // server. In multiplayer the client keeps ticking and sends neutral
             // input while controls are captured by the menu.
@@ -1276,16 +1502,34 @@ final class GameClient
 
             while (!worldPaused && accumulator >= tickSeconds)
             {
-                const forward = controlsActive && window.down(options.key(OptionsAction.bindForward));
-                const back = controlsActive && window.down(options.key(OptionsAction.bindBack));
-                const left = controlsActive && window.down(options.key(OptionsAction.bindLeft));
-                const right = controlsActive && window.down(options.key(OptionsAction.bindRight));
-                const manualJumping = controlsActive && window.down(options.key(OptionsAction.bindJump));
+                const keyboardForward = (window.down(options.key(
+                    OptionsAction.bindForward)) ? 1.0f : 0.0f)
+                    - (window.down(options.key(OptionsAction.bindBack))
+                        ? 1.0f : 0.0f);
+                const keyboardStrafe = (window.down(options.key(
+                    OptionsAction.bindRight)) ? 1.0f : 0.0f)
+                    - (window.down(options.key(OptionsAction.bindLeft))
+                        ? 1.0f : 0.0f);
+                const forwardAxis = controlsActive
+                    ? (keyboardForward != 0 ? keyboardForward : controllerLeftY)
+                    : 0.0f;
+                const strafeAxis = controlsActive
+                    ? (keyboardStrafe != 0 ? keyboardStrafe : controllerLeftX)
+                    : 0.0f;
+                const forward = forwardAxis > 0;
+                const back = forwardAxis < 0;
+                const left = strafeAxis < 0;
+                const right = strafeAxis > 0;
+                const manualJumping = controlsActive && (window.down(
+                    options.key(OptionsAction.bindJump))
+                    || gamepad.down(GamepadButton.a));
                 const jumping = manualJumping || (controlsActive
                     && options.boolean("autoJump",false)
                     && player.shouldAutoJump(world,forward,back,left,right));
                 const crouching = controlsActive && (options.integer("sneakMode",0)==1
-                    ? crouchToggleState : window.down(options.key(OptionsAction.bindSneak)));
+                    ? crouchToggleState : (window.down(
+                        options.key(OptionsAction.bindSneak))
+                        || gamepad.down(GamepadButton.b)));
                 const sprintKeyDown = controlsActive
                     && window.down(options.key(OptionsAction.bindSprint));
                 if (options.integer("sprintMode",0) == 0)
@@ -1294,13 +1538,20 @@ final class GameClient
                     && !crouching && player.foodLevel > 6;
                 if (!sprintEligible
                     || (player.horizontalCollision && !sprintKeyDown))
+                {
                     sprintLatched=false;
-                const sprinting = sprintEligible && sprintLatched
+                    controllerSprintLatched=false;
+                }
+                const sprinting = sprintEligible
+                    && (sprintLatched || controllerSprintLatched)
                     && !player.horizontalCollision;
                 const attacking = controlsActive && !suppressPrimaryUntilRelease
                     && (options.integer("attackMode",0)==1 ? attackToggleState
-                        : window.down(options.key(OptionsAction.bindAttack)));
-                const dropDown = controlsActive && window.down(options.key(OptionsAction.bindDrop));
+                        : (window.down(options.key(OptionsAction.bindAttack))
+                            || gamepad.rightTrigger > 0));
+                const dropDown = controlsActive && (window.down(
+                    options.key(OptionsAction.bindDrop))
+                    || gamepad.down(GamepadButton.dpadDown));
                 if (dropDown)
                     ++dropHeldTicks;
                 else
@@ -1325,8 +1576,8 @@ final class GameClient
                     && !player.inventory.hotbar[player.selectedSlot].empty())
                     player.attack(true);
                 if (!deathScreen.active)
-                    player.simulateTick(world, forward, back, left, right,
-                        jumping, crouching, sprinting);
+                    player.simulateTick(world,forwardAxis,strafeAxis,jumping,
+                        crouching,sprinting);
                 renderer.simulateTick(player, multiplayer);
                 renderer.updateMining(player, attacking
                     && player.gameMode != player.gameMode.adventure
@@ -1341,10 +1592,21 @@ final class GameClient
                 if (crouching) flags |= inputCrouch;
                 if (sprinting) flags |= inputSprint;
                 if (attacking) flags |= inputAttack;
-                multiplayer.sendPredictedInput(PlayerInputCommand(++inputSequence,
+                auto inputCommand=PlayerInputCommand(++inputSequence,
                     flags, cast(ubyte) player.selectedSlot, pendingUse,
                     player.yaw, player.pitch, pendingAttack, flightToggle,
-                    options.skinParts(),options.mainHandRight()));
+                    options.skinParts(),options.mainHandRight());
+                inputCommand.moveForward=forwardAxis;
+                inputCommand.moveStrafe=strafeAxis;
+                auto configuredView=options.integer("renderDistance",6);
+                if(configuredView<2)configuredView=2;
+                if(configuredView>12)configuredView=12;
+                auto configuredSimulation=options.integer("simulationDistance",5);
+                if(configuredSimulation<5)configuredSimulation=5;
+                if(configuredSimulation>12)configuredSimulation=12;
+                inputCommand.viewDistance=cast(ubyte)configuredView;
+                inputCommand.simulationDistance=cast(ubyte)configuredSimulation;
+                multiplayer.sendPredictedInput(inputCommand);
                 if (dropRequested)
                     multiplayer.requestDrop(cast(ubyte) player.selectedSlot,
                         dropWholeStack);
@@ -1365,11 +1627,11 @@ final class GameClient
             }
 
             const menuCursor = pauseMenu.active
-                ? window.cursorPosition() : Point(0,0);
+                ? uiCursor : Point(0,0);
             const deathCursor = deathScreen.active
-                ? window.cursorPosition() : Point(0,0);
+                ? uiCursor : Point(0,0);
             const inventoryCursor=inventoryMenu.active
-                ?window.cursorPosition():Point(0,0);
+                ?uiCursor:Point(0,0);
             // A paused client has no next simulation tick to interpolate
             // toward. Render the current authoritative endpoint instead of
             // forcing alpha zero (the stale previous endpoint), which could

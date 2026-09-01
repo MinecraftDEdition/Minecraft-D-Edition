@@ -5,7 +5,8 @@ version (OSX):
 import std.string : fromStringz, toStringz;
 import std.utf : toUTF16;
 
-import minecraftd.platform.input : Point;
+import minecraftd.platform.desktop.gamepad : SdlGamepad;
+import minecraftd.platform.input : GamepadState, Point;
 
 enum CursorShape : ubyte
 {
@@ -34,6 +35,7 @@ private extern(C) nothrow
     void mcdPlatformMouseDelta(void* context, int* x, int* y);
     void mcdPlatformCursorPosition(void* context, int* x, int* y);
     void mcdPlatformSetCursor(void* context, int shape);
+    void mcdPlatformSetCursorVisible(void* context, int visible);
     void mcdPlatformSetFullscreen(void* context, int enabled);
     int mcdPlatformFullscreen(void* context);
     void mcdPlatformSetMouseCapture(void* context, int captured);
@@ -54,8 +56,11 @@ final class GameWindow
     bool running = true;
     bool mouseCaptured;
     bool fullscreen;
+    bool cursorVisible = true;
 
     private void* context;
+    private SdlGamepad gamepadBackend;
+    private GamepadState gamepad;
 
     this(string title, int requestedWidth = defaultWidth,
         int requestedHeight = defaultHeight, int localTestIndex = 0)
@@ -68,6 +73,7 @@ final class GameWindow
             throw new Exception(error[0] ? fromStringz(error.ptr).idup
                 : "Unable to create the macOS game window");
         handle = mcdPlatformRendererWindow(context);
+        gamepadBackend = new SdlGamepad();
         updateSize();
         fullscreen = mcdPlatformFullscreen(context) != 0;
         setMouseCapture(true);
@@ -75,6 +81,11 @@ final class GameWindow
 
     ~this()
     {
+        if (gamepadBackend !is null)
+        {
+            gamepadBackend.shutdown();
+            gamepadBackend = null;
+        }
         if (context !is null)
         {
             mcdPlatformDestroyWindow(context);
@@ -87,6 +98,8 @@ final class GameWindow
     {
         mcdPlatformPump(context);
         running = mcdPlatformRunning(context) != 0;
+        gamepad = gamepadBackend is null
+            ? GamepadState.init : gamepadBackend.poll();
     }
 
     bool consumeResize(out int resizedWidth, out int resizedHeight)
@@ -147,6 +160,14 @@ final class GameWindow
         mcdPlatformSetCursor(context, cast(int) shape);
     }
 
+    void setCursorVisible(bool visible)
+    {
+        if (mouseCaptured || cursorVisible == visible)
+            return;
+        mcdPlatformSetCursorVisible(context, visible ? 1 : 0);
+        cursorVisible = visible;
+    }
+
     void toggleFullscreen() { setFullscreen(!fullscreen); }
     void setFullscreen(bool enabled)
     {
@@ -158,6 +179,7 @@ final class GameWindow
     void setMouseCapture(bool capture)
     {
         mouseCaptured = capture;
+        cursorVisible = !capture;
         mcdPlatformSetMouseCapture(context, capture ? 1 : 0);
     }
 
@@ -177,6 +199,11 @@ final class GameWindow
     bool shortcutDown() const
     {
         return mcdPlatformShortcutDown(cast(void*) context) != 0;
+    }
+
+    GamepadState gamepadState() const
+    {
+        return gamepad;
     }
 
 private:

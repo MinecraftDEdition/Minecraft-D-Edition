@@ -155,7 +155,7 @@ enum OptionsAction : ushort
     bindSprint, bindAttack, bindUse, bindPickBlock, bindDrop, bindInventory, bindChat,
     bindFriends, bindPerspective, bindHotbar1, bindHotbar2, bindHotbar3,
     bindHotbar4, bindHotbar5, bindHotbar6, bindHotbar7, bindHotbar8,
-    bindHotbar9,
+    bindHotbar9, controllerSensitivity, controllerDeadzone, invertControllerY,
     selectedLanguage, forceUnicodeFont, japaneseGlyphVariants,
     chatVisibility, chatColors, webLinks, promptLinks, chatOpacity,
     textBackgroundOpacity, chatScale, lineSpacing, chatDelay, chatWidth,
@@ -260,8 +260,10 @@ final class OptionsMenuState
                  OptionsAction.simulationDistance, OptionsAction.mipmapLevels,
                  OptionsAction.entityDistance, OptionsAction.menuBackgroundBlur,
                  OptionsAction.cloudDistance, OptionsAction.anisotropicFiltering,
-                 OptionsAction.weatherRadius, OptionsAction.chunkFade,
-                 OptionsAction.sprintWindow, OptionsAction.sensitivity,
+                  OptionsAction.weatherRadius, OptionsAction.chunkFade,
+                  OptionsAction.sprintWindow, OptionsAction.sensitivity,
+                  OptionsAction.controllerSensitivity,
+                  OptionsAction.controllerDeadzone,
                  OptionsAction.scrollSensitivity, OptionsAction.chatOpacity,
                  OptionsAction.textBackgroundOpacity, OptionsAction.chatScale,
                  OptionsAction.lineSpacing, OptionsAction.chatDelay,
@@ -325,6 +327,10 @@ final class OptionsMenuState
         {
             case OptionsAction.fov: fov = 30 + value*80; break;
             case OptionsAction.sensitivity: mouseSensitivity = .25f + value*1.75f; break;
+            case OptionsAction.controllerSensitivity:
+                setFloat("controllerSensitivity", value); break;
+            case OptionsAction.controllerDeadzone:
+                setFloat("controllerDeadzone", value * .25f); break;
             case OptionsAction.masterVolume: masterVolume = value; break;
             case OptionsAction.soundVolume: soundVolume = value; break;
             case OptionsAction.musicVolume: setFloat("soundCategory_music",value); break;
@@ -339,8 +345,8 @@ final class OptionsMenuState
             case OptionsAction.maxFramerate: setInt("maxFps",10+cast(int)(value*250)); break;
             case OptionsAction.brightness: setFloat("gamma",value); break;
             case OptionsAction.biomeBlend: setInt("biomeBlendRadius",cast(int)(value*7)*2+1); break;
-            case OptionsAction.renderDistance: setInt("renderDistance",2+cast(int)(value*30)); break;
-            case OptionsAction.simulationDistance: setInt("simulationDistance",5+cast(int)(value*27)); break;
+            case OptionsAction.renderDistance: setInt("renderDistance",2+cast(int)(value*10)); break;
+            case OptionsAction.simulationDistance: setInt("simulationDistance",5+cast(int)(value*7)); break;
             case OptionsAction.mipmapLevels: setInt("mipmapLevels",cast(int)(value*4)); break;
             case OptionsAction.entityDistance: setFloat("entityDistanceScaling",.5f+value*4.5f); break;
             case OptionsAction.menuBackgroundBlur: setInt("menuBackgroundBlurriness",cast(int)(value*10)); break;
@@ -369,6 +375,26 @@ final class OptionsMenuState
             default: return;
         }
         save();
+    }
+
+    void adjustSliderStep(OptionsAction a, int direction, uint width,
+        uint height)
+    {
+        if (!slider(a) || direction == 0) return;
+        const scale = guiScale(width,height);
+        OptionRect area;
+        bool found;
+        foreach (spec;widgetsFor(this)) if(spec.action==a)
+        {
+            area=widgetRect(spec,cast(int)width/scale,
+                cast(int)height/scale,this);
+            found=true;
+            break;
+        }
+        if(!found||area.width<=8)return;
+        const amount=clamp(sliderAmount(a,this)+direction*.05f,0,1);
+        const logicalX=area.x+4+cast(int)(amount*(area.width-8));
+        adjustSlider(a,logicalX*scale,width,height);
     }
 
     void activate(OptionsAction a)
@@ -475,6 +501,11 @@ private:
     {
         fov=clamp(fov,30,110); mouseSensitivity=clamp(mouseSensitivity,.25f,2);
         masterVolume=clamp(masterVolume,0,1); soundVolume=clamp(soundVolume,0,1);
+        if("renderDistance" in extra)
+            setInt("renderDistance",clampInt(integer("renderDistance",6),2,12));
+        if("simulationDistance" in extra)
+            setInt("simulationDistance",clampInt(
+                integer("simulationDistance",5),5,12));
     }
     void load()
     {
@@ -594,8 +625,15 @@ private WidgetSpec[] widgetsFor(const OptionsMenuState state)
             add(OptionsAction.bindHotbar9,17,0); add(OptionsAction.resetKeys,18,0,true);
             add(OptionsAction.done,100,0,true); break;
         case OptionsScreen.controller:
-            heading("Controller support is coming next.",1);
-            display("Controller input is not available yet.",2,0);
+            heading("Xbox Controller",0);
+            display("Left Stick: Move   Right Stick: Look",1,0);
+            display("A: Jump   B: Sneak   Y: Inventory",2,0);
+            display("RT: Mine   LT: Use   LB/RB: Hotbar",3,0);
+            display("X: Pick   R3: View   Menu: Pause",4,0);
+            display("D-Pad: Hotbar / Chat / Drop",5,0);
+            add(OptionsAction.controllerSensitivity,6,0,false,WidgetKind.slider);
+            add(OptionsAction.controllerDeadzone,6,1,false,WidgetKind.slider);
+            add(OptionsAction.invertControllerY,7,0,true);
             add(OptionsAction.done,100,0,true); break;
         case OptionsScreen.language:
             heading("Search",0); display("English (US)",1,0);
@@ -754,8 +792,8 @@ private string label(OptionsAction a,const OptionsMenuState s)
         case OptionsAction.brightness:return percent("Brightness",s.number("gamma",.5f));
         case OptionsAction.biomeBlend:
             const blend=s.integer("biomeBlendRadius",5); return format("Biome Blend: %sx%s",blend,blend);
-        case OptionsAction.renderDistance:return "Render Distance: "~to!string(s.integer("renderDistance",16))~" Chunks";
-        case OptionsAction.simulationDistance:return "Simulation Distance: "~to!string(s.integer("simulationDistance",12))~" Chunks";
+        case OptionsAction.renderDistance:return "Render Distance: "~to!string(s.integer("renderDistance",6))~" Chunks";
+        case OptionsAction.simulationDistance:return "Simulation Distance: "~to!string(s.integer("simulationDistance",5))~" Chunks";
         case OptionsAction.mipmapLevels:return "Mipmap Levels: "~to!string(s.integer("mipmapLevels",4));
         case OptionsAction.entityDistance:return percent("Entity Distance",s.number("entityDistanceScaling",1));
         case OptionsAction.menuBackgroundBlur:return "Menu Background Blur: "~to!string(s.integer("menuBackgroundBlurriness",5));
@@ -764,6 +802,12 @@ private string label(OptionsAction a,const OptionsMenuState s)
         case OptionsAction.weatherRadius:return "Weather Effect Radius: "~to!string(s.integer("weatherRadius",10))~" Blocks";
         case OptionsAction.chunkFade:return s.number("chunkFade",.75f)<=.01f?"Chunk Fade: None":format("Chunk Fade: %.2f seconds",s.number("chunkFade",.75f));
         case OptionsAction.sensitivity:return percent("Sensitivity",s.mouseSensitivity);
+        case OptionsAction.controllerSensitivity:
+            return percent("Controller Sensitivity",
+                s.number("controllerSensitivity",.15f));
+        case OptionsAction.controllerDeadzone:
+            return percent("Stick Deadzone",
+                s.number("controllerDeadzone",.05f));
         case OptionsAction.scrollSensitivity:return format("Scroll Sensitivity: %.2f",s.number("mouseWheelSensitivity",1));
         case OptionsAction.sprintWindow:return "Sprint Window: "~to!string(s.integer("sprintWindow",7));
         case OptionsAction.chatOpacity:return percent("Chat Text Opacity",s.number("chatOpacity",1));
@@ -818,6 +862,8 @@ private float sliderAmount(OptionsAction a,const OptionsMenuState s)
     switch(a)
     {
         case OptionsAction.fov:return(s.fov-30)/80; case OptionsAction.sensitivity:return(s.mouseSensitivity-.25f)/1.75f;
+        case OptionsAction.controllerSensitivity:return s.number("controllerSensitivity",.15f);
+        case OptionsAction.controllerDeadzone:return s.number("controllerDeadzone",.05f)/.25f;
         case OptionsAction.masterVolume:return s.masterVolume; case OptionsAction.soundVolume:return s.soundVolume;
         case OptionsAction.musicVolume:return s.number("soundCategory_music",1); case OptionsAction.recordVolume:return s.number("soundCategory_record",1);
         case OptionsAction.weatherVolume:return s.number("soundCategory_weather",1); case OptionsAction.hostileVolume:return s.number("soundCategory_hostile",1);
@@ -825,7 +871,7 @@ private float sliderAmount(OptionsAction a,const OptionsMenuState s)
         case OptionsAction.ambientVolume:return s.number("soundCategory_ambient",1); case OptionsAction.voiceVolume:return s.number("soundCategory_voice",1);
         case OptionsAction.uiVolume:return s.number("soundCategory_ui",1); case OptionsAction.maxFramerate:return(s.integer("maxFps",120)-10)/250f;
         case OptionsAction.brightness:return s.number("gamma",.5f); case OptionsAction.biomeBlend:return(s.integer("biomeBlendRadius",5)-1)/14f;
-        case OptionsAction.renderDistance:return(s.integer("renderDistance",16)-2)/30f; case OptionsAction.simulationDistance:return(s.integer("simulationDistance",12)-5)/27f;
+        case OptionsAction.renderDistance:return(s.integer("renderDistance",6)-2)/10f; case OptionsAction.simulationDistance:return(s.integer("simulationDistance",5)-5)/7f;
         case OptionsAction.mipmapLevels:return s.integer("mipmapLevels",4)/4f; case OptionsAction.entityDistance:return(s.number("entityDistanceScaling",1)-.5f)/4.5f;
         case OptionsAction.menuBackgroundBlur:return s.integer("menuBackgroundBlurriness",5)/10f; case OptionsAction.cloudDistance:return(s.integer("renderCloudsDistance",64)-32)/96f;
         case OptionsAction.anisotropicFiltering:return(s.integer("maxAnisotropy",4)-1)/15f; case OptionsAction.weatherRadius:return(s.integer("weatherRadius",10)-1)/31f;
@@ -942,6 +988,7 @@ private string booleanKey(OptionsAction a)
         case OptionsAction.vignette:return"vignette"; case OptionsAction.autoJump:return"autoJump";
         case OptionsAction.operatorItemsTab:return"operatorItemsTab"; case OptionsAction.discreteScrolling:return"discreteScrolling";
         case OptionsAction.rawInput:return"rawMouseInput"; case OptionsAction.forceUnicodeFont:return"forceUnicodeFont";
+        case OptionsAction.invertControllerY:return"invertControllerY";
         case OptionsAction.japaneseGlyphVariants:return"japaneseGlyphVariants"; case OptionsAction.chatColors:return"chatColors";
         case OptionsAction.webLinks:return"webLinks"; case OptionsAction.promptLinks:return"promptLinks";
         case OptionsAction.commandSuggestions:return"autoSuggestCommands"; case OptionsAction.hideMatchedNames:return"hideMatchedNames";
@@ -970,6 +1017,7 @@ private string booleanName(OptionsAction a)
         case OptionsAction.vignette:return"Show Vignette"; case OptionsAction.autoJump:return"Auto-Jump";
         case OptionsAction.operatorItemsTab:return"Operator Items Tab"; case OptionsAction.discreteScrolling:return"Discrete Scrolling";
         case OptionsAction.rawInput:return"Raw Input"; case OptionsAction.forceUnicodeFont:return"Force Unicode Font";
+        case OptionsAction.invertControllerY:return"Invert Controller Y-Axis";
         case OptionsAction.japaneseGlyphVariants:return"Japanese Glyph Variants"; case OptionsAction.chatColors:return"Colors";
         case OptionsAction.webLinks:return"Web Links"; case OptionsAction.promptLinks:return"Prompt on Links";
         case OptionsAction.commandSuggestions:return"Command Suggestions"; case OptionsAction.hideMatchedNames:return"Hide Matched Names";
@@ -989,8 +1037,9 @@ private bool defaultBoolean(OptionsAction a)
         case OptionsAction.allowFriendRequests,OptionsAction.inGameNotification,
              OptionsAction.subtitles,OptionsAction.directionalAudio,
              OptionsAction.improvedTransparency,OptionsAction.autoJump,
-             OptionsAction.operatorItemsTab,OptionsAction.discreteScrolling,
-             OptionsAction.forceUnicodeFont,OptionsAction.hideMatchedNames,
+              OptionsAction.operatorItemsTab,OptionsAction.discreteScrolling,
+              OptionsAction.invertControllerY,
+              OptionsAction.forceUnicodeFont,OptionsAction.hideMatchedNames,
              OptionsAction.reducedDebugInfo,OptionsAction.secureChat,
              OptionsAction.highContrast,OptionsAction.hideSkyFlashes,
              OptionsAction.monochromeLogo,OptionsAction.hideSplashTexts,

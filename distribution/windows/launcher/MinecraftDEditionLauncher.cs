@@ -8,6 +8,7 @@ using System.IO.Compression;
 using System.Linq;
 using System.Net;
 using System.Net.Http;
+using System.Net.Http.Headers;
 using System.Security.Cryptography;
 using System.Text;
 using System.Threading;
@@ -159,6 +160,9 @@ namespace MinecraftDEdition.Updater
         private const string ManifestAsset = "mde-update-manifest-v1.txt";
         private const string PointerAsset = "mde-update-pointer-v1.txt";
         private const string GameExecutable = "Minecraft D Edition.exe";
+        private const string LauncherExecutable = "Minecraft D Edition Launcher.exe";
+        private const string LauncherUpdateExecutable =
+            "Minecraft D Edition Launcher.update.exe";
         private const string InstalledManifest = ".mde-installed-manifest.txt";
 
         private readonly string[] gameArguments;
@@ -248,8 +252,10 @@ namespace MinecraftDEdition.Updater
             base.OnShown(e);
             try
             {
-                await Task.Run(delegate { CheckAndApplyUpdates(); });
-                if (!checkOnly)
+                bool launchHere = await Task.Run(delegate {
+                    return CheckAndApplyUpdates();
+                });
+                if (launchHere && !checkOnly)
                     LaunchGame();
                 Close();
             }
@@ -273,10 +279,12 @@ namespace MinecraftDEdition.Updater
             client.Timeout = TimeSpan.FromMinutes(20);
             client.DefaultRequestHeaders.UserAgent.ParseAdd(
                 "Minecraft-D-Edition-Updater/1.0");
+            client.DefaultRequestHeaders.CacheControl =
+                new CacheControlHeaderValue { NoCache = true, NoStore = true };
             return client;
         }
 
-        private void CheckAndApplyUpdates()
+        private bool CheckAndApplyUpdates()
         {
             string root = AppDomain.CurrentDomain.BaseDirectory;
             bool gameInstalled = File.Exists(Path.Combine(root, GameExecutable));
@@ -299,23 +307,32 @@ namespace MinecraftDEdition.Updater
                             "The GitHub installation feed has not been published yet.");
                     SetStatus("No update feed has been published yet.");
                     SetDetails("Starting the installed game without updating.");
-                    return;
+                    return true;
                 }
                 pointer = UpdatePointer.Parse(pointerText);
-                if (installed != null && String.Equals(installed.Version,
-                    pointer.Version, StringComparison.Ordinal))
-                {
-                    SetStatus("Minecraft: D Edition is up to date.");
-                    SetDetails("Starting the game...");
-                    return;
-                }
                 manifestUrl = ReleaseAssetUrl(pointer.Manifest);
             }
 
-            byte[] remoteBytes;
+            byte[] remoteBytes = null;
+            // A verified installed copy of the current manifest avoids a
+            // redundant multi-megabyte download, but never skips checking the
+            // files themselves. Deleted or corrupted files are repaired even
+            // when the version number has not changed.
+            if (pointer != null && installed != null
+                && String.Equals(installed.Version, pointer.Version,
+                    StringComparison.Ordinal))
+            {
+                byte[] installedBytes = Encoding.UTF8.GetBytes(installed.RawText);
+                if (installedBytes.LongLength == pointer.Size
+                    && HashBytes(installedBytes).Equals(pointer.Sha256,
+                        StringComparison.OrdinalIgnoreCase))
+                    remoteBytes = installedBytes;
+            }
             try
             {
-                using (HttpResponseMessage response = Http.GetAsync(manifestUrl).Result)
+                if (remoteBytes == null)
+                using (HttpResponseMessage response = GetWithRetries(
+                    CacheBust(manifestUrl), HttpCompletionOption.ResponseContentRead))
                 {
                     if (response.StatusCode == HttpStatusCode.NotFound)
                     {
@@ -323,7 +340,7 @@ namespace MinecraftDEdition.Updater
                         if (!gameInstalled)
                             throw new InvalidOperationException(
                                 "The GitHub installation manifest is unavailable.");
-                        return;
+                        return true;
                     }
                     response.EnsureSuccessStatusCode();
                     remoteBytes = response.Content.ReadAsByteArrayAsync().Result;
@@ -339,7 +356,7 @@ namespace MinecraftDEdition.Updater
                             exception);
                     SetStatus("Offline - starting the installed game.");
                     SetDetails("Updates will be checked the next time you launch.");
-                    return;
+                    return true;
                 }
                 throw;
             }
@@ -353,31 +370,26 @@ namespace MinecraftDEdition.Updater
             if (pointer != null && !String.Equals(pointer.Version, remote.Version,
                 StringComparison.Ordinal))
                 throw new InvalidDataException("The update pointer and manifest disagree.");
-            if (installed != null && String.Equals(installed.Version, remote.Version,
-                StringComparison.Ordinal))
-            {
-                SetStatus("Minecraft: D Edition is up to date.");
-                SetDetails("Starting the game...");
-                return;
-            }
-
-            List<FileRecord> changed = FindChangedFiles(root, installed, remote);
+            List<FileRecord> changed = FindChangedFiles(root, remote);
             List<string> removed = FindRemovedFiles(installed, remote);
             if (changed.Count == 0 && removed.Count == 0)
             {
                 WriteInstalledManifest(root, remote.RawText);
                 SetStatus("Minecraft: D Edition is up to date.");
                 SetDetails("All installed files match version " + remote.Version + ".");
-                return;
+                return true;
             }
 
             bool firstInstall = installed == null || !gameInstalled;
             SetStatus((firstInstall ? "Installing " : "Updating to ")
                 + remote.Version + "...");
-            string work = Path.Combine(root, ".mde-update");
+            string workRoot = Path.Combine(root, ".mde-update");
+            Directory.CreateDirectory(workRoot);
+            CleanupOldUpdateSessions(workRoot);
+            string work = Path.Combine(workRoot, "session-"
+                + Guid.NewGuid().ToString("N"));
             string stage = Path.Combine(work, "stage");
             string downloads = Path.Combine(work, "downloads");
-            RecreateDirectory(work);
             Directory.CreateDirectory(stage);
             Directory.CreateDirectory(downloads);
 
@@ -401,13 +413,7 @@ namespace MinecraftDEdition.Updater
                     : "Downloading update files ") + (completedChunks + 1)
                     + " of " + byChunk.Count + "...");
                 string archive = Path.Combine(downloads, chunk.Name);
-                DownloadFile(ReleaseAssetUrl(chunk.Name), archive,
-                    completedBytes, totalBytes);
-                FileInfo archiveInfo = new FileInfo(archive);
-                if (archiveInfo.Length != chunk.Size
-                    || !HashFile(archive).Equals(chunk.Sha256,
-                        StringComparison.OrdinalIgnoreCase))
-                    throw new InvalidDataException("An update shard failed verification.");
+                DownloadChunk(chunk, archive, completedBytes, totalBytes);
                 ExtractChangedFiles(archive, stage, group.Value);
                 completedBytes += chunk.Size;
                 ++completedChunks;
@@ -415,25 +421,33 @@ namespace MinecraftDEdition.Updater
 
             SetStatus("Installing update...");
             SetProgress(100, "Verifying and applying files...");
+            if (changed.Any(delegate(FileRecord file) {
+                return String.Equals(file.Path, LauncherExecutable,
+                        StringComparison.OrdinalIgnoreCase)
+                    || String.Equals(file.Path, LauncherUpdateExecutable,
+                        StringComparison.OrdinalIgnoreCase);
+            }))
+            {
+                StartDeferredUpdate(root, work, stage, remote, changed, removed);
+                SetStatus("Finishing launcher update...");
+                SetDetails("Minecraft: D Edition will start automatically.");
+                return false;
+            }
             ApplyWithRollback(root, work, stage, changed, removed);
             WriteInstalledManifest(root, remote.RawText);
             TryDeleteDirectory(work);
             SetStatus("Update complete.");
             SetDetails("Starting Minecraft: D Edition...");
+            return true;
         }
 
         private static List<FileRecord> FindChangedFiles(string root,
-            UpdateManifest installed, UpdateManifest remote)
+            UpdateManifest remote)
         {
             List<FileRecord> changed = new List<FileRecord>();
             foreach (FileRecord file in remote.Files.Values)
             {
                 string destination = LocalPath(root, file.Path);
-                FileRecord old;
-                if (installed != null && installed.Files.TryGetValue(file.Path, out old)
-                    && String.Equals(old.Sha256, file.Sha256,
-                        StringComparison.OrdinalIgnoreCase) && File.Exists(destination))
-                    continue;
                 if (File.Exists(destination) && new FileInfo(destination).Length == file.Size
                     && HashFile(destination).Equals(file.Sha256,
                         StringComparison.OrdinalIgnoreCase))
@@ -486,7 +500,7 @@ namespace MinecraftDEdition.Updater
                 throw new InvalidDataException("An update shard did not contain every required file.");
         }
 
-        private static void ApplyWithRollback(string root, string work, string stage,
+        internal static void ApplyWithRollback(string root, string work, string stage,
             List<FileRecord> changed, List<string> removed)
         {
             string backup = Path.Combine(work, "backup");
@@ -494,6 +508,17 @@ namespace MinecraftDEdition.Updater
             List<string> newFiles = new List<string>();
             try
             {
+                // Validate the complete staged set before touching a live file.
+                foreach (FileRecord file in changed)
+                {
+                    string staged = LocalPath(stage, file.Path);
+                    if (!File.Exists(staged) || new FileInfo(staged).Length != file.Size
+                        || !HashFile(staged).Equals(file.Sha256,
+                            StringComparison.OrdinalIgnoreCase))
+                        throw new InvalidDataException(
+                            "A staged update file failed preflight verification: "
+                            + file.Path);
+                }
                 foreach (string path in removed.Concat(changed.Select(
                     delegate(FileRecord file) { return file.Path; })).Distinct(
                         StringComparer.OrdinalIgnoreCase))
@@ -514,7 +539,7 @@ namespace MinecraftDEdition.Updater
                     string source = LocalPath(stage, file.Path);
                     string destination = LocalPath(root, file.Path);
                     Directory.CreateDirectory(Path.GetDirectoryName(destination));
-                    File.Copy(source, destination, true);
+                    ReplaceAtomically(source, destination);
                 }
                 foreach (string path in removed)
                 {
@@ -539,14 +564,14 @@ namespace MinecraftDEdition.Updater
                         string relative = backupFile.Substring(backup.Length + 1);
                         string destination = LocalPath(root, relative);
                         Directory.CreateDirectory(Path.GetDirectoryName(destination));
-                        File.Copy(backupFile, destination, true);
+                        ReplaceAtomically(backupFile, destination);
                     }
                 }
                 throw;
             }
         }
 
-        private static UpdateManifest TryReadManifest(string path)
+        internal static UpdateManifest TryReadManifest(string path)
         {
             try
             {
@@ -559,7 +584,7 @@ namespace MinecraftDEdition.Updater
             }
         }
 
-        private static void WriteInstalledManifest(string root, string text)
+        internal static void WriteInstalledManifest(string root, string text)
         {
             string destination = Path.Combine(root, InstalledManifest);
             string temporary = destination + ".new";
@@ -570,7 +595,7 @@ namespace MinecraftDEdition.Updater
                 File.Move(temporary, destination);
         }
 
-        private static string HashFile(string path)
+        internal static string HashFile(string path)
         {
             using (SHA256 sha = SHA256.Create())
             using (FileStream stream = new FileStream(path, FileMode.Open,
@@ -590,7 +615,8 @@ namespace MinecraftDEdition.Updater
         {
             try
             {
-                using (HttpResponseMessage response = Http.GetAsync(url).Result)
+                using (HttpResponseMessage response = GetWithRetries(
+                    CacheBust(url), HttpCompletionOption.ResponseContentRead))
                 {
                     if (response.StatusCode == HttpStatusCode.NotFound)
                         return null;
@@ -606,31 +632,92 @@ namespace MinecraftDEdition.Updater
             }
         }
 
-        private void DownloadFile(string url, string destination,
+        private void DownloadChunk(ChunkRecord chunk, string destination,
             long completedBefore, long totalBytes)
         {
-            using (HttpResponseMessage response = Http.GetAsync(url,
-                HttpCompletionOption.ResponseHeadersRead).Result)
+            Exception last = null;
+            foreach (int attempt in Enumerable.Range(1, 4))
             {
-                response.EnsureSuccessStatusCode();
-                using (Stream input = response.Content.ReadAsStreamAsync().Result)
-                using (FileStream output = File.Create(destination))
+                string partial = destination + ".partial";
+                try
                 {
-                    byte[] buffer = new byte[128 * 1024];
-                    long downloaded = 0;
-                    int read;
-                    while ((read = input.Read(buffer, 0, buffer.Length)) != 0)
+                    if (File.Exists(partial)) File.Delete(partial);
+                    using (HttpResponseMessage response = GetWithRetries(
+                        ReleaseAssetUrl(chunk.Name),
+                        HttpCompletionOption.ResponseHeadersRead))
+                    using (Stream input = response.Content.ReadAsStreamAsync().Result)
+                    using (FileStream output = File.Create(partial))
                     {
-                        output.Write(buffer, 0, read);
-                        downloaded += read;
-                        long overall = completedBefore + downloaded;
-                        int percent = totalBytes == 0 ? 0 : (int)Math.Min(99,
-                            overall * 100 / totalBytes);
-                        SetProgress(percent, FormatBytes(overall) + " of "
-                            + FormatBytes(totalBytes));
+                        byte[] buffer = new byte[128 * 1024];
+                        long downloaded = 0;
+                        int read;
+                        while ((read = input.Read(buffer, 0, buffer.Length)) != 0)
+                        {
+                            output.Write(buffer, 0, read);
+                            downloaded += read;
+                            long overall = completedBefore + downloaded;
+                            int percent = totalBytes == 0 ? 0 : (int)Math.Min(99,
+                                overall * 100 / totalBytes);
+                            SetProgress(percent, FormatBytes(overall) + " of "
+                                + FormatBytes(totalBytes));
+                        }
                     }
+                    FileInfo archiveInfo = new FileInfo(partial);
+                    if (archiveInfo.Length != chunk.Size
+                        || !HashFile(partial).Equals(chunk.Sha256,
+                            StringComparison.OrdinalIgnoreCase))
+                        throw new InvalidDataException(
+                            "An update shard failed verification.");
+                    if (File.Exists(destination)) File.Delete(destination);
+                    File.Move(partial, destination);
+                    return;
+                }
+                catch (Exception exception)
+                {
+                    last = exception;
+                    try { if (File.Exists(partial)) File.Delete(partial); }
+                    catch { }
+                    if (attempt < 4)
+                        Thread.Sleep(250 * attempt * attempt);
                 }
             }
+            throw new InvalidOperationException(
+                "An update shard could not be downloaded and verified after four attempts.",
+                last);
+        }
+
+        private static HttpResponseMessage GetWithRetries(string url,
+            HttpCompletionOption completion)
+        {
+            Exception last = null;
+            foreach (int attempt in Enumerable.Range(1, 4))
+            {
+                try
+                {
+                    HttpResponseMessage response = Http.GetAsync(url, completion).Result;
+                    int status = (int)response.StatusCode;
+                    if (status != 408 && status != 429 && status < 500)
+                        return response;
+                    response.Dispose();
+                    last = new HttpRequestException(
+                        "The update server temporarily returned HTTP " + status + ".");
+                }
+                catch (Exception exception)
+                {
+                    last = exception;
+                    if (!IsNetworkFailure(exception)) throw;
+                }
+                if (attempt < 4)
+                    Thread.Sleep(250 * attempt * attempt);
+            }
+            throw new HttpRequestException(
+                "The update server did not respond after four attempts.", last);
+        }
+
+        private static string CacheBust(string url)
+        {
+            return url + (url.Contains("?") ? "&" : "?") + "mde="
+                + DateTime.UtcNow.Ticks.ToString();
         }
 
         private static string FormatBytes(long bytes)
@@ -654,7 +741,7 @@ namespace MinecraftDEdition.Updater
                 + Uri.EscapeDataString(ChannelTag) + "/" + Uri.EscapeDataString(asset);
         }
 
-        private static string LocalPath(string root, string relative)
+        internal static string LocalPath(string root, string relative)
         {
             string safe = UpdateManifest.ValidateRelativePath(relative)
                 .Replace('/', Path.DirectorySeparatorChar);
@@ -666,18 +753,82 @@ namespace MinecraftDEdition.Updater
             return result;
         }
 
-        private static void RecreateDirectory(string path)
+        internal static void ReplaceAtomically(string source, string destination)
         {
-            TryDeleteDirectory(path);
-            Directory.CreateDirectory(path);
+            string temporary = destination + ".mde-new-"
+                + Guid.NewGuid().ToString("N");
+            try
+            {
+                File.Copy(source, temporary, true);
+                if (File.Exists(destination))
+                    File.Replace(temporary, destination, null, true);
+                else
+                    File.Move(temporary, destination);
+            }
+            finally
+            {
+                try { if (File.Exists(temporary)) File.Delete(temporary); }
+                catch { }
+            }
         }
 
-        private static void TryDeleteDirectory(string path)
+        internal static void PromoteLauncherSidecar(string root)
+        {
+            string sidecar = Path.Combine(root, LauncherUpdateExecutable);
+            string launcher = Path.Combine(root, LauncherExecutable);
+            if (!File.Exists(sidecar)) return;
+            if (File.Exists(launcher)
+                && new FileInfo(sidecar).Length == new FileInfo(launcher).Length
+                && HashFile(sidecar).Equals(HashFile(launcher),
+                    StringComparison.OrdinalIgnoreCase))
+                return;
+            ReplaceAtomically(sidecar, launcher);
+        }
+
+        private static void CleanupOldUpdateSessions(string workRoot)
+        {
+            if (!Directory.Exists(workRoot)) return;
+            foreach (string directory in Directory.GetDirectories(workRoot,
+                "session-*", SearchOption.TopDirectoryOnly))
+                TryDeleteDirectory(directory);
+        }
+
+        internal static void TryDeleteDirectory(string path)
         {
             if (!Directory.Exists(path))
                 return;
             try { Directory.Delete(path, true); }
             catch { }
+        }
+
+        private void StartDeferredUpdate(string root, string work, string stage,
+            UpdateManifest remote, List<FileRecord> changed, List<string> removed)
+        {
+            List<string> plan = new List<string>();
+            plan.Add("MDE-DEFERRED-UPDATE\t1");
+            plan.Add("checkOnly\t" + (checkOnly ? "1" : "0"));
+            foreach (FileRecord file in changed)
+                plan.Add("changed\t" + file.Path);
+            foreach (string path in removed)
+                plan.Add("removed\t" + path);
+            foreach (string argument in gameArguments)
+                plan.Add("argument\t" + Convert.ToBase64String(
+                    Encoding.UTF8.GetBytes(argument)));
+            File.WriteAllLines(Path.Combine(work, "deferred-plan.txt"),
+                plan, new UTF8Encoding(false));
+            File.WriteAllText(Path.Combine(work, "deferred-manifest.txt"),
+                remote.RawText, new UTF8Encoding(false));
+
+            string helper = Path.Combine(work, "Minecraft D Edition Update Helper.exe");
+            File.Copy(Application.ExecutablePath, helper, true);
+            ProcessStartInfo start = new ProcessStartInfo(helper);
+            start.WorkingDirectory = root;
+            start.UseShellExecute = false;
+            start.CreateNoWindow = true;
+            start.Arguments = "--apply-staged-update " + QuoteArgument(root)
+                + " " + QuoteArgument(work) + " "
+                + Process.GetCurrentProcess().Id.ToString();
+            Process.Start(start);
         }
 
         private static bool IsNetworkFailure(Exception exception)
@@ -706,7 +857,7 @@ namespace MinecraftDEdition.Updater
             Process.Start(start);
         }
 
-        private static string QuoteArgument(string value)
+        internal static string QuoteArgument(string value)
         {
             if (value.Length != 0 && !value.Any(Char.IsWhiteSpace)
                 && !value.Contains("\""))
@@ -747,11 +898,136 @@ namespace MinecraftDEdition.Updater
         }
     }
 
+    internal static class DeferredUpdateHelper
+    {
+        internal static int Run(string rootArgument, string workArgument,
+            int parentProcessId)
+        {
+            try
+            {
+                string root = Path.GetFullPath(rootArgument)
+                    .TrimEnd(Path.DirectorySeparatorChar);
+                string workRoot = Path.Combine(root, ".mde-update")
+                    .TrimEnd(Path.DirectorySeparatorChar)
+                    + Path.DirectorySeparatorChar;
+                string work = Path.GetFullPath(workArgument)
+                    .TrimEnd(Path.DirectorySeparatorChar);
+                if (!work.StartsWith(workRoot,
+                    StringComparison.OrdinalIgnoreCase)
+                    || !Path.GetFileName(work).StartsWith("session-",
+                        StringComparison.OrdinalIgnoreCase))
+                    throw new InvalidDataException(
+                        "The deferred update folder is unsafe.");
+
+                try
+                {
+                    Process parent = Process.GetProcessById(parentProcessId);
+                    if (!parent.WaitForExit(60000))
+                        throw new TimeoutException(
+                            "The launcher did not close for its update.");
+                }
+                catch (ArgumentException)
+                {
+                    // The parent already exited between process creation and lookup.
+                }
+
+                string manifestPath = Path.Combine(work,
+                    "deferred-manifest.txt");
+                UpdateManifest manifest = UpdateManifest.Parse(
+                    File.ReadAllText(manifestPath, Encoding.UTF8));
+                string planPath = Path.Combine(work, "deferred-plan.txt");
+                string[] lines = File.ReadAllLines(planPath, Encoding.UTF8);
+                if (lines.Length == 0 || lines[0] != "MDE-DEFERRED-UPDATE\t1")
+                    throw new InvalidDataException(
+                        "The deferred update plan is invalid.");
+
+                bool checkOnly = false;
+                List<FileRecord> changed = new List<FileRecord>();
+                List<string> removed = new List<string>();
+                List<string> gameArguments = new List<string>();
+                foreach (string line in lines.Skip(1))
+                {
+                    if (String.IsNullOrWhiteSpace(line)) continue;
+                    string[] fields = line.Split(new[] { '\t' }, 2);
+                    if (fields.Length != 2)
+                        throw new InvalidDataException(
+                            "The deferred update plan is malformed.");
+                    if (fields[0] == "checkOnly")
+                        checkOnly = fields[1] == "1";
+                    else if (fields[0] == "changed")
+                    {
+                        string path = UpdateManifest.ValidateRelativePath(fields[1]);
+                        FileRecord file;
+                        if (!manifest.Files.TryGetValue(path, out file))
+                            throw new InvalidDataException(
+                                "The deferred plan references an unknown file.");
+                        changed.Add(file);
+                    }
+                    else if (fields[0] == "removed")
+                        removed.Add(UpdateManifest.ValidateRelativePath(fields[1]));
+                    else if (fields[0] == "argument")
+                        gameArguments.Add(Encoding.UTF8.GetString(
+                            Convert.FromBase64String(fields[1])));
+                    else
+                        throw new InvalidDataException(
+                            "The deferred update plan has an unknown action.");
+                }
+
+                string stage = Path.Combine(work, "stage");
+                LauncherForm.ApplyWithRollback(root, work, stage,
+                    changed, removed);
+                LauncherForm.PromoteLauncherSidecar(root);
+                LauncherForm.WriteInstalledManifest(root, manifest.RawText);
+                File.WriteAllText(Path.Combine(work, "completed"),
+                    manifest.Version, new UTF8Encoding(false));
+
+                if (!checkOnly)
+                {
+                    string game = Path.Combine(root,
+                        "Minecraft D Edition.exe");
+                    if (!File.Exists(game))
+                        throw new FileNotFoundException(
+                            "The updated game executable is missing.", game);
+                    ProcessStartInfo start = new ProcessStartInfo(game);
+                    start.WorkingDirectory = root;
+                    start.UseShellExecute = false;
+                    start.Arguments = String.Join(" ", gameArguments.Select(
+                        LauncherForm.QuoteArgument));
+                    Process.Start(start);
+                }
+                return 0;
+            }
+            catch (Exception exception)
+            {
+                MessageBox.Show(
+                    "Minecraft: D Edition could not finish its launcher update.\n\n"
+                    + exception.Message
+                    + "\n\nYour previous installation was restored where possible. "
+                    + "Open the game again to retry.",
+                    "Update failed", MessageBoxButtons.OK, MessageBoxIcon.Error);
+                return 1;
+            }
+        }
+    }
+
     internal static class Program
     {
         [STAThread]
         private static void Main(string[] args)
         {
+            if (args.Length == 4 && String.Equals(args[0],
+                "--apply-staged-update", StringComparison.OrdinalIgnoreCase))
+            {
+                int parentProcessId;
+                if (!Int32.TryParse(args[3], out parentProcessId))
+                {
+                    Environment.ExitCode = 1;
+                    return;
+                }
+                Environment.ExitCode = DeferredUpdateHelper.Run(args[1],
+                    args[2], parentProcessId);
+                return;
+            }
             bool created;
             using (Mutex mutex = new Mutex(true,
                 "Local\\MinecraftDEditionLauncher", out created))

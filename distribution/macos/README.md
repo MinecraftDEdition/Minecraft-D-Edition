@@ -2,7 +2,8 @@
 
 This directory builds the native Apple Silicon test package. It shares the D
 game client and game data with Windows while using SDL3 for the Cocoa window,
-input, and clipboard; Vulkan through MoltenVK for rendering; miniaudio/Core
+input, clipboard, and the cross-platform controller layer; Vulkan through
+MoltenVK for rendering; miniaudio/Core
 Audio for sound; and Sparkle for signed in-place updates.
 
 ## Planned player artifact
@@ -30,6 +31,12 @@ newer. An Intel slice can be added after the first physical-Mac validation.
 
 The Test release also hosts `mde-macos-appcast.xml`. Sparkle verifies every
 update with the repository's private Ed25519 key before replacing the app.
+The release workflow retains the preceding app archive long enough to create
+a signed binary delta, so normal upgrades download only the changed binary
+data. Sparkle automatically falls back to the complete signed DMG whenever a
+delta cannot be used. The installed app contains its own updater, so the
+downloaded DMG may be ejected and deleted after the app is copied to
+Applications.
 The private key belongs only in the ignored `private/` directory and the
 `MACOS_SPARKLE_ED25519` GitHub Actions secret.
 

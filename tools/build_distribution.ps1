@@ -46,7 +46,8 @@ New-Item -ItemType Directory -Path $runtime | Out-Null
 $requiredFiles = @(
     'Minecraft D Edition.exe',
     'Minecraft D Edition Launcher.exe',
-    'EOSSDK-Win64-Shipping.dll'
+    'EOSSDK-Win64-Shipping.dll',
+    'SDL3.dll'
 )
 foreach ($relative in $requiredFiles) {
     $source = Join-Path $ProjectRoot $relative
@@ -55,6 +56,13 @@ foreach ($relative in $requiredFiles) {
     }
     Copy-Item -LiteralPath $source -Destination (Join-Path $runtime $relative)
 }
+# The running launcher is intentionally not a managed manifest target because
+# older installed versions cannot overwrite their own executable. The updater
+# downloads this sidecar normally; the game/new helper promotes it atomically
+# after the original launcher process has exited.
+Copy-Item -LiteralPath (Join-Path $ProjectRoot `
+    'Minecraft D Edition Launcher.exe') -Destination (Join-Path $runtime `
+    'Minecraft D Edition Launcher.update.exe')
 
 Copy-Item -LiteralPath (Join-Path $ProjectRoot 'assets') -Destination $runtime -Recurse
 Copy-Item -LiteralPath (Join-Path $ProjectRoot 'shaders') -Destination $runtime -Recurse

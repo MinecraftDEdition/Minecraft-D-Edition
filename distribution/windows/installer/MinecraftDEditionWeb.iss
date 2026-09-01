@@ -53,7 +53,9 @@ Filename: "{app}\Minecraft D Edition Launcher.exe"; Description: "Download and l
 
 [UninstallDelete]
 Type: files; Name: "{app}\Minecraft D Edition.exe"
+Type: files; Name: "{app}\Minecraft D Edition Launcher.update.exe"
 Type: files; Name: "{app}\EOSSDK-Win64-Shipping.dll"
+Type: files; Name: "{app}\SDL3.dll"
 Type: files; Name: "{app}\.mde-installed-manifest.txt"
 Type: files; Name: "{app}\.mde-installed-manifest.txt.new"
 Type: filesandordirs; Name: "{app}\.mde-update"

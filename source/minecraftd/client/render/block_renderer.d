@@ -2,9 +2,10 @@ module minecraftd.client.render.block_renderer;
 
 import minecraftd.client.render.mesh : Vertex, Color, appendQuad;
 import minecraftd.client.render.texture_manager : ImageData;
-import minecraftd.common.math3d : Vec2, Vec3, clamp;
+import minecraftd.client.render.world_lighting : WorldLighting;
+import minecraftd.common.math3d : Vec2, Vec3;
 import minecraftd.world.block : BlockId, isOpaque, isWater, waterHeight;
-import minecraftd.world.chunk : Chunk;
+import minecraftd.world.chunk : Chunk, ChunkCoordinate;
 import minecraftd.world.world : World;
 
 struct BlockTextureSet
@@ -15,6 +16,7 @@ struct BlockTextureSet
     uint stone;
     uint obsidian;
     uint netherrack;
+    uint bedrock;
     uint bricks;
     uint oakPlanks;
     uint sprucePlanks;
@@ -72,32 +74,91 @@ unittest
     assert(c[1]>1.0f);
 }
 
+unittest
+{
+    // Keep the first streamed 3x3 terrain neighborhood compact enough to
+    // mesh incrementally without a visible loading hitch.
+    auto generated=new World();
+    scope(exit)destroy(generated);
+    generated.settings.seed=8675309;
+    generated.generate();
+    auto renderer=new BlockRenderer(generated);
+    scope(exit)destroy(renderer);
+    size_t vertices;
+    foreach(texture,geometry;renderer.build(BlockTextureSet.init))
+        vertices+=geometry.length;
+    const water=renderer.buildWater();
+    vertices+=water.surface.length+water.walls.length+water.underside.length;
+    assert(vertices<450_000);
+}
+
 enum Face : int { down, up, north, south, west, east }
 
 final class BlockRenderer
 {
     private World world;
+    private WorldLighting lighting;
     private bool smoothLighting = true;
-    private float brightness = 0.5f;
 
     this(World world)
     {
         this.world = world;
+        lighting = new WorldLighting(world);
+    }
+
+    ~this()
+    {
+        destroy(lighting);
     }
 
     void configure(bool smooth, float brightnessValue)
     {
         smoothLighting=smooth;
-        brightness=clamp(brightnessValue,0.0f,1.0f);
+        lighting.configure(brightnessValue);
+    }
+
+    float lightAt(Vec3 position)
+    {
+        return lighting.brightnessAt(position);
     }
 
     Vertex[][uint] build(const BlockTextureSet textures)
     {
+        lighting.refresh();
         Vertex[][uint] byTexture;
-        foreach (y; 0 .. Chunk.height)
-        foreach (z; 0 .. Chunk.depth)
-        foreach (x; 0 .. Chunk.width)
+        foreach (coordinate; world.loadedChunkCoordinates())
         {
+            auto part=buildChunk(textures,coordinate);
+            foreach(texture,geometry;part)byTexture[texture]~=geometry;
+        }
+        return byTexture;
+    }
+
+    Vertex[][uint] buildChunk(const BlockTextureSet textures,
+        ChunkCoordinate coordinate)
+    {
+        const loaded=world.chunkAt(coordinate.x,coordinate.z);
+        if(loaded is null||loaded.empty)return null;
+        return buildChunkRange(textures,coordinate,loaded.minimumOccupiedY(),
+            loaded.maximumOccupiedY());
+    }
+
+    Vertex[][uint] buildChunkRange(const BlockTextureSet textures,
+        ChunkCoordinate coordinate,int minimumY,int maximumY)
+    {
+        lighting.refresh();
+        lighting.prepare(coordinate);
+        Vertex[][uint] byTexture;
+        const loaded=world.chunkAt(coordinate.x,coordinate.z);
+        if(loaded is null||loaded.empty)return byTexture;
+        if(minimumY<loaded.minimumOccupiedY())minimumY=loaded.minimumOccupiedY();
+        if(maximumY>loaded.maximumOccupiedY())maximumY=loaded.maximumOccupiedY();
+        foreach (y; minimumY .. maximumY+1)
+        foreach (localZ; 0 .. Chunk.depth)
+        foreach (localX; 0 .. Chunk.width)
+        {
+            const x=coordinate.x*Chunk.width+localX;
+            const z=coordinate.z*Chunk.depth+localZ;
             const block = world.getBlock(x, y, z);
             if (block == BlockId.air || isWater(block))
                 continue;
@@ -132,10 +193,33 @@ final class BlockRenderer
     Vertex[] buildPortals()
     {
         Vertex[] output;
-        foreach (y; 0 .. Chunk.height)
-        foreach (z; 0 .. Chunk.depth)
-        foreach (x; 0 .. Chunk.width)
+        foreach (coordinate; world.loadedChunkCoordinates())
+            output~=buildPortalsChunk(coordinate);
+        return output;
+    }
+
+    Vertex[] buildPortalsChunk(ChunkCoordinate coordinate)
+    {
+        const loaded=world.chunkAt(coordinate.x,coordinate.z);
+        if(loaded is null||loaded.empty)return null;
+        return buildPortalsChunkRange(coordinate,loaded.minimumOccupiedY(),
+            loaded.maximumOccupiedY());
+    }
+
+    Vertex[] buildPortalsChunkRange(ChunkCoordinate coordinate,int minimumY,
+        int maximumY)
+    {
+        Vertex[] output;
+        const loaded=world.chunkAt(coordinate.x,coordinate.z);
+        if(loaded is null||loaded.empty)return output;
+        if(minimumY<loaded.minimumOccupiedY())minimumY=loaded.minimumOccupiedY();
+        if(maximumY>loaded.maximumOccupiedY())maximumY=loaded.maximumOccupiedY();
+        foreach (y; minimumY .. maximumY+1)
+        foreach (localZ; 0 .. Chunk.depth)
+        foreach (localX; 0 .. Chunk.width)
         {
+            const x=coordinate.x*Chunk.width+localX;
+            const z=coordinate.z*Chunk.depth+localZ;
             const block = world.getBlock(x,y,z);
             if (block == BlockId.netherPortalX
                 || block == BlockId.netherPortalZ)
@@ -147,8 +231,37 @@ final class BlockRenderer
     WaterGeometry buildWater()
     {
         WaterGeometry result;
-        foreach(y;0..Chunk.height)foreach(z;0..Chunk.depth)foreach(x;0..Chunk.width)
+        foreach(coordinate;world.loadedChunkCoordinates())
         {
+            const part=buildWaterChunk(coordinate);
+            result.surface~=part.surface;
+            result.walls~=part.walls;
+            result.underside~=part.underside;
+        }
+        return result;
+    }
+
+    WaterGeometry buildWaterChunk(ChunkCoordinate coordinate)
+    {
+        const loaded=world.chunkAt(coordinate.x,coordinate.z);
+        if(loaded is null||loaded.empty)return WaterGeometry.init;
+        return buildWaterChunkRange(coordinate,loaded.minimumOccupiedY(),
+            loaded.maximumOccupiedY());
+    }
+
+    WaterGeometry buildWaterChunkRange(ChunkCoordinate coordinate,int minimumY,
+        int maximumY)
+    {
+        WaterGeometry result;
+        const loaded=world.chunkAt(coordinate.x,coordinate.z);
+        if(loaded is null||loaded.empty)return result;
+        if(minimumY<loaded.minimumOccupiedY())minimumY=loaded.minimumOccupiedY();
+        if(maximumY>loaded.maximumOccupiedY())maximumY=loaded.maximumOccupiedY();
+        foreach(y;minimumY..maximumY+1)
+        foreach(localZ;0..Chunk.depth)foreach(localX;0..Chunk.width)
+        {
+            const x=coordinate.x*Chunk.width+localX;
+            const z=coordinate.z*Chunk.depth+localZ;
             const block=world.getBlock(x,y,z);
             if(!isWater(block))continue;
             const fullAbove=isWater(world.getBlock(x,y+1,z));
@@ -198,7 +311,7 @@ final class BlockRenderer
             const tint = block == BlockId.grass && face == Face.up
                 ? Color(0.55f, 0.82f, 0.35f, 1.0f)
                 : Color(1, 1, 1, 1);
-            appendBlockFace(*geometry, 0, 0, 0, face, tint);
+            appendBlockFace(*geometry, 0, 0, 0, face, tint, false);
         }
         return byTexture;
     }
@@ -352,6 +465,7 @@ private:
             case BlockId.stone: return textures.stone;
             case BlockId.obsidian: return textures.obsidian;
             case BlockId.netherrack: return textures.netherrack;
+            case BlockId.bedrock: return textures.bedrock;
             case BlockId.bricks: return textures.bricks;
             case BlockId.oakPlanks: return textures.oakPlanks;
             case BlockId.sprucePlanks: return textures.sprucePlanks;
@@ -404,7 +518,10 @@ private:
         // The imported water sprite already carries Java's 180/255 alpha.
         // Multiplying another .72 vertex alpha made the final surface only
         // ~51% opaque and effectively erased it over bright terrain.
-        const tint=Color(0.247f,0.463f,0.894f,1.0f);
+        const normal=faceNormal(face);
+        const light=faceShade(face)*lighting.brightnessAt(
+            x+cast(int)normal.x,y+cast(int)normal.y,z+cast(int)normal.z);
+        const tint=Color(0.247f*light,0.463f*light,0.894f*light,1.0f);
         const bottom=cast(float)y;
         Vec3 a,b,c,d;
         final switch(face)
@@ -432,7 +549,8 @@ private:
 
     void appendPortal(ref Vertex[] output, int x, int y, int z, bool axisX)
     {
-        const color = Color(1,1,1,0.78f);
+        const amount=lighting.brightnessAt(x,y,z);
+        const color = Color(amount,amount,amount,0.78f);
         const inset = 6.0f / 16.0f;
         const farInset = 10.0f / 16.0f;
         if (axisX)
@@ -483,7 +601,7 @@ private:
             case Face.north, Face.south: base=0.8f;break;
             case Face.west, Face.east: base=0.6f;break;
         }
-        return clamp(base+(brightness-0.5f)*0.8f,0.15f,1.0f);
+        return base;
     }
 
     float vertexAo(int x, int y, int z, Face face, int uSign, int vSign) const
@@ -519,7 +637,8 @@ private:
         return ao[occlusion];
     }
 
-    void appendBlockFace(ref Vertex[] output, int x, int y, int z, Face face, Color tint)
+    void appendBlockFace(ref Vertex[] output, int x, int y, int z, Face face,
+        Color tint, bool sampleWorldLight = true)
     {
         const fx = cast(float) x;
         const fy = cast(float) y;
@@ -551,9 +670,13 @@ private:
         }
 
         Color[4] colors;
+        const normal=faceNormal(face);
+        const worldLight=sampleWorldLight ? lighting.brightnessAt(
+            x+cast(int)normal.x,y+cast(int)normal.y,z+cast(int)normal.z) : 1.0f;
         foreach (i; 0 .. 4)
         {
-            const amount = faceShade(face) * vertexAo(x, y, z, face, uSigns[i], vSigns[i]);
+            const amount = faceShade(face) * worldLight
+                * vertexAo(x, y, z, face, uSigns[i], vSigns[i]);
             colors[i] = Color(tint.r * amount, tint.g * amount, tint.b * amount, tint.a);
         }
         appendQuad(

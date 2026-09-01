@@ -25,7 +25,10 @@ final class Dx12Device : GraphicsDevice
     // Vanilla's GUI and particle atlases already push this prototype past 64
     // individual SRVs; leave headroom for the upcoming blocks and controller UI.
     enum uint maxTextures = 256;
-    enum uint maxVertices = 500_000;
+    // Streamed terrain can legitimately place several hundred thousand
+    // visible vertices in one frame. Keep a bounded buffer, but size it for
+    // the supported 12-chunk view rather than the old 3x3 prototype map.
+    enum uint maxVertices = 2_000_000;
 
     private HWND window;
     private uint width;
@@ -41,6 +44,7 @@ final class Dx12Device : GraphicsDevice
     private ID3D12RootSignature rootSignature;
     private ID3D12PipelineState pipelineState;
     private ID3D12PipelineState translucentPipelineState;
+    private ID3D12PipelineState translucentCulledPipelineState;
     private ID3D12PipelineState skyPipelineState;
     private ID3D12PipelineState entityShadowPipelineState;
     private ID3D12PipelineState viewModelPipelineState;
@@ -93,6 +97,8 @@ final class Dx12Device : GraphicsDevice
         if (allocator !is null) allocator.Release();
         if (pipelineState !is null) pipelineState.Release();
         if (translucentPipelineState !is null) translucentPipelineState.Release();
+        if (translucentCulledPipelineState !is null)
+            translucentCulledPipelineState.Release();
         if (skyPipelineState !is null) skyPipelineState.Release();
         if (entityShadowPipelineState !is null) entityShadowPipelineState.Release();
         if (viewModelPipelineState !is null) viewModelPipelineState.Release();
@@ -257,6 +263,12 @@ final class Dx12Device : GraphicsDevice
                     case DrawLayer.world: list.SetPipelineState(pipelineState); break;
                     case DrawLayer.translucent:
                         list.SetPipelineState(translucentPipelineState);
+                        break;
+                    case DrawLayer.translucentCulled:
+                        list.SetPipelineState(translucentCulledPipelineState);
+                        break;
+                    case DrawLayer.worldDoubleSided:
+                        list.SetPipelineState(viewModelPipelineState);
                         break;
                     case DrawLayer.entityShadow:
                         list.SetPipelineState(entityShadowPipelineState);
@@ -432,49 +444,56 @@ private:
             cast(void*) device, cast(void*) rootSignature,
             shaders.vertex.GetBufferPointer(), shaders.vertex.GetBufferSize(),
             shaders.pixel.GetBufferPointer(), shaders.pixel.GetBufferSize(),
-            backBufferFormat, depthBufferFormat, 1, 1, 0);
+            backBufferFormat, depthBufferFormat, 1, 1, 0, 1);
         if (pipelineState is null)
             throw new Exception("Create graphics pipeline failed");
         translucentPipelineState = cast(ID3D12PipelineState)
             mdCreateGraphicsPipeline(cast(void*) device, cast(void*) rootSignature,
                 shaders.vertex.GetBufferPointer(), shaders.vertex.GetBufferSize(),
                 shaders.pixel.GetBufferPointer(), shaders.pixel.GetBufferSize(),
-                backBufferFormat, depthBufferFormat, 1, 0, 0);
+                backBufferFormat, depthBufferFormat, 1, 0, 0, 0);
         if (translucentPipelineState is null)
             throw new Exception("Create translucent graphics pipeline failed");
+        translucentCulledPipelineState = cast(ID3D12PipelineState)
+            mdCreateGraphicsPipeline(cast(void*) device, cast(void*) rootSignature,
+                shaders.vertex.GetBufferPointer(), shaders.vertex.GetBufferSize(),
+                shaders.pixel.GetBufferPointer(), shaders.pixel.GetBufferSize(),
+                backBufferFormat, depthBufferFormat, 1, 0, 0, 1);
+        if (translucentCulledPipelineState is null)
+            throw new Exception("Create culled translucent graphics pipeline failed");
         skyPipelineState = cast(ID3D12PipelineState) mdCreateGraphicsPipeline(
             cast(void*) device, cast(void*) rootSignature,
             shaders.vertex.GetBufferPointer(), shaders.vertex.GetBufferSize(),
             shaders.pixel.GetBufferPointer(), shaders.pixel.GetBufferSize(),
-            backBufferFormat, depthBufferFormat, 0, 0, 0);
+            backBufferFormat, depthBufferFormat, 0, 0, 0, 0);
         if (skyPipelineState is null)
             throw new Exception("Create sky graphics pipeline failed");
         entityShadowPipelineState = cast(ID3D12PipelineState) mdCreateGraphicsPipeline(
             cast(void*) device, cast(void*) rootSignature,
             shaders.vertex.GetBufferPointer(), shaders.vertex.GetBufferSize(),
             shaders.pixel.GetBufferPointer(), shaders.pixel.GetBufferSize(),
-            backBufferFormat, depthBufferFormat, 1, 0, 0);
+            backBufferFormat, depthBufferFormat, 1, 0, 0, 0);
         if (entityShadowPipelineState is null)
             throw new Exception("Create entity-shadow graphics pipeline failed");
         viewModelPipelineState = cast(ID3D12PipelineState) mdCreateGraphicsPipeline(
             cast(void*) device, cast(void*) rootSignature,
             shaders.vertex.GetBufferPointer(), shaders.vertex.GetBufferSize(),
             shaders.pixel.GetBufferPointer(), shaders.pixel.GetBufferSize(),
-            backBufferFormat, depthBufferFormat, 1, 1, 0);
+            backBufferFormat, depthBufferFormat, 1, 1, 0, 0);
         if (viewModelPipelineState is null)
             throw new Exception("Create view-model graphics pipeline failed");
         invertedOverlayPipelineState = cast(ID3D12PipelineState) mdCreateGraphicsPipeline(
             cast(void*) device, cast(void*) rootSignature,
             shaders.vertex.GetBufferPointer(), shaders.vertex.GetBufferSize(),
             shaders.pixel.GetBufferPointer(), shaders.pixel.GetBufferSize(),
-            backBufferFormat, depthBufferFormat, 0, 0, 1);
+            backBufferFormat, depthBufferFormat, 0, 0, 1, 0);
         if (invertedOverlayPipelineState is null)
             throw new Exception("Create inverted-overlay graphics pipeline failed");
         blurPipelineState = cast(ID3D12PipelineState) mdCreateGraphicsPipeline(
             cast(void*) device, cast(void*) rootSignature,
             shaders.vertex.GetBufferPointer(), shaders.vertex.GetBufferSize(),
             shaders.blurPixel.GetBufferPointer(), shaders.blurPixel.GetBufferSize(),
-            backBufferFormat, depthBufferFormat, 0, 0, 0);
+            backBufferFormat, depthBufferFormat, 0, 0, 0, 0);
         if (blurPipelineState is null)
             throw new Exception("Create menu-blur graphics pipeline failed");
     }

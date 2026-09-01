@@ -31,7 +31,7 @@ void main()
     scope (exit) destroy(client);
 
     uint playerId;
-    bool hasOnlyPortalTestTool;
+    bool hasCreativeStarterInventory;
     foreach (_; 0 .. 150)
     {
         foreach (packet; client.poll())
@@ -49,21 +49,22 @@ void main()
                 {
                     const state = reader.readPlayer();
                     if (state.id != playerId) continue;
-                    hasOnlyPortalTestTool =
-                        state.inventory.hotbar[0].item == ItemId.flintAndSteel
-                        && state.inventory.hotbar[0].count == 1;
-                    foreach (index, stack; state.inventory.hotbar)
-                        if (index != 0 && !stack.empty())
-                            hasOnlyPortalTestTool = false;
-                    foreach (stack; state.inventory.storage)
-                        if (!stack.empty()) hasOnlyPortalTestTool = false;
+                    hasCreativeStarterInventory = true;
+                    foreach (stack; state.inventory.hotbar)
+                        if (!stack.empty()) hasCreativeStarterInventory=false;
+                    hasCreativeStarterInventory = hasCreativeStarterInventory
+                        && state.inventory.storage[0].item
+                            == ItemId.flintAndSteel
+                        && state.inventory.storage[0].count == 1
+                        && state.inventory.storage[1].item == ItemId.bricks
+                        && state.inventory.storage[15].item == ItemId.glass;
                 }
             }
         }
-        if (playerId != 0 && hasOnlyPortalTestTool) break;
+        if (playerId != 0 && hasCreativeStarterInventory) break;
         Thread.sleep(20.msecs);
     }
-    assert(playerId != 0 && hasOnlyPortalTestTool);
+    assert(playerId != 0 && hasCreativeStarterInventory);
 
     // Aim at the grass ahead, then obtain it through middle-click's
     // authoritative Pick Block action.
@@ -74,7 +75,7 @@ void main()
     pick.putU8(cast(ubyte) PlayerActionType.pickBlock);
     pick.putU8(0); pick.putU8(0);
     client.send(GamePacketType.playerAction, pick.data);
-    bool pickedFullStack;
+    bool pickedSingleBlock;
     foreach (_; 0 .. 100)
     {
         foreach (packet; client.poll())
@@ -88,14 +89,14 @@ void main()
                 if (state.id == playerId
                     && state.inventory.hotbar[state.selectedSlot].item
                         == ItemId.grassBlock
-                    && state.inventory.hotbar[state.selectedSlot].count == 64)
-                    pickedFullStack = true;
+                    && state.inventory.hotbar[state.selectedSlot].count == 1)
+                    pickedSingleBlock = true;
             }
         }
-        if (pickedFullStack) break;
+        if (pickedSingleBlock) break;
         Thread.sleep(20.msecs);
     }
-    assert(pickedFullStack);
+    assert(pickedSingleBlock);
 
     // A fresh click destroys immediately, reports no crack progress, and
     // creates no dropped-item entity in Creative.

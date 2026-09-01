@@ -29,14 +29,19 @@ native/icon_preview.png
 third_party/eos/SDK/
 third_party/eos/EOS-SDK-*/
 EOSSDK-Win64-Shipping.dll
+SDL3.dll
 native/eos_abi_bridge.obj
 data/eos.local.json
 data/eos.client.json
 data/eos-cache/
+data/account_session.token
+data/cache/
 data/options.txt
 data/server_entry.txt
 data/window_state.txt
 /private/
+third_party/sdl3/downloads/
+third_party/sdl3/windows/
 
 # Locally imported, copyrighted Minecraft Java assets.
 assets/minecraft/sounds/**/*.ogg

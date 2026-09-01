@@ -1,6 +1,7 @@
 module minecraftd.client.render.game_renderer;
 
-import core.stdc.math : floorf, sinf;
+import core.stdc.math : floorf, sinf, sqrtf;
+import std.algorithm : sort;
 version (Windows)
     import core.sys.windows.windows : HWND;
 
@@ -19,7 +20,8 @@ import minecraftd.client.render.entity_shadow_renderer : EntityShadowRenderer,
 import minecraftd.client.render.hud_renderer : HudRenderer, HudTextureSet;
 import minecraftd.client.render.mesh : Color, DrawLayer, FogSettings,
     FrameMesh, Vertex, appendQuad;
-import minecraftd.common.math3d : Mat4, Vec2, Vec3, clamp, forwardFromYawPitch, lerp;
+import minecraftd.common.math3d : Mat4, Vec2, Vec3, clamp, cross,
+    forwardFromYawPitch, lerp;
 import minecraftd.client.render.player_renderer : PlayerRenderer, SkinLayers;
 import minecraftd.client.render.sky_renderer : SkyRenderer;
 import minecraftd.client.render.texture_manager : ImageData, TextureManager;
@@ -51,6 +53,7 @@ import minecraftd.platform.desktop.vulkan.device : VulkanDevice;
 import minecraftd.world.block : BlockId, bareHandDestroyProgress,
     isNetherPortal, isWater, isWaterSource;
 import minecraftd.world.world : BlockHit, World;
+import minecraftd.world.chunk : ChunkCoordinate, chunkCoordinate;
 import minecraftd.world.world_settings : GameMode;
 import minecraftd.world.world_settings : DimensionId;
 
@@ -59,6 +62,14 @@ enum CameraPerspective : ubyte
     firstPerson,
     thirdPersonBack,
     thirdPersonFront,
+}
+
+private struct RenderChunkGeometry
+{
+    Vertex[][uint] blocks;
+    Vertex[] portals;
+    WaterGeometry water;
+    uint revision;
 }
 
 /// Coordinates the same broad passes as Minecraft's client renderer: sky,
@@ -94,15 +105,21 @@ final class GameRenderer
     private OptionsMenuState options;
     private World world;
     private FrameMesh frame;
-    private Vertex[][uint] blockMeshes;
-    private Vertex[] portalMesh;
-    private WaterGeometry waterGeometry;
+    private RenderChunkGeometry[ChunkCoordinate] chunkMeshes;
+    private ChunkCoordinate[] admittedRenderChunks;
+    private bool meshJobActive;
+    private ChunkCoordinate meshJobCoordinate;
+    private int meshJobNextY;
+    private int meshJobMaximumY;
+    private uint meshJobRevision;
+    private RenderChunkGeometry meshJobGeometry;
     private uint[] portalFrames;
     private uint[] waterStillFrames;
     private uint[] waterFlowFrames;
-    private uint meshedWorldRevision;
     private Vertex[][uint][ItemId] itemMeshes;
     private BlockTextureSet blockTextures;
+    private bool meshSmoothLighting=true;
+    private float meshGamma=0.5f;
 
     private TextureHandle steve;
     private TextureHandle accountSkin;
@@ -185,6 +202,7 @@ final class GameRenderer
             load("textures/block/stone.png"),
             load("textures/block/obsidian.png"),
             load("textures/block/netherrack.png"),
+            load("textures/block/bedrock.png"),
             load("textures/block/bricks.png"),
             load("textures/block/oak_planks.png"),
             load("textures/block/spruce_planks.png"),
@@ -291,10 +309,6 @@ final class GameRenderer
             load("textures/gui/sprites/container/slot_highlight_front.png"));
         chatRenderer = new ChatRenderer(asciiImage, asciiTexture.descriptorIndex,
             solidTexture.descriptorIndex);
-        blockMeshes = blocks.build(blockTextures);
-        portalMesh = blocks.buildPortals();
-        waterGeometry = blocks.buildWater();
-        meshedWorldRevision = world.revision;
         itemMeshes[ItemId.grassBlock] = blocks.buildItem(BlockId.grass, blockTextures);
         itemMeshes[ItemId.dirt] = blocks.buildItem(BlockId.dirt, blockTextures);
         itemMeshes[ItemId.stone] = blocks.buildItem(BlockId.stone, blockTextures);
@@ -317,6 +331,8 @@ final class GameRenderer
         itemMeshes[ItemId.warpedPlanks] = blocks.buildItem(BlockId.warpedPlanks, blockTextures);
         itemMeshes[ItemId.cobblestone] = blocks.buildItem(BlockId.cobblestone, blockTextures);
         itemMeshes[ItemId.glass] = blocks.buildItem(BlockId.glass, blockTextures);
+        itemMeshes[ItemId.bedrock] = blocks.buildItem(BlockId.bedrock,
+            blockTextures);
         itemMeshes[ItemId.flintAndSteel] = blocks.buildGeneratedItem(
             blockTextures.flintAndSteel,flintImage);
         uint[8] poofTextures;
@@ -346,6 +362,7 @@ final class GameRenderer
         particles = new ParticleSystem(world, ParticleTextureSet(
             blockTextures.grassSide, blockTextures.dirt, blockTextures.stone,
             blockTextures.obsidian, blockTextures.netherrack,
+            blockTextures.bedrock,
             blockTextures.bricks, blockTextures.oakPlanks,
             blockTextures.sprucePlanks, blockTextures.birchPlanks,
             blockTextures.junglePlanks, blockTextures.acaciaPlanks,
@@ -500,9 +517,15 @@ final class GameRenderer
         if(graphics !is null)graphics.setVsync(options.boolean("vsync",true));
         if(blocks !is null)
         {
-            blocks.configure(options.integer("ao",2)!=0,
-                options.number("gamma",0.5f));
-            meshedWorldRevision=uint.max;
+            const smooth=options.integer("ao",2)!=0;
+            const gamma=options.number("gamma",0.5f);
+            if(smooth!=meshSmoothLighting||gamma!=meshGamma)
+            {
+                chunkMeshes.clear();
+                meshJobActive=false;
+            }
+            meshSmoothLighting=smooth;meshGamma=gamma;
+            blocks.configure(smooth,gamma);
         }
         if(particles !is null)particles.setLevel(options.integer("particles",0));
     }
@@ -806,6 +829,11 @@ final class GameRenderer
         if (newBlock == BlockId.air && oldBlock != BlockId.air
             && !isNetherPortal(oldBlock) && !isWater(oldBlock))
         {
+            // The authoritative world is already empty, but a tall chunk's
+            // replacement mesh is intentionally assembled over several
+            // frames. Remove the old block's cached quads now so its break
+            // particles can never appear while the cube is still visible.
+            discardCachedBlockFaces(x,y,z,oldBlock);
             sounds.playBreak(oldBlock, center);
             particles.spawnBlockBreak(x, y, z, oldBlock);
         }
@@ -837,10 +865,8 @@ final class GameRenderer
             sounds.playNetherAmbience();
             netherAmbienceTicks = 3600;
         }
-        blockMeshes = blocks.build(blockTextures);
-        portalMesh = blocks.buildPortals();
-        waterGeometry = blocks.buildWater();
-        meshedWorldRevision = world.revision;
+        chunkMeshes.clear();
+        meshJobActive=false;
         cancelMining();
     }
 
@@ -861,13 +887,9 @@ final class GameRenderer
             ? elapsedSeconds - previousElapsedSeconds : 0.0f;
         previousElapsedSeconds = elapsedSeconds;
         multiplayer.advanceDroppedItems(frameSeconds > 0.1f ? 0.1f : frameSeconds);
-        if (meshedWorldRevision != world.revision)
-        {
-            blockMeshes = blocks.build(blockTextures);
-            portalMesh = blocks.buildPortals();
-            waterGeometry = blocks.buildWater();
-            meshedWorldRevision = world.revision;
-        }
+        // Only one 16-block-high chunk section is meshed per presented frame.
+        // This keeps procedural terrain work out of a single long frame.
+        syncChunkMeshes(player.position,player.yaw,1);
         frame.clear(player.dimension == DimensionId.nether
             ? Color(0.20f,0.03f,0.03f,1.0f)
             : Color(0.48f,0.70f,1.0f,1.0f));
@@ -917,9 +939,12 @@ final class GameRenderer
         }
 
         // Draw sky texture geometry first. Depth testing keeps it behind the world.
-        auto terrainFog = player.dimension == DimensionId.nether
-            ? FogSettings.distance(camera.position,10.0f,48.0f)
-            : FogSettings.distance(camera.position,48.0f,80.0f);
+        int viewChunks=options.integer("renderDistance",6);
+        if(viewChunks<2)viewChunks=2;if(viewChunks>12)viewChunks=12;
+        const fogEnd=cast(float)(viewChunks*16);
+        const fogStart=player.dimension==DimensionId.nether
+            ?fogEnd*0.35f:fogEnd*0.72f;
+        auto terrainFog=FogSettings.distance(camera.position,fogStart,fogEnd);
         if (player.dimension == DimensionId.nether)
             terrainFog.color = Color(0x33/255.0f,0x08/255.0f,0x08/255.0f,1);
         if(world.isPointInWater(camera.position))
@@ -939,20 +964,28 @@ final class GameRenderer
                     cloudMode==2),
                 clouds.descriptorIndex, viewProjection, DrawLayer.world, cloudFog);
 
-        foreach (textureIndex, geometry; blockMeshes)
-            if (textureIndex != blockTextures.glass)
-                frame.append(geometry, textureIndex, viewProjection,
-                    DrawLayer.world, terrainFog);
-        if (portalMesh.length && portalFrames.length)
+        admittedRenderChunks.length=0;
+        enum size_t opaqueVertexBudget=1_350_000;
+        foreach(coordinate;visibleChunkCoordinates(camera))
         {
-            const portalFrame = cast(size_t)(elapsedSeconds * 20.0f)
-                % portalFrames.length;
-            frame.append(portalMesh,portalFrames[portalFrame],viewProjection,
-                DrawLayer.world,terrainFog);
+            auto chunkGeometry=coordinate in chunkMeshes;
+            if(chunkGeometry is null)continue;
+            size_t chunkVertices;
+            foreach(textureIndex,geometry;chunkGeometry.blocks)
+                if(textureIndex!=blockTextures.glass)
+                    chunkVertices+=geometry.length;
+            // Admit complete chunks nearest-first. The previous per-texture
+            // cutoff produced terrain with individual materials missing.
+            if(frame.vertices.length+chunkVertices>opaqueVertexBudget)break;
+            admittedRenderChunks~=coordinate;
+            foreach(textureIndex,geometry;chunkGeometry.blocks)
+                if(textureIndex!=blockTextures.glass)
+                    frame.append(geometry,textureIndex,viewProjection,
+                        DrawLayer.world,terrainFog);
         }
-        if (auto glassGeometry = blockTextures.glass in blockMeshes)
-            frame.append(*glassGeometry, blockTextures.glass, viewProjection,
-                DrawLayer.translucent, terrainFog);
+        const portalTexture=portalFrames.length
+            ?portalFrames[cast(size_t)(elapsedSeconds*20.0f)%portalFrames.length]
+            :blockTextures.netherPortal;
         const waterFrame=cast(size_t)(elapsedSeconds*10.0f);
         const stillTexture=waterStillFrames.length
             ?waterStillFrames[waterFrame%waterStillFrames.length]
@@ -960,14 +993,6 @@ final class GameRenderer
         const flowTexture=waterFlowFrames.length
             ?waterFlowFrames[waterFrame%waterFlowFrames.length]
             :blockTextures.waterFlow;
-        // Vertical faces establish the volume; the exposed horizontal sheet
-        // is deliberately last so it cannot disappear due to bucket ordering.
-        frame.append(waterGeometry.underside,stillTexture,viewProjection,
-            DrawLayer.translucent,terrainFog);
-        frame.append(waterGeometry.walls,flowTexture,viewProjection,
-            DrawLayer.translucent,terrainFog);
-        frame.append(waterGeometry.surface,stillTexture,viewProjection,
-            DrawLayer.translucent,terrainFog);
 
         const targeted=world.rayCast(player.eyePosition(partialTick),
             forwardFromYawPitch(player.yaw,player.pitch),5.0f);
@@ -1025,7 +1050,7 @@ final class GameRenderer
 
         foreach (textureIndex, geometry; particles.build(camera, partialTick))
             frame.append(geometry, textureIndex, viewProjection,
-                DrawLayer.world, terrainFog);
+                DrawLayer.worldDoubleSided, terrainFog);
 
         foreach (renderItem; multiplayer.droppedItems())
         {
@@ -1071,6 +1096,8 @@ final class GameRenderer
                     remote.interpolatedBodyYaw(partialTick)+180.0f,
                     remote.interpolatedDeathTime(partialTick));
             applyHurtTint(geometry, remote.hurtTime, remote.health <= 0.0f);
+            players.applyWorldLight(geometry,blocks.lightAt(
+                remote.interpolatedPosition(partialTick)+Vec3(0,1.0f,0)));
             uint remoteTexture=steve.descriptorIndex;
             if(auto custom=remote.accountId in remoteSkins)
                 if(auto revision=remote.accountId in remoteSkinVersions)
@@ -1078,7 +1105,8 @@ final class GameRenderer
                         remoteTexture=custom.descriptorIndex;
             frame.append(geometry, remoteTexture, viewProjection,
                 remote.gameMode == GameMode.spectator
-                    ? DrawLayer.entityShadow : DrawLayer.world, terrainFog);
+                    ? DrawLayer.entityShadow : DrawLayer.worldDoubleSided,
+                terrainFog);
             if(remote.gameMode!=GameMode.spectator&&!remoteHeld.empty())
                 appendHeldBlock(remoteHeld,remote.interpolatedPosition(partialTick),
                     remote.interpolatedBodyYaw(partialTick)+180.0f,
@@ -1108,10 +1136,13 @@ final class GameRenderer
                 players.applyDeathPose(geometry,localPosition,modelBodyYaw,
                     player.interpolatedDeathTime(partialTick));
             applyHurtTint(geometry, player.hurtTime, player.health <= 0.0f);
+            players.applyWorldLight(geometry,blocks.lightAt(
+                localPosition+Vec3(0,1.0f,0)));
             if(!(player.health<=0&&player.deathTime>=20))
                 frame.append(geometry, accountSkin.descriptorIndex, viewProjection,
                     player.gameMode == GameMode.spectator
-                        ? DrawLayer.entityShadow : DrawLayer.world, terrainFog);
+                        ? DrawLayer.entityShadow : DrawLayer.worldDoubleSided,
+                    terrainFog);
             if(player.gameMode!=GameMode.spectator&&!displayedMainHand.empty()
                 &&player.health>0)
                 appendHeldBlock(displayedMainHand,localPosition,modelBodyYaw,
@@ -1121,28 +1152,53 @@ final class GameRenderer
                     player.interpolatedAttackProgress(partialTick),player.crouching,
                     elapsedSeconds*20.0f,accountSkinModel=="slim",
                     viewProjection,terrainFog);
+            appendTranslucentWorld(camera,portalTexture,stillTexture,flowTexture,
+                viewProjection,terrainFog);
         }
         else
         {
+            appendTranslucentWorld(camera,portalTexture,stillTexture,flowTexture,
+                viewProjection,terrainFog);
             const equipProgress = 1.0f - lerp(partialTick,
                 previousMainHandHeight, mainHandHeight);
             // View bob and fall pitch share the smoothed camera-space transform
             // used by the world, so the hand never snaps when leaving the ground.
-            const handProjection = players.firstPersonArmTransform(
-                    player.interpolatedAttackProgress(partialTick), aspect,
-                    equipProgress)
-                * players.firstPersonLookSwayTransform(
+            const viewModelMotion=players.firstPersonLookSwayTransform(
                     player.viewPitchSway(partialTick), player.viewYawSway(partialTick))
-                * camera.effectsMatrix(player, partialTick, options.viewBobbing)
-                * camera.viewModelProjectionMatrix(aspect);
+                *camera.effectsMatrix(player,partialTick,options.viewBobbing);
+            const viewModelLight=blocks.lightAt(
+                player.interpolatedPosition(partialTick)+Vec3(0,1.0f,0));
+            // View models stay in camera space, so their render transform has
+            // no yaw/pitch. Map their final normals back to world space for
+            // lighting; otherwise turning the camera leaves a frozen shade.
+            const cameraForward=forwardFromYawPitch(camera.yaw,camera.pitch);
+            const cameraRight=cross(Vec3(0,1,0),cameraForward).normalized();
+            const cameraUp=cross(cameraForward,cameraRight).normalized();
+            auto cameraToWorld=Mat4.identity();
+            cameraToWorld.m[0]=cameraRight.x;
+            cameraToWorld.m[1]=cameraRight.y;
+            cameraToWorld.m[2]=cameraRight.z;
+            cameraToWorld.m[4]=cameraUp.x;
+            cameraToWorld.m[5]=cameraUp.y;
+            cameraToWorld.m[6]=cameraUp.z;
+            cameraToWorld.m[8]=cameraForward.x;
+            cameraToWorld.m[9]=cameraForward.y;
+            cameraToWorld.m[10]=cameraForward.z;
+            const armPose=players.firstPersonArmTransform(
+                player.interpolatedAttackProgress(partialTick),aspect,
+                equipProgress)*viewModelMotion;
+            const handProjection=armPose*camera.viewModelProjectionMatrix(aspect);
             if (displayedMainHand.empty() && player.health > 0.0f
                 && player.gameMode != GameMode.spectator)
             {
                 const sleeveBit=player.mainHandRight?Player.skinRightSleeve
                     :Player.skinLeftSleeve;
-                frame.append(players.buildFirstPersonArm(
-                        (player.skinParts&sleeveBit)!=0,
-                        accountSkinModel=="slim"), accountSkin.descriptorIndex,
+                auto arm=players.buildFirstPersonArm(
+                    (player.skinParts&sleeveBit)!=0,
+                    accountSkinModel=="slim");
+                players.applyPosedLight(arm,armPose*cameraToWorld,
+                    viewModelLight);
+                frame.append(arm, accountSkin.descriptorIndex,
                     handProjection, DrawLayer.viewModel);
             }
 
@@ -1160,16 +1216,18 @@ final class GameRenderer
                         : players.firstPersonBlockTransform(
                             player.interpolatedAttackProgress(partialTick),
                             equipProgress);
-                    const itemProjection = itemPose
-                        * players.firstPersonLookSwayTransform(
-                            player.viewPitchSway(partialTick),
-                            player.viewYawSway(partialTick))
-                        * camera.effectsMatrix(player, partialTick,
-                            options.viewBobbing)
-                        * camera.viewModelProjectionMatrix(aspect);
+                    const itemModel=itemPose*viewModelMotion;
+                    const itemProjection=itemModel
+                        *camera.viewModelProjectionMatrix(aspect);
                     foreach (textureIndex, geometry; *heldMesh)
-                        frame.append(geometry, textureIndex, itemProjection,
+                    {
+                        auto litGeometry=geometry.dup;
+                        players.applyPosedLight(litGeometry,
+                            itemModel*cameraToWorld,
+                            viewModelLight,!generated,false);
+                        frame.append(litGeometry,textureIndex,itemProjection,
                             DrawLayer.viewModel);
+                    }
                 }
             }
         }
@@ -1188,7 +1246,7 @@ final class GameRenderer
                 > maximum * maximum)
                 continue;
             const anchor = position + Vec3(0, remote.height() + 0.5f, 0);
-            const layer = remote.crouching ? DrawLayer.world
+            const layer = remote.crouching ? DrawLayer.worldDoubleSided
                 : DrawLayer.overlay;
             frame.append(hudFont.buildWorldBackground(remote.name, anchor,
                     camera.yaw, camera.pitch, Color(0,0,0,0.25f)),
@@ -1333,6 +1391,157 @@ private:
             DrawLayer.overlay);
     }
 
+    void appendTranslucentWorld(const Camera camera,uint portalTexture,
+        uint stillTexture,uint flowTexture,Mat4 viewProjection,FogSettings fog)
+    {
+        // Select complete translucent chunks nearest-first to guarantee local
+        // water/glass/portal visibility, then submit that set back-to-front.
+        enum size_t safeFrameVertexBudget=1_750_000;
+        size_t selectedVertices=frame.vertices.length;
+        ChunkCoordinate[] selected;
+        foreach(coordinate;admittedRenderChunks)
+        {
+            auto geometry=coordinate in chunkMeshes;
+            if(geometry is null)continue;
+            size_t count=geometry.portals.length+geometry.water.underside.length
+                +geometry.water.surface.length+geometry.water.walls.length;
+            if(auto glass=blockTextures.glass in geometry.blocks)
+                count+=glass.length;
+            if(selectedVertices+count>safeFrameVertexBudget)break;
+            selectedVertices+=count;selected~=coordinate;
+        }
+        foreach_reverse(index;0..selected.length)
+        {
+            auto geometry=selected[index] in chunkMeshes;
+            if(geometry is null)continue;
+            frame.append(geometry.portals,portalTexture,viewProjection,
+                DrawLayer.translucent,fog);
+            if(auto glass=blockTextures.glass in geometry.blocks)
+                frame.append(*glass,blockTextures.glass,viewProjection,
+                    DrawLayer.translucentCulled,fog);
+            frame.append(geometry.water.underside,stillTexture,viewProjection,
+                DrawLayer.translucent,fog);
+            frame.append(geometry.water.surface,stillTexture,viewProjection,
+                DrawLayer.translucent,fog);
+            frame.append(geometry.water.walls,flowTexture,viewProjection,
+                DrawLayer.translucent,fog);
+        }
+    }
+
+    ChunkCoordinate[] visibleChunkCoordinates(const Camera camera) const
+    {
+        ChunkCoordinate[] result;
+        int distance=options.integer("renderDistance",6);
+        if(distance<2)distance=2;
+        if(distance>12)distance=12;
+        const centerX=chunkCoordinate(cast(int)floorf(camera.position.x));
+        const centerZ=chunkCoordinate(cast(int)floorf(camera.position.z));
+        const facing=forwardFromYawPitch(camera.yaw,0);
+        foreach(coordinate,geometry;chunkMeshes)
+        {
+            int dx=coordinate.x-centerX, dz=coordinate.z-centerZ;
+            int ax=dx<0?-dx:dx,az=dz<0?-dz:dz;
+            if(ax>distance||az>distance)continue;
+            if(ax>1||az>1)
+            {
+                const target=Vec3(coordinate.x*16+8-camera.position.x,0,
+                    coordinate.z*16+8-camera.position.z);
+                const length=sqrtf(target.lengthSquared());
+                if(length>0.001f)
+                {
+                    const dot=(target.x*facing.x+target.z*facing.z)/length;
+                    const padding=12.0f/length;
+                    if(dot+padding<-0.12f)continue;
+                }
+            }
+            result~=coordinate;
+        }
+        sort!((a,b){
+            const adx=a.x-centerX,adz=a.z-centerZ;
+            const bdx=b.x-centerX,bdz=b.z-centerZ;
+            return adx*adx+adz*adz<bdx*bdx+bdz*bdz;
+        })(result);
+        return result;
+    }
+
+    void syncChunkMeshes(Vec3 position,float yaw,int maximumSections)
+    {
+        ChunkCoordinate[] stale;
+        foreach(coordinate,geometry;chunkMeshes)
+            if(!world.hasChunk(coordinate.x,coordinate.z))stale~=coordinate;
+        foreach(coordinate;stale)chunkMeshes.remove(coordinate);
+
+        if(meshJobActive&&(!world.hasChunk(meshJobCoordinate.x,
+            meshJobCoordinate.z)||world.chunkRevision(meshJobCoordinate.x,
+                meshJobCoordinate.z)!=meshJobRevision))
+            meshJobActive=false;
+
+        const centerX=chunkCoordinate(cast(int)floorf(position.x));
+        const centerZ=chunkCoordinate(cast(int)floorf(position.z));
+        const meshFacing=forwardFromYawPitch(yaw,0);
+        foreach(sectionIndex;0..maximumSections)
+        {
+            if(!meshJobActive)
+            {
+                bool found;
+                ChunkCoordinate best;
+                int bestDistance=int.max;
+                foreach(coordinate;world.loadedChunkCoordinates())
+                {
+                    const expected=world.chunkRevision(coordinate.x,coordinate.z);
+                    auto cached=coordinate in chunkMeshes;
+                    if(cached !is null&&cached.revision==expected)continue;
+                    const dx=coordinate.x-centerX,dz=coordinate.z-centerZ;
+                    int distance=dx*dx+dz*dz;
+                    if(dx*meshFacing.x+dz*meshFacing.z<0)distance+=10_000;
+                    if(!found||distance<bestDistance)
+                    {found=true;best=coordinate;bestDistance=distance;}
+                }
+                if(!found)break;
+                const loaded=world.chunkAt(best.x,best.z);
+                if(loaded is null)continue;
+                if(loaded.empty)
+                {
+                    RenderChunkGeometry empty;
+                    empty.revision=world.chunkRevision(best.x,best.z);
+                    chunkMeshes[best]=empty;
+                    continue;
+                }
+                meshJobActive=true;
+                meshJobCoordinate=best;
+                meshJobNextY=loaded.minimumOccupiedY();
+                meshJobMaximumY=loaded.maximumOccupiedY();
+                meshJobRevision=world.chunkRevision(best.x,best.z);
+                meshJobGeometry=RenderChunkGeometry.init;
+            }
+
+            int sectionMaximum=meshJobNextY+15;
+            if(sectionMaximum>meshJobMaximumY)sectionMaximum=meshJobMaximumY;
+            const blockPart=blocks.buildChunkRange(blockTextures,
+                meshJobCoordinate,meshJobNextY,sectionMaximum);
+            foreach(texture,geometry;blockPart)
+                meshJobGeometry.blocks[texture]~=geometry;
+            meshJobGeometry.portals~=blocks.buildPortalsChunkRange(
+                meshJobCoordinate,meshJobNextY,sectionMaximum);
+            const waterPart=blocks.buildWaterChunkRange(meshJobCoordinate,
+                meshJobNextY,sectionMaximum);
+            meshJobGeometry.water.surface~=waterPart.surface;
+            meshJobGeometry.water.walls~=waterPart.walls;
+            meshJobGeometry.water.underside~=waterPart.underside;
+            meshJobNextY=sectionMaximum+1;
+            if(meshJobNextY>meshJobMaximumY)
+            {
+                if(world.chunkRevision(meshJobCoordinate.x,
+                    meshJobCoordinate.z)==meshJobRevision)
+                {
+                    meshJobGeometry.revision=meshJobRevision;
+                    chunkMeshes[meshJobCoordinate]=meshJobGeometry;
+                }
+                meshJobActive=false;
+            }
+        }
+    }
+
     void appendHeldBlock(ItemStack stack,Vec3 position,float bodyYawDegrees,
         bool rightHand,float walkPosition,float walkSpeed,float attackProgress,
         bool crouching,float ageInTicks,bool slimArms,Mat4 viewProjection,
@@ -1349,10 +1558,48 @@ private:
                 stackLayer(stack.item,textureIndex),fog);
     }
 
+    void discardCachedBlockFaces(int x,int y,int z,BlockId oldBlock)
+    {
+        const coordinate=ChunkCoordinate(chunkCoordinate(x),chunkCoordinate(z));
+        auto cached=coordinate in chunkMeshes;
+        if(cached is null)return;
+        // Limit removal to textures used by the broken block. This avoids
+        // touching a differently textured neighbor face sharing its boundary
+        // (most notably an opaque block immediately behind glass).
+        const blockModel=blocks.buildItem(oldBlock,blockTextures);
+        foreach(texture,unused;blockModel)
+        {
+            auto geometry=texture in cached.blocks;
+            if(geometry is null)continue;
+            removeBlockFaceQuads(*geometry,x,y,z);
+        }
+    }
+
+    static void removeBlockFaceQuads(ref Vertex[] geometry,int x,int y,int z)
+    {
+        Vertex[] retained;
+        retained.reserve(geometry.length);
+        size_t offset;
+        for(;offset+6<=geometry.length;offset+=6)
+        {
+            bool belongs=true;
+            foreach(vertex;geometry[offset..offset+6])
+            {
+                const px=vertex.position[0],py=vertex.position[1],
+                    pz=vertex.position[2];
+                if(px<x||px>x+1||py<y||py>y+1||pz<z||pz>z+1)
+                {belongs=false;break;}
+            }
+            if(!belongs)retained~=geometry[offset..offset+6];
+        }
+        if(offset<geometry.length)retained~=geometry[offset..$];
+        geometry=retained;
+    }
+
     DrawLayer stackLayer(ItemId item, uint textureIndex) const
     {
         return item == ItemId.glass || textureIndex == blockTextures.glass
-            ? DrawLayer.translucent : DrawLayer.world;
+            ? DrawLayer.translucentCulled : DrawLayer.world;
     }
 
     void appendMenuBlur()
@@ -1443,4 +1690,23 @@ private:
         return graphics.uploadTexture(images.loadPng(
             resources.resolveAsset(namespaceName, relativePath))).descriptorIndex;
     }
+}
+
+unittest
+{
+    Vertex[] geometry;
+    const white=Color(1,1,1,1);
+    appendQuad(geometry,
+        Vec3(1,2,3),Vec3(2,2,3),Vec3(2,3,3),Vec3(1,3,3),
+        Vec2(0,1),Vec2(1,1),Vec2(1,0),Vec2(0,0),
+        white,white,white,white);
+    appendQuad(geometry,
+        Vec3(5,2,3),Vec3(6,2,3),Vec3(6,3,3),Vec3(5,3,3),
+        Vec2(0,1),Vec2(1,1),Vec2(1,0),Vec2(0,0),
+        white,white,white,white);
+    assert(geometry.length==12);
+    GameRenderer.removeBlockFaceQuads(geometry,1,2,3);
+    assert(geometry.length==6);
+    foreach(vertex;geometry)
+        assert(vertex.position[0]>=5.0f);
 }

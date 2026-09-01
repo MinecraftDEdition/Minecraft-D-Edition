@@ -1,13 +1,15 @@
 module minecraftd.world.world;
 
 import core.stdc.math : cosf, fabsf, floorf, sinf;
-import std.file : exists, read, write;
+import std.conv : to;
+import std.file : exists, mkdirRecurse, read, write;
 import std.path : buildPath;
 import minecraftd.common.aabb : Aabb;
 import minecraftd.common.math3d : Vec3;
-import minecraftd.world.block : BlockId, isOpaque, isWater, isWaterSource,
+import minecraftd.world.block : BlockId, isOpaque, isSolid, isWater, isWaterSource,
     waterForLevel, waterHeight, waterLevel;
-import minecraftd.world.chunk : Chunk;
+import minecraftd.world.chunk : Chunk, ChunkCoordinate, chunkCoordinate,
+    localCoordinate;
 import minecraftd.world.world_settings : WorldSettings, WorldType,
     DimensionId, loadWorldMetadata, saveWorldMetadata;
 
@@ -19,6 +21,27 @@ struct CollisionResult
     bool hitX;
     bool hitY;
     bool hitZ;
+}
+
+unittest
+{
+    // Transparent blocks still have full collision shapes. This specifically
+    // guards the old isOpaque/isSolid mix-up that made glass intangible.
+    auto collisionWorld=new World();
+    scope(exit)destroy(collisionWorld);
+    collisionWorld.setBlock(30,1,30,BlockId.glass);
+    const beside=Aabb(29.2f,1.0f,30.2f,29.8f,2.8f,30.8f);
+    const glassHit=collisionWorld.collide(beside,Vec3(1.5f,0,0));
+    assert(glassHit.hitX);
+    assert(glassHit.movement.x>0.1999f&&glassHit.movement.x<0.2001f);
+
+    // Sweeping diagonally into a corner may slide along either face, but the
+    // resulting box must never overlap the solid block or tunnel through it.
+    const diagonal=Aabb(29.2f,1.0f,29.2f,29.8f,2.8f,29.8f);
+    const cornerHit=collisionWorld.collide(diagonal,Vec3(0.6f,0,0.6f));
+    assert(!diagonal.moved(cornerHit.movement).intersects(
+        Aabb(30,1,30,31,2,31)));
+    assert(cornerHit.hitX||cornerHit.hitZ);
 }
 
 unittest
@@ -36,6 +59,22 @@ unittest
     assert(!testWorld.isPointInWater(Vec3(30.5f,29.95f,30.5f)));
     const ray=testWorld.rayCast(Vec3(30.5f,29.5f,28.0f),Vec3(0,0,1),4.0f);
     assert(!ray.hit); // selection rays pass through fluid blocks
+}
+
+unittest
+{
+    // Streaming is center-first and resident chunks can be explicitly evicted.
+    auto streamingWorld=new World();
+    scope(exit)destroy(streamingWorld);
+    const before=streamingWorld.loadedChunkCoordinates().length;
+    const generated=streamingWorld.ensureChunksAround(Vec3(160.5f,70,160.5f),
+        3,2);
+    assert(generated.length==2);
+    assert(generated[0]==ChunkCoordinate(10,10));
+    assert(streamingWorld.loadedChunkCoordinates().length==before+2);
+    assert(streamingWorld.unloadChunk(10,10));
+    assert(!streamingWorld.hasChunk(10,10));
+    assert(streamingWorld.loadedChunkCoordinates().length==before+1);
 }
 
 struct BlockHit
@@ -60,31 +99,46 @@ struct WaterUpdate
 
 final class World
 {
+    enum int overworldMinimumY = -64;
+    enum int overworldMaximumY = 319;
+    enum int netherMinimumY = 0;
+    enum int netherMaximumY = 255;
+    enum int overworldBorder = 29_999_984;
+    enum int netherBorder = 3_749_998;
+    enum int initialChunkRadius = 1;
+
+    /// Kept as a compatibility view of chunk (0,0) for small mechanics tests.
     Chunk chunk;
+    private Chunk[ChunkCoordinate] chunks;
+    private uint[ChunkCoordinate] chunkRevisions;
+    private bool[ChunkCoordinate] dirtyChunks;
     uint revision;
+    uint contentRevision;
     WorldSettings settings;
     string saveDirectory;
     DimensionId dimension = DimensionId.overworld;
 
     this()
     {
-        chunk = new Chunk();
+        foreach (chunkZ; 0 .. 2)
+        foreach (chunkX; 0 .. 2)
+            addChunk(new Chunk(chunkX, chunkZ));
         settings.spawn = Vec3(8.0f,1.0f,3.0f);
-        foreach (z; 0 .. Chunk.depth)
-        foreach (x; 0 .. Chunk.width)
+        foreach (z; 0 .. Chunk.depth * 2)
+        foreach (x; 0 .. Chunk.width * 2)
         {
-            chunk.set(x, 0, z, BlockId.grass);
+            setRawBlock(x, 0, z, BlockId.grass);
         }
 
         // Small shapes deliberately create visible AO corners and directional shading.
         foreach (x; 5 .. 9)
         foreach (z; 6 .. 10)
-            chunk.set(x, 1, z, BlockId.stone);
-        chunk.set(6, 2, 7, BlockId.stone);
-        chunk.set(7, 2, 7, BlockId.stone);
-        chunk.set(7, 2, 8, BlockId.dirt);
-        chunk.set(11, 1, 11, BlockId.grass);
-        chunk.set(11, 2, 11, BlockId.grass);
+            setRawBlock(x, 1, z, BlockId.stone);
+        setRawBlock(6, 2, 7, BlockId.stone);
+        setRawBlock(7, 2, 7, BlockId.stone);
+        setRawBlock(7, 2, 8, BlockId.dirt);
+        setRawBlock(11, 1, 11, BlockId.grass);
+        setRawBlock(11, 2, 11, BlockId.grass);
     }
 
     this(WorldSettings requested, string directory,
@@ -99,32 +153,35 @@ final class World
         initialize(requested, directory, requestedDimension, progress);
     }
 
+    ~this()
+    {
+        foreach (loaded; chunks) destroy(loaded);
+        chunks.clear();
+        chunk = null;
+    }
+
 private:
     void initialize(WorldSettings requested, string directory,
         DimensionId requestedDimension, GenerationProgress progress)
     {
-        chunk = new Chunk();
         settings = requested;
         saveDirectory = directory;
         dimension = requestedDimension;
-        const blockPath = buildPath(directory, "blocks.dat");
-        if (exists(blockPath))
+        const firstChunkPath = chunkPath(0, 0);
+        if (exists(firstChunkPath))
         {
             if (progress !is null) progress(5);
-            const bytes = cast(const(ubyte)[]) read(blockPath);
-            if (!chunk.restore(bytes))
-                generateForDimension(progress);
-            else
-            {
-                settings = loadWorldMetadata(directory);
-                if(requestedDimension==DimensionId.overworld
-                    && settings.worldType==WorldType.normal)
-                    addWaterToLegacyTerrain();
-                if (progress !is null) progress(100);
-            }
+            settings = loadWorldMetadata(directory);
+            foreach (chunkZ; -initialChunkRadius .. initialChunkRadius + 1)
+            foreach (chunkX; -initialChunkRadius .. initialChunkRadius + 1)
+                loadOrGenerateChunk(chunkX, chunkZ);
+            if (progress !is null) progress(100);
         }
         else
         {
+            // The old monolithic blocks.dat is intentionally left untouched.
+            // Its 64x32 layout cannot encode negative Y or chunk coordinates;
+            // generating the new format beside it avoids corrupting that data.
             generateForDimension(progress);
             save();
         }
@@ -142,90 +199,45 @@ public:
 
     void addWaterToLegacyTerrain()
     {
-        bool found;
-        foreach(y;0..Chunk.height)foreach(z;0..Chunk.depth)foreach(x;0..Chunk.width)
-            if(isWater(chunk.get(x,y,z))){found=true;break;}
-        if(found)return;
-        foreach(z;0..Chunk.depth)foreach(x;0..Chunk.width)
-        {
-            int surface=-1;
-            foreach(y;0..11)if(isOpaque(chunk.get(x,y,z)))surface=y;
-            if(surface>=0&&surface<10)
-            {
-                if(chunk.get(x,surface,z)==BlockId.grass)
-                    chunk.set(x,surface,z,BlockId.dirt);
-                foreach(y;surface+1..11)
-                    if(chunk.get(x,y,z)==BlockId.air)
-                        chunk.set(x,y,z,BlockId.waterSource);
-            }
-        }
-        ++revision;
+        // Legacy finite worlds are no longer mutated in place. New chunk
+        // terrain always receives oceans and rivers during generation.
     }
 
     void save()
     {
-        if (!saveDirectory.length || chunk is null)
+        if (!saveDirectory.length || chunks.length == 0)
             return;
         saveWorldMetadata(saveDirectory, settings);
-        write(buildPath(saveDirectory, "blocks.dat"), chunk.snapshot());
+        mkdirRecurse(buildPath(saveDirectory, "chunks"));
+        foreach (coordinate, loaded; chunks)
+            write(chunkPath(coordinate.x, coordinate.z), loaded.snapshot());
+        dirtyChunks.clear();
+    }
+
+    void saveDirtyChunks()
+    {
+        if(!saveDirectory.length||!dirtyChunks.length)return;
+        saveWorldMetadata(saveDirectory,settings);
+        mkdirRecurse(buildPath(saveDirectory,"chunks"));
+        foreach(coordinate,dirty;dirtyChunks)
+            if(auto loaded=coordinate in chunks)
+                write(chunkPath(coordinate.x,coordinate.z),(*loaded).snapshot());
+        dirtyChunks.clear();
     }
 
     void generate(GenerationProgress progress = null)
     {
         if (progress !is null) progress(0);
-        foreach (x; 0 .. Chunk.width)
+        clearChunks();
+        int generated;
+        const total = (initialChunkRadius * 2 + 1)
+            * (initialChunkRadius * 2 + 1);
+        foreach (chunkZ; -initialChunkRadius .. initialChunkRadius + 1)
+        foreach (chunkX; -initialChunkRadius .. initialChunkRadius + 1)
         {
-            foreach (z; 0 .. Chunk.depth)
-            {
-                int surface;
-                const phase = cast(float)(settings.seed & 1023) * 0.0061359f;
-                if (settings.worldType == WorldType.flat)
-                    surface = 5;
-                else
-                {
-                    const broad = fractal2(x * 0.055f, z * 0.055f,
-                        settings.seed, 4);
-                    const detail = fractal2(x * 0.13f, z * 0.13f,
-                        settings.seed + 7919, 3);
-                    const rolling = sinf(x * 0.13f + phase) * 3.0f
-                        + cosf(z * 0.11f - phase) * 3.0f;
-                    surface = 12 + cast(int) (broad * 6.0f
-                        + detail * 2.0f + rolling);
-                    if (surface < 5) surface = 5;
-                    if (surface > Chunk.height - 5) surface = Chunk.height - 5;
-                }
-                foreach (y; 0 .. surface + 1)
-                {
-                    BlockId block = y == surface ? BlockId.grass
-                        : (y >= surface - 3 ? BlockId.dirt : BlockId.stone);
-                    if (settings.worldType == WorldType.normal && y >= 2
-                        && y <= surface - 4)
-                    {
-                        const cheese = fractal3(x * 0.105f, y * 0.15f,
-                            z * 0.105f, settings.seed + 104729, 3);
-                        const tunnel = fractal3(x * 0.055f, y * 0.09f,
-                            z * 0.055f, settings.seed - 31337, 2);
-                        const winding = sinf(x * 0.29f + y * 0.17f + phase)
-                            + cosf(z * 0.31f - y * 0.13f - phase);
-                        if (cheese > 0.58f
-                            || (cheese > 0.50f && tunnel > 0.45f)
-                            || winding > 1.86f)
-                            block = BlockId.air;
-                    }
-                    chunk.set(x, y, z, block);
-                }
-                // Java's oceans occupy terrain below sea level. Keeping the
-                // finite prototype's sea at y=10 creates shorelines, pools,
-                // and underwater caves without submerging its usual spawn.
-                if (settings.worldType == WorldType.normal && surface < 10)
-                {
-                    chunk.set(x, surface, z, BlockId.dirt);
-                    foreach (y; surface + 1 .. 11)
-                        chunk.set(x, y, z, BlockId.waterSource);
-                }
-            }
+            ensureChunk(chunkX, chunkZ);
             if (progress !is null)
-                progress(5 + cast(int) ((x + 1) * 85 / Chunk.width));
+                progress(5 + ++generated * 85 / total);
         }
         settings.spawn = chooseSpawn();
         clearSpawn(settings.spawn);
@@ -233,82 +245,188 @@ public:
         if (progress !is null) progress(100);
     }
 
-    /// A compact Nether-wastes prototype: a netherrack floor and ceiling,
-    /// broad noise-shaped caverns, and a deliberately traversable central
-    /// shelf for the first destination portal. It remains a genuinely separate
-    /// block volume and save file even though this early build omits biomes,
-    /// lava seas, structures, and the 8:1 coordinate transform.
     void generateNether(GenerationProgress progress = null)
     {
         if (progress !is null) progress(0);
-        foreach (x; 0 .. Chunk.width)
+        clearChunks();
+        int generated;
+        const total = (initialChunkRadius * 2 + 1)
+            * (initialChunkRadius * 2 + 1);
+        foreach (chunkZ; -initialChunkRadius .. initialChunkRadius + 1)
+        foreach (chunkX; -initialChunkRadius .. initialChunkRadius + 1)
         {
-            foreach (z; 0 .. Chunk.depth)
-            {
-                const floorNoise = fractal2(x * 0.07f, z * 0.07f,
-                    settings.seed - 113, 4);
-                const roofNoise = fractal2(x * 0.06f, z * 0.06f,
-                    settings.seed + 7331, 3);
-                int floorHeight = 7 + cast(int) (floorNoise * 3.0f);
-                int roofStart = 24 + cast(int) (roofNoise * 2.0f);
-                if (floorHeight < 4) floorHeight = 4;
-                if (floorHeight > 11) floorHeight = 11;
-                if (roofStart < 20) roofStart = 20;
-                if (roofStart > 27) roofStart = 27;
-                foreach (y; 0 .. Chunk.height)
-                {
-                    BlockId block = y <= floorHeight || y >= roofStart
-                        ? BlockId.netherrack : BlockId.air;
-                    if (block == BlockId.netherrack && y > 1
-                        && y < Chunk.height - 2)
-                    {
-                        const cave = fractal3(x * 0.09f, y * 0.12f,
-                            z * 0.09f, settings.seed + 99173, 3);
-                        if (cave > 0.66f && y > floorHeight - 2
-                            && y < roofStart + 2)
-                            block = BlockId.air;
-                    }
-                    chunk.set(x, y, z, block);
-                }
-            }
+            ensureChunk(chunkX, chunkZ);
             if (progress !is null)
-                progress(5 + cast(int) ((x + 1) * 85 / Chunk.width));
+                progress(5 + ++generated * 85 / total);
         }
-
-        const centerX = Chunk.width / 2;
-        const centerZ = Chunk.depth / 2;
-        const floorY = 9;
-        foreach (z; centerZ - 5 .. centerZ + 6)
-        foreach (x; centerX - 5 .. centerX + 6)
-        {
-            foreach (y; floorY .. floorY + 7)
-                chunk.set(x, y, z, y == floorY ? BlockId.netherrack
-                    : BlockId.air);
-        }
-        settings.spawn = Vec3(centerX + 0.5f, floorY + 1.0f,
-            centerZ + 0.5f);
+        settings.spawn = chooseNetherSpawn();
         ++revision;
         if (progress !is null) progress(100);
     }
 
+    int minimumBuildY() const
+    {
+        return dimension == DimensionId.overworld
+            ? overworldMinimumY : netherMinimumY;
+    }
+
+    int maximumBuildY() const
+    {
+        return dimension == DimensionId.overworld
+            ? overworldMaximumY : netherMaximumY;
+    }
+
+    int voidDamageY() const { return minimumBuildY() - 64; }
+
+    int horizontalBorder() const
+    {
+        return dimension == DimensionId.overworld
+            ? overworldBorder : netherBorder;
+    }
+
+    bool withinHorizontalBorder(int x, int z) const
+    {
+        const limit = horizontalBorder();
+        return x >= -limit && x <= limit && z >= -limit && z <= limit;
+    }
+
+    ChunkCoordinate[] loadedChunkCoordinates() const
+    {
+        ChunkCoordinate[] result;
+        result.reserve(chunks.length);
+        foreach (coordinate, loaded; chunks) result ~= coordinate;
+        return result;
+    }
+
+    uint chunkRevision(int chunkX, int chunkZ) const
+    {
+        auto found = ChunkCoordinate(chunkX, chunkZ) in chunkRevisions;
+        return found is null ? 0 : *found;
+    }
+
+    bool hasChunk(int chunkX, int chunkZ) const
+    {
+        return (ChunkCoordinate(chunkX, chunkZ) in chunks) !is null;
+    }
+
+    const(Chunk) chunkAt(int chunkX, int chunkZ) const
+    {
+        auto found = ChunkCoordinate(chunkX, chunkZ) in chunks;
+        return found is null ? null : *found;
+    }
+
+    void clearChunks()
+    {
+        foreach (loaded; chunks) destroy(loaded);
+        chunks.clear();
+        chunkRevisions.clear();
+        dirtyChunks.clear();
+        chunk = null;
+        ++revision;
+    }
+
+    bool installChunk(int chunkX, int chunkZ, const(ubyte)[] data)
+    {
+        auto replacement = new Chunk(chunkX, chunkZ);
+        if (!replacement.restore(data))
+        {
+            destroy(replacement);
+            return false;
+        }
+        const coordinate = ChunkCoordinate(chunkX, chunkZ);
+        if (auto old = coordinate in chunks) destroy(*old);
+        chunks[coordinate] = replacement;
+        if (chunkX == 0 && chunkZ == 0) chunk = replacement;
+        markChunkAndNeighborsDirty(coordinate);
+        ++revision;
+        return true;
+    }
+
+    /// Removes one resident chunk. Servers persist it first; clients use the
+    /// same operation for authoritative unload packets without touching disk.
+    bool unloadChunk(int chunkX, int chunkZ, bool persist = false)
+    {
+        const coordinate = ChunkCoordinate(chunkX, chunkZ);
+        auto loaded = coordinate in chunks;
+        if (loaded is null) return false;
+        if (persist && saveDirectory.length)
+        {
+            mkdirRecurse(buildPath(saveDirectory, "chunks"));
+            write(chunkPath(chunkX, chunkZ), (*loaded).snapshot());
+        }
+        destroy(*loaded);
+        chunks.remove(coordinate);
+        chunkRevisions.remove(coordinate);
+        dirtyChunks.remove(coordinate);
+        if (chunkX == 0 && chunkZ == 0) chunk = null;
+        markChunkAndNeighborsDirty(coordinate);
+        ++revision;
+        return true;
+    }
+
+    ChunkCoordinate[] ensureChunksAround(Vec3 position, int radius = 2,
+        int maximumNewChunks = 2)
+    {
+        ChunkCoordinate[] generated;
+        const centerX = chunkCoordinate(cast(int)floorf(position.x));
+        const centerZ = chunkCoordinate(cast(int)floorf(position.z));
+        // Center-out rings ensure terrain in front of the player becomes
+        // available before distant corners instead of scanning one back edge.
+        foreach (ring; 0 .. radius + 1)
+        foreach (chunkZ; centerZ - ring .. centerZ + ring + 1)
+        foreach (chunkX; centerX - ring .. centerX + ring + 1)
+        {
+            int dx=chunkX-centerX;if(dx<0)dx=-dx;
+            int dz=chunkZ-centerZ;if(dz<0)dz=-dz;
+            if((dx>dz?dx:dz)!=ring)continue;
+            const blockX = chunkX * Chunk.width;
+            const blockZ = chunkZ * Chunk.depth;
+            if (!withinHorizontalBorder(blockX, blockZ)
+                || !withinHorizontalBorder(blockX+Chunk.width-1,
+                    blockZ+Chunk.depth-1)) continue;
+            const coordinate = ChunkCoordinate(chunkX, chunkZ);
+            if (coordinate in chunks) continue;
+            ensureChunk(chunkX, chunkZ);
+            generated ~= coordinate;
+            if(maximumNewChunks>0&&generated.length>=maximumNewChunks)
+                return generated;
+        }
+        return generated;
+    }
+
     BlockId getBlock(int x, int y, int z) const
     {
-        return chunk.get(x, y, z);
+        if (y < minimumBuildY() || y > maximumBuildY()
+            || !withinHorizontalBorder(x,z)) return BlockId.air;
+        auto loaded = ChunkCoordinate(chunkCoordinate(x),chunkCoordinate(z))
+            in chunks;
+        return loaded is null ? BlockId.air
+            : (*loaded).get(localCoordinate(x),y,localCoordinate(z));
     }
 
     bool inBounds(int x, int y, int z) const
     {
-        return x >= 0 && x < Chunk.width && y >= 0 && y < Chunk.height
-            && z >= 0 && z < Chunk.depth;
+        return y >= minimumBuildY() && y <= maximumBuildY()
+            && withinHorizontalBorder(x,z);
     }
 
     void setBlock(int x, int y, int z, BlockId block)
     {
         if (!inBounds(x, y, z))
             return;
-        if (chunk.get(x, y, z) == block)
+        const coordinate=ChunkCoordinate(chunkCoordinate(x),chunkCoordinate(z));
+        auto loaded=coordinate in chunks;
+        if(loaded is null)
+        {
+            ensureChunk(coordinate.x,coordinate.z);
+            loaded=coordinate in chunks;
+        }
+        if ((*loaded).get(localCoordinate(x),y,localCoordinate(z)) == block)
             return;
-        chunk.set(x, y, z, block);
+        (*loaded).set(localCoordinate(x),y,localCoordinate(z),block);
+        dirtyChunks[coordinate]=true;
+        markBlockDirty(coordinate,localCoordinate(x),localCoordinate(z));
+        ++contentRevision;
         ++revision;
     }
 
@@ -316,6 +434,8 @@ public:
     /// snapshot, including when every received block equals the bootstrap map.
     void markDirty()
     {
+        foreach (coordinate, loaded; chunks)
+            chunkRevisions[coordinate] = chunkRevisions[coordinate] + 1;
         ++revision;
     }
 
@@ -443,14 +563,41 @@ public:
     /// one amount per block, and two neighboring sources regenerate a source.
     WaterUpdate[] tickWater()
     {
-        WaterUpdate[] changes;
-        foreach(y;0..Chunk.height)foreach(z;0..Chunk.depth)foreach(x;0..Chunk.width)
+        return tickWaterChunks(loadedChunkCoordinates());
+    }
+
+    WaterUpdate[] tickWaterAround(const(Vec3)[] centers,int radius)
+    {
+        bool[ChunkCoordinate] selected;
+        foreach(center;centers)
         {
+            const centerX=chunkCoordinate(cast(int)floorf(center.x));
+            const centerZ=chunkCoordinate(cast(int)floorf(center.z));
+            foreach(z;centerZ-radius..centerZ+radius+1)
+            foreach(x;centerX-radius..centerX+radius+1)
+                if(hasChunk(x,z))selected[ChunkCoordinate(x,z)]=true;
+        }
+        ChunkCoordinate[] coordinates;
+        foreach(coordinate,present;selected)coordinates~=coordinate;
+        return tickWaterChunks(coordinates);
+    }
+
+private:
+    WaterUpdate[] tickWaterChunks(const(ChunkCoordinate)[] coordinates)
+    {
+        WaterUpdate[] changes;
+        if(dimension==DimensionId.nether)return changes;
+        foreach(coordinate;coordinates)
+        foreach(y;minimumBuildY()..65)
+        foreach(localZ;0..Chunk.depth)foreach(localX;0..Chunk.width)
+        {
+            const x=coordinate.x*Chunk.width+localX;
+            const z=coordinate.z*Chunk.depth+localZ;
             const current=getBlock(x,y,z);
             if(current!=BlockId.air && !isWater(current))continue;
             BlockId next=BlockId.air;
             if(isWaterSource(current))next=BlockId.waterSource;
-            else if(y+1<Chunk.height && isWater(getBlock(x,y+1,z)))
+            else if(y<maximumBuildY() && isWater(getBlock(x,y+1,z)))
                 next=BlockId.waterFalling;
             else
             {
@@ -463,7 +610,8 @@ public:
                     const level=waterLevel(neighbor);
                     if(level>=0 && level<8 && level<best)best=level;
                 }
-                if(sources>=2 && y>0 && isOpaque(getBlock(x,y-1,z)))
+                if(sources>=2 && y>minimumBuildY()
+                    && isOpaque(getBlock(x,y-1,z)))
                     next=BlockId.waterSource;
                 else if(best<7)next=waterForLevel(best+1);
             }
@@ -479,6 +627,8 @@ public:
         foreach(change;changes)setBlock(change.x,change.y,change.z,change.newBlock);
         return changes;
     }
+
+public:
 
     bool isUnobstructed(Aabb bounds) const
     {
@@ -547,22 +697,236 @@ public:
     }
 
 private:
+    string chunkPath(int chunkX, int chunkZ) const
+    {
+        return saveDirectory.length ? buildPath(saveDirectory, "chunks",
+            "c." ~ to!string(chunkX) ~ "." ~ to!string(chunkZ) ~ ".dat") : "";
+    }
+
+    void addChunk(Chunk loaded)
+    {
+        const coordinate = ChunkCoordinate(loaded.chunkX, loaded.chunkZ);
+        chunks[coordinate] = loaded;
+        markChunkAndNeighborsDirty(coordinate);
+        if (loaded.chunkX == 0 && loaded.chunkZ == 0) chunk = loaded;
+    }
+
+    void markChunkAndNeighborsDirty(ChunkCoordinate center)
+    {
+        foreach (dz; -1 .. 2)
+        foreach (dx; -1 .. 2)
+        {
+            const coordinate = ChunkCoordinate(center.x + dx, center.z + dz);
+            if (coordinate in chunks)
+            {
+                if(auto found=coordinate in chunkRevisions)++*found;
+                else chunkRevisions[coordinate]=1;
+            }
+        }
+    }
+
+    void markBlockDirty(ChunkCoordinate center,int localX,int localZ)
+    {
+        void bump(ChunkCoordinate coordinate)
+        {
+            if(coordinate !in chunks)return;
+            if(auto found=coordinate in chunkRevisions)++*found;
+            else chunkRevisions[coordinate]=1;
+        }
+        bump(center);
+        const west=localX==0,east=localX==Chunk.width-1;
+        const north=localZ==0,south=localZ==Chunk.depth-1;
+        if(west)bump(ChunkCoordinate(center.x-1,center.z));
+        if(east)bump(ChunkCoordinate(center.x+1,center.z));
+        if(north)bump(ChunkCoordinate(center.x,center.z-1));
+        if(south)bump(ChunkCoordinate(center.x,center.z+1));
+        if(west&&north)bump(ChunkCoordinate(center.x-1,center.z-1));
+        if(west&&south)bump(ChunkCoordinate(center.x-1,center.z+1));
+        if(east&&north)bump(ChunkCoordinate(center.x+1,center.z-1));
+        if(east&&south)bump(ChunkCoordinate(center.x+1,center.z+1));
+    }
+
+    void setRawBlock(int x, int y, int z, BlockId block)
+    {
+        auto loaded = ChunkCoordinate(chunkCoordinate(x),chunkCoordinate(z))
+            in chunks;
+        if (loaded !is null)
+            (*loaded).set(localCoordinate(x),y,localCoordinate(z),block);
+    }
+
+    void loadOrGenerateChunk(int chunkX, int chunkZ)
+    {
+        const path = chunkPath(chunkX, chunkZ);
+        auto loaded = new Chunk(chunkX, chunkZ);
+        if (path.length && exists(path)
+            && loaded.restore(cast(const(ubyte)[])read(path)))
+            addChunk(loaded);
+        else
+        {
+            destroy(loaded);
+            ensureChunk(chunkX, chunkZ);
+        }
+    }
+
+    void ensureChunk(int chunkX, int chunkZ)
+    {
+        const coordinate = ChunkCoordinate(chunkX, chunkZ);
+        if (coordinate in chunks) return;
+        auto generated = new Chunk(chunkX, chunkZ);
+        const path=chunkPath(chunkX,chunkZ);
+        if(path.length&&exists(path)
+            &&generated.restore(cast(const(ubyte)[])read(path)))
+        {
+            addChunk(generated);
+            ++revision;
+            return;
+        }
+        addChunk(generated);
+        if (dimension == DimensionId.nether)
+            generateNetherChunk(generated);
+        else
+            generateOverworldChunk(generated);
+        ++revision;
+    }
+
+    void generateOverworldChunk(Chunk target)
+    {
+        enum int seaLevel = 63;
+        const phase = cast(float)(settings.seed & 1023) * 0.0061359f;
+        foreach (localZ; 0 .. Chunk.depth)
+        foreach (localX; 0 .. Chunk.width)
+        {
+            const x=target.chunkX*Chunk.width+localX;
+            const z=target.chunkZ*Chunk.depth+localZ;
+            int surface;
+            if(settings.worldType==WorldType.flat)
+                surface=-60;
+            else
+            {
+                const continent=fractal2(x*0.0035f,z*0.0035f,
+                    settings.seed+17,5);
+                const hills=fractal2(x*0.012f,z*0.012f,
+                    settings.seed+7919,4);
+                const detail=fractal2(x*0.045f,z*0.045f,
+                    settings.seed-401,3);
+                const ridges=1.0f-fabsf(fractal2(x*0.008f,z*0.008f,
+                    settings.seed+49081,4));
+                surface=64+cast(int)(continent*38.0f+hills*17.0f
+                    +detail*5.0f+(ridges*ridges-0.45f)*18.0f);
+                const river=fabsf(fractal2(x*0.0065f,z*0.0065f,
+                    settings.seed-887,4));
+                if(settings.generateRivers&&river<0.055f)
+                {
+                    const amount=(0.055f-river)/0.055f;
+                    const riverBed=seaLevel-4-cast(int)(amount*3.0f);
+                    if(surface>riverBed)surface=riverBed;
+                }
+                if(settings.generateOceans&&continent<-0.22f)
+                    surface=52+cast(int)((continent+1.0f)*8.0f+detail*2.0f);
+                if(surface<-55)surface=-55;
+                if(surface>250)surface=250;
+            }
+
+            foreach(y;overworldMinimumY..surface+1)
+            {
+                BlockId block;
+                const bedrockLayer=y-overworldMinimumY;
+                if(bedrockLayer==0
+                    ||(bedrockLayer<5
+                        &&cast(int)(hash(x,y,z,settings.seed+31)%5)
+                            >=bedrockLayer))
+                    block=BlockId.bedrock;
+                else
+                    block=y==surface?BlockId.grass
+                        :(y>=surface-3?BlockId.dirt:BlockId.stone);
+                if(settings.worldType==WorldType.normal&&settings.generateCaves
+                    &&block==BlockId.stone&&y>overworldMinimumY+5
+                    &&y<surface-4)
+                {
+                    const cheese=fractal3(x*0.035f,y*0.055f,z*0.035f,
+                        settings.seed+104729,3);
+                    const tunnels=fractal3(x*0.085f,y*0.075f,z*0.085f,
+                        settings.seed-31337,2);
+                    const winding=sinf(x*0.095f+y*0.071f+phase)
+                        +cosf(z*0.091f-y*0.063f-phase);
+                    if(cheese>0.56f||(cheese>0.44f&&tunnels>0.52f)
+                        ||winding>1.91f)
+                        block=BlockId.air;
+                }
+                target.set(localX,y,localZ,block);
+            }
+            if(settings.worldType==WorldType.normal&&surface<seaLevel
+                &&(settings.generateOceans||settings.generateRivers))
+            {
+                if(target.get(localX,surface,localZ)==BlockId.grass)
+                    target.set(localX,surface,localZ,BlockId.dirt);
+                foreach(y;surface+1..seaLevel+1)
+                    target.set(localX,y,localZ,BlockId.waterSource);
+            }
+        }
+    }
+
+    void generateNetherChunk(Chunk target)
+    {
+        foreach(localZ;0..Chunk.depth)foreach(localX;0..Chunk.width)
+        {
+            const x=target.chunkX*Chunk.width+localX;
+            const z=target.chunkZ*Chunk.depth+localZ;
+            foreach(y;0..128)
+            {
+                const floorLayer=y;
+                const roofLayer=127-y;
+                bool bedrock=floorLayer==0||roofLayer==0;
+                if(!bedrock&&floorLayer<5)
+                    bedrock=cast(int)(hash(x,y,z,settings.seed-19)%5)>=floorLayer;
+                if(!bedrock&&roofLayer<5)
+                    bedrock=cast(int)(hash(x,y,z,settings.seed+23)%5)>=roofLayer;
+                if(bedrock)
+                {
+                    target.set(localX,y,localZ,BlockId.bedrock);
+                    continue;
+                }
+                const broad=fractal3(x*0.018f,y*0.026f,z*0.018f,
+                    settings.seed+99173,4);
+                const detail=fractal3(x*0.055f,y*0.065f,z*0.055f,
+                    settings.seed-7331,3);
+                const edge=cast(float)fabsf(cast(float)y-64.0f)/64.0f;
+                const density=broad*0.72f+detail*0.28f+edge*0.82f-0.38f;
+                target.set(localX,y,localZ,density>0.0f
+                    ?BlockId.netherrack:BlockId.air);
+            }
+        }
+    }
+
+    Vec3 chooseNetherSpawn() const
+    {
+        foreach(radius;0..32)foreach(z;-radius..radius+1)
+        foreach(x;-radius..radius+1)
+        {
+            foreach(y;32..96)
+                if(getBlock(x,y-1,z)==BlockId.netherrack
+                    &&getBlock(x,y,z)==BlockId.air
+                    &&getBlock(x,y+1,z)==BlockId.air)
+                    return Vec3(x+0.5f,y,z+0.5f);
+        }
+        return Vec3(0.5f,64.0f,0.5f);
+    }
+
     Vec3 chooseSpawn() const
     {
-        const centerX = Chunk.width / 2;
-        const centerZ = Chunk.depth / 2;
+        const centerX = 0;
+        const centerZ = 0;
         int bestX = centerX;
         int bestZ = centerZ;
         int bestY = surfaceAt(centerX, centerZ);
         int bestScore = int.max;
-        foreach (radius; 0 .. Chunk.width / 2)
+        foreach (radius; 0 .. (initialChunkRadius + 1) * Chunk.width)
         foreach (z; centerZ - radius .. centerZ + radius + 1)
         foreach (x; centerX - radius .. centerX + radius + 1)
         {
-            if (x < 2 || z < 2 || x >= Chunk.width - 2 || z >= Chunk.depth - 2)
-                continue;
             const y = surfaceAt(x, z);
-            if (y < 1 || y >= Chunk.height - 3)
+            if (y < 62 || y >= overworldMaximumY - 2
+                || getBlock(x,y,z) != BlockId.grass)
                 continue;
             int slope;
             foreach (dz; -1 .. 2)
@@ -586,10 +950,10 @@ private:
 
     int surfaceAt(int x, int z) const
     {
-        foreach_reverse (y; 0 .. Chunk.height)
-            if (chunk.get(x, y, z) != BlockId.air)
+        foreach_reverse (y; minimumBuildY() .. maximumBuildY()+1)
+            if (isSolid(getBlock(x, y, z)))
                 return y;
-        return -1;
+        return minimumBuildY()-1;
     }
 
     void clearSpawn(Vec3 spawn)
@@ -602,10 +966,10 @@ private:
         {
             const top = surfaceAt(x + dx, z + dz);
             foreach (fillY; top + 1 .. y)
-                chunk.set(x + dx, fillY, z + dz, BlockId.dirt);
-            chunk.set(x + dx, y - 1, z + dz, BlockId.grass);
-            chunk.set(x + dx, y, z + dz, BlockId.air);
-            chunk.set(x + dx, y + 1, z + dz, BlockId.air);
+                setRawBlock(x + dx, fillY, z + dz, BlockId.dirt);
+            setRawBlock(x + dx, y - 1, z + dz, BlockId.grass);
+            setRawBlock(x + dx, y, z + dz, BlockId.air);
+            setRawBlock(x + dx, y + 1, z + dz, BlockId.air);
         }
     }
 
@@ -713,12 +1077,15 @@ private:
 
     bool foreachSolidBlock(scope bool delegate(Aabb) visitor) const
     {
-        foreach (y; 0 .. Chunk.height)
-        foreach (z; 0 .. Chunk.depth)
-        foreach (x; 0 .. Chunk.width)
+        foreach (coordinate, loaded; chunks)
+        foreach (y; minimumBuildY() .. maximumBuildY()+1)
+        foreach (localZ; 0 .. Chunk.depth)
+        foreach (localX; 0 .. Chunk.width)
         {
-            if (!isOpaque(chunk.get(x, y, z)))
+            if (!isSolid(loaded.get(localX,y,localZ)))
                 continue;
+            const x=coordinate.x*Chunk.width+localX;
+            const z=coordinate.z*Chunk.depth+localZ;
             if (!visitor(Aabb(x, y, z, x + 1.0f, y + 1.0f, z + 1.0f)))
                 return false;
         }
@@ -733,15 +1100,13 @@ private:
         int maxX = cast(int) floorf(area.maxX) + 1;
         int maxY = cast(int) floorf(area.maxY) + 1;
         int maxZ = cast(int) floorf(area.maxZ) + 1;
-        if (minX < 0) minX = 0; if (minY < 0) minY = 0; if (minZ < 0) minZ = 0;
-        if (maxX >= Chunk.width) maxX = Chunk.width - 1;
-        if (maxY >= Chunk.height) maxY = Chunk.height - 1;
-        if (maxZ >= Chunk.depth) maxZ = Chunk.depth - 1;
+        if (minY < minimumBuildY()) minY = minimumBuildY();
+        if (maxY > maximumBuildY()) maxY = maximumBuildY();
         foreach (y; minY .. maxY + 1)
         foreach (z; minZ .. maxZ + 1)
         foreach (x; minX .. maxX + 1)
         {
-            if (!isOpaque(chunk.get(x,y,z))) continue;
+            if (!isSolid(getBlock(x,y,z))) continue;
             if (!visitor(Aabb(x,y,z,x+1.0f,y+1.0f,z+1.0f))) return false;
         }
         return true;

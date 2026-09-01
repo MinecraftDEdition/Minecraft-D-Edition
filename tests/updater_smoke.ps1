@@ -29,6 +29,14 @@ try {
     Copy-Item -LiteralPath (Join-Path $oldRuntime 'Minecraft D Edition.exe') `
         -Destination (Join-Path $newRuntime 'Minecraft D Edition.exe')
     Write-Utf8 (Join-Path $newRuntime 'Minecraft D Edition.exe') 'new-game'
+    Copy-Item -LiteralPath (Join-Path $projectRoot `
+        'Minecraft D Edition Launcher.exe') -Destination (Join-Path $newRuntime `
+        'Minecraft D Edition Launcher.update.exe')
+    # A PE image permits harmless overlay bytes. This produces a different but
+    # still runnable launcher so the smoke test exercises deferred self-update.
+    [IO.File]::AppendAllText((Join-Path $newRuntime `
+        'Minecraft D Edition Launcher.update.exe'), 'self-update-smoke-marker',
+        [Text.UTF8Encoding]::new($false))
     Write-Utf8 (Join-Path $newRuntime 'assets\unchanged.txt') 'same'
     Write-Utf8 (Join-Path $newRuntime 'assets\changed.txt') 'new'
     Write-Utf8 (Join-Path $newRuntime 'assets\added.txt') 'added'
@@ -68,6 +76,16 @@ try {
         -Wait -PassThru
     if ($process.ExitCode -ne 0) { throw "Launcher exited with $($process.ExitCode)" }
 
+    foreach ($attempt in 1..150) {
+        $installedManifest = Join-Path $oldRuntime '.mde-installed-manifest.txt'
+        if ((Test-Path -LiteralPath $installedManifest) -and
+            (Get-Content -Raw $installedManifest) -match "version`tsmoke-new") {
+            break
+        }
+        if ($attempt -eq 150) { throw 'Deferred launcher update did not complete.' }
+        Start-Sleep -Milliseconds 100
+    }
+
     if ((Get-Content -Raw (Join-Path $oldRuntime 'Minecraft D Edition.exe')) -ne 'new-game') {
         throw 'Game executable was not updated.'
     }
@@ -86,9 +104,29 @@ try {
     if ((Get-Content -Raw (Join-Path $oldRuntime 'saves\World\level.dat')) -ne 'precious-save') {
         throw 'User save data was modified.'
     }
+    if ((Get-FileHash -Algorithm SHA256 -LiteralPath (Join-Path $oldRuntime `
+        'Minecraft D Edition Launcher.exe')).Hash -ne
+        (Get-FileHash -Algorithm SHA256 -LiteralPath (Join-Path $newRuntime `
+        'Minecraft D Edition Launcher.update.exe')).Hash) {
+        throw 'The installed launcher did not update itself.'
+    }
     if ((Get-Content -Raw (Join-Path $oldRuntime '.mde-installed-manifest.txt')) `
         -notmatch "version`tsmoke-new") {
         throw 'Installed manifest was not advanced.'
+    }
+
+    # A matching version must still repair files that disappeared or were
+    # corrupted after installation, without needing the original Setup EXE.
+    Remove-Item -LiteralPath (Join-Path $oldRuntime 'assets\added.txt')
+    Write-Utf8 (Join-Path $oldRuntime 'assets\changed.txt') 'corrupted'
+    $repair = Start-Process -FilePath `
+        (Join-Path $oldRuntime 'Minecraft D Edition Launcher.exe') `
+        -WorkingDirectory $oldRuntime -ArgumentList '--updater-check-only' `
+        -Wait -PassThru
+    if ($repair.ExitCode -ne 0) { throw "Repair check exited with $($repair.ExitCode)" }
+    if ((Get-Content -Raw (Join-Path $oldRuntime 'assets\changed.txt')) -ne 'new' `
+        -or (Get-Content -Raw (Join-Path $oldRuntime 'assets\added.txt')) -ne 'added') {
+        throw 'A same-version integrity repair did not restore managed files.'
     }
     Write-Host 'Updater smoke test passed.'
 }

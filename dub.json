@@ -11,13 +11,14 @@
   "versions": ["CORRECT_ABI"],
   "versions-windows": ["MCD_EOS"],
   "preBuildCommands-windows": [
+    "powershell -NoProfile -ExecutionPolicy Bypass -File tools/Prepare-Sdl3Windows.ps1",
     "powershell -NoProfile -ExecutionPolicy Bypass -File native/build_bridge.ps1",
     "powershell -NoProfile -ExecutionPolicy Bypass -File native/build_vulkan_bridge.ps1",
     "powershell -NoProfile -ExecutionPolicy Bypass -File native/build_eos_bridge.ps1",
     "powershell -NoProfile -ExecutionPolicy Bypass -File native/build_web_bridge.ps1",
     "powershell -NoProfile -ExecutionPolicy Bypass -File native/build_icon.ps1"
   ],
-  "sourceFiles-windows": ["native/dx12_abi_bridge.obj", "native/vulkan_abi_bridge.obj", "native/vulkan-1.lib", "native/eos_abi_bridge.obj", "native/web_abi_bridge.obj", "native/app_icon.res", "third_party/eos/SDK/Lib/EOSSDK-Win64-Shipping.lib"],
+  "sourceFiles-windows": ["native/dx12_abi_bridge.obj", "native/vulkan_abi_bridge.obj", "native/vulkan-1.lib", "native/eos_abi_bridge.obj", "native/web_abi_bridge.obj", "native/app_icon.res", "third_party/eos/SDK/Lib/EOSSDK-Win64-Shipping.lib", "third_party/sdl3/windows/x64/SDL3.lib"],
   "libs-windows": ["ole32", "user32", "bcrypt", "d3dcompiler", "d3d12", "dxgi", "windowscodecs", "xaudio2", "winhttp", "shell32", "comdlg32"],
   "dependencies": {
     "directx-d": "~>0.14.1"

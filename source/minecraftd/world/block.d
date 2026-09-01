@@ -34,6 +34,7 @@ enum BlockId : ubyte
     warpedPlanks,
     cobblestone,
     glass,
+    bedrock,
 }
 
 struct BlockSoundType
@@ -74,6 +75,8 @@ BlockSoundType soundType(BlockId block)
             return BlockSoundType("nether_wood", 1.0f, 1.0f);
         case BlockId.glass:
             return BlockSoundType("glass", 1.0f, 1.0f);
+        case BlockId.bedrock:
+            return BlockSoundType("stone", 1.0f, 1.0f);
     }
 }
 
@@ -154,6 +157,7 @@ float hardness(BlockId block)
              BlockId.warpedPlanks, BlockId.cobblestone:
             return 2.0f;
         case BlockId.glass: return 0.3f;
+        case BlockId.bedrock: return -1.0f;
     }
 }
 
@@ -218,6 +222,7 @@ FallSurface fallSurface(BlockId block)
              BlockId.crimsonPlanks, BlockId.warpedPlanks,
              BlockId.cobblestone, BlockId.glass:
             return FallSurface.normal;
+        case BlockId.bedrock: return FallSurface.normal;
     }
 }
 
@@ -248,4 +253,5 @@ unittest
     assert(soundType(BlockId.bambooPlanks).family == "bamboo_wood");
     assert(soundType(BlockId.crimsonPlanks).family == "nether_wood");
     assert(soundType(BlockId.glass).family == "glass");
+    assert(isSolid(BlockId.bedrock) && hardness(BlockId.bedrock) < 0.0f);
 }

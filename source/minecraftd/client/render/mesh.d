@@ -108,6 +108,11 @@ enum DrawLayer : ubyte
     blurBackdrop,
     overlay,
     invertedOverlay,
+    /// Alpha-blended geometry whose cube faces are visible only from outside.
+    translucentCulled,
+    /// Depth-writing geometry that intentionally has no back-face culling,
+    /// such as camera-facing particles and skinned entity meshes.
+    worldDoubleSided,
 }
 
 struct FrameMesh

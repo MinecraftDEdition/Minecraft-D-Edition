@@ -2,7 +2,8 @@ module minecraftd.client.render.player_renderer;
 
 import core.stdc.math : cosf, sinf, sqrtf;
 import minecraftd.client.render.mesh : Vertex, Color, appendQuad;
-import minecraftd.common.math3d : Vec2, Vec3, Mat4, PI, DEG_TO_RAD;
+import minecraftd.common.math3d : Vec2, Vec3, Mat4, PI, DEG_TO_RAD,
+    clamp, cross, dot;
 import minecraftd.game.entity.player : Player;
 
 struct UvRect
@@ -296,6 +297,7 @@ final class PlayerRenderer
                     vertex.position[1],vertex.position[2]));
                 vertex.position=[transformed.x,transformed.y,transformed.z];
             }
+            relightDirectional(result);
         }
         return result;
     }
@@ -318,6 +320,48 @@ final class PlayerRenderer
                     ? rightSlimSleeveUvs() : rightSleeveUvs(),
                 Mat4.identity(), true);
         return result;
+    }
+
+    /// The lightmap is sampled per entity in Java. Keep it separate from the
+    /// normal-based face shade so a limb retains its directional contrast as
+    /// it moves between sunlight, caves, and future block-light sources.
+    void applyWorldLight(ref Vertex[] geometry, float amount) const
+    {
+        amount=clamp(amount,0.0f,1.0f);
+        foreach(ref vertex;geometry)
+        {
+            vertex.color[0]*=amount;
+            vertex.color[1]*=amount;
+            vertex.color[2]*=amount;
+        }
+    }
+
+    /// Re-lights a mesh after its first-person pose is known. View models are
+    /// authored in camera space and transformed only in the draw call, so the
+    /// ordinary player-mesh pass cannot otherwise see their final normals.
+    void applyPosedLight(ref Vertex[] geometry, Mat4 pose, float worldLight,
+        bool blockCardinalColors = false,
+        bool previouslyDirectional = true) const
+    {
+        worldLight=clamp(worldLight,0.0f,1.0f);
+        for(size_t first=0;first+5<geometry.length;first+=6)
+        {
+            const a=vertexPosition(geometry[first]);
+            const b=vertexPosition(geometry[first+1]);
+            const c=vertexPosition(geometry[first+2]);
+            const localNormal=cross(b-a,c-a).normalized();
+            const posedNormal=transformDirection(pose,localNormal).normalized();
+            float previous=1.0f;
+            if(blockCardinalColors) previous=blockFaceShade(localNormal);
+            else if(previouslyDirectional) previous=entityFaceShade(localNormal);
+            const ratio=entityFaceShade(posedNormal)*worldLight/previous;
+            foreach(ref vertex;geometry[first..first+6])
+            {
+                vertex.color[0]*=ratio;
+                vertex.color[1]*=ratio;
+                vertex.color[2]*=ratio;
+            }
+        }
     }
 
     Mat4 firstPersonArmTransform(float attackProgress, float aspect,
@@ -495,15 +539,18 @@ private:
         const max = center + size * 0.5f;
         Vec3 t(Vec3 value) { return transform.transformPoint(value); }
         void face(Vec3 a, Vec3 b, Vec3 c, Vec3 d, UvRect uv,
-            float light, bool flipVertical = false)
+            bool flipVertical = false)
         {
+            const ta=t(a),tb=t(b),tc=t(c),td=t(d);
+            const normal=cross(tb-ta,td-ta).normalized();
+            const light=entityFaceShade(normal);
             const shade = Color(light, light, light, 1);
             if (flipVertical)
-                appendQuad(output, t(a),t(b),t(c),t(d),
+                appendQuad(output, ta,tb,tc,td,
                     uv.uv(1,1),uv.uv(0,1),uv.uv(0,0),uv.uv(1,0),
                     shade,shade,shade,shade);
             else
-                appendQuad(output, t(a),t(b),t(c),t(d),
+                appendQuad(output, ta,tb,tc,td,
                     uv.uv(1,0),uv.uv(0,0),uv.uv(0,1),uv.uv(1,1),
                     shade,shade,shade,shade);
         }
@@ -519,23 +566,79 @@ private:
         const v6 = Vec3(max.x,max.y,max.z);
         const v7 = Vec3(min.x,max.y,max.z);
         const reverseSides = !modelYDown;
-        face(v1,v0,v3,v2,uvs.front,0.8f,reverseSides); // north
-        face(v4,v5,v6,v7,uvs.back,0.8f,reverseSides);  // south
+        face(v1,v0,v3,v2,uvs.front,reverseSides); // north
+        face(v4,v5,v6,v7,uvs.back,reverseSides);  // south
         // Skin-side names are from the character's perspective: west/X-min
         // consumes the right strip and east/X-max consumes the left strip.
         const westUvs = swapSideUvs ? uvs.left : uvs.right;
         const eastUvs = swapSideUvs ? uvs.right : uvs.left;
-        face(v0,v4,v7,v3,westUvs,0.6f,reverseSides); // west
-        face(v5,v1,v2,v6,eastUvs,0.6f,reverseSides); // east
+        face(v0,v4,v7,v3,westUvs,reverseSides); // west
+        face(v5,v1,v2,v6,eastUvs,reverseSides); // east
         if (modelYDown)
         {
-            face(v5,v4,v0,v1,uvs.top,0.5f);             // shoulder cap
-            face(v2,v3,v7,v6,uvs.bottom,1.0f,true);     // hand cap
+            face(v5,v4,v0,v1,uvs.top);             // shoulder cap
+            face(v2,v3,v7,v6,uvs.bottom,true);     // hand cap
         }
         else
         {
-            face(v2,v3,v7,v6,uvs.top,1.0f,true);        // world-space top
-            face(v5,v4,v0,v1,uvs.bottom,0.5f);          // world-space bottom
+            face(v2,v3,v7,v6,uvs.top,true);        // world-space top
+            face(v5,v4,v0,v1,uvs.bottom);          // world-space bottom
+        }
+    }
+
+    static float entityFaceShade(Vec3 normal)
+    {
+        // Minecraft's entity shader combines two directional lights with
+        // 0.4 ambient and 0.6 directional power. The primary direction is the
+        // same northwest/up vector used to draw D Edition's sun; the second is
+        // the soft opposing fill that prevents silhouettes from going black.
+        const sun=Vec3(-0.70710678f,0.70710678f,0.0f);
+        const fill=Vec3(0.20076436f,0.70267526f,0.68259882f);
+        const sunAmount=dot(sun,normal)>0.0f?dot(sun,normal):0.0f;
+        const fillAmount=dot(fill,normal)>0.0f?dot(fill,normal):0.0f;
+        return clamp((sunAmount+fillAmount)*0.6f+0.4f,0.0f,1.0f);
+    }
+
+    static Vec3 vertexPosition(const Vertex vertex)
+    {
+        return Vec3(vertex.position[0],vertex.position[1],vertex.position[2]);
+    }
+
+    static Vec3 transformDirection(Mat4 transform,Vec3 value)
+    {
+        return Vec3(
+            value.x*transform.m[0]+value.y*transform.m[4]
+                +value.z*transform.m[8],
+            value.x*transform.m[1]+value.y*transform.m[5]
+                +value.z*transform.m[9],
+            value.x*transform.m[2]+value.y*transform.m[6]
+                +value.z*transform.m[10]);
+    }
+
+    static float blockFaceShade(Vec3 normal)
+    {
+        if(normal.y>0.5f)return 1.0f;
+        if(normal.y< -0.5f)return 0.5f;
+        if(normal.z>0.5f||normal.z< -0.5f)return 0.8f;
+        return 0.6f;
+    }
+
+    static void relightDirectional(ref Vertex[] geometry)
+    {
+        // Player cubes are emitted as six vertices per quad. Re-evaluate the
+        // normal after whole-body poses such as swimming rotate the finished
+        // model, otherwise its old upright lighting would remain painted on.
+        for(size_t first=0;first+5<geometry.length;first+=6)
+        {
+            const a=Vec3(geometry[first].position[0],geometry[first].position[1],
+                geometry[first].position[2]);
+            const b=Vec3(geometry[first+1].position[0],
+                geometry[first+1].position[1],geometry[first+1].position[2]);
+            const c=Vec3(geometry[first+2].position[0],
+                geometry[first+2].position[1],geometry[first+2].position[2]);
+            const amount=entityFaceShade(cross(b-a,c-a).normalized());
+            foreach(ref vertex;geometry[first..first+6])
+                vertex.color=[amount,amount,amount,vertex.color[3]];
         }
     }
 
@@ -584,4 +687,19 @@ unittest
     assert(slimMax-slimMin == 3.0f/16.0f);
     assert(renderer.rightSlimArmUvs().front.right
         - renderer.rightSlimArmUvs().front.left == 3.0f);
+
+    // Rotating the body must rotate its normals through the directional
+    // lights; the old hard-coded face values produced identical colors here.
+    const facingNorth=renderer.buildSteve(Vec3.init,0.0f,0.0f,0.0f,
+        0.0f,0.0f,SkinLayers.init);
+    const facingSouth=renderer.buildSteve(Vec3.init,180.0f,0.0f,0.0f,
+        0.0f,0.0f,SkinLayers.init);
+    assert(facingNorth[0].color[0] != facingSouth[0].color[0]);
+
+    auto posedArm=classic.dup;
+    renderer.applyPosedLight(posedArm,Mat4.rotationY(PI*0.5f),1.0f);
+    assert(posedArm[0].color[0] != classic[0].color[0]);
+    auto darkArm=classic.dup;
+    renderer.applyPosedLight(darkArm,Mat4.identity(),0.25f);
+    assert(darkArm[0].color[0] < classic[0].color[0]);
 }
