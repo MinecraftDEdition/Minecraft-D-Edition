@@ -177,15 +177,51 @@ jobs:
               -o "$release_dir/mde-macos-appcast.xml" \
               "$release_dir"
           python3 - <<'PY'
+          import urllib.parse
+          import xml.etree.ElementTree as ET
           from pathlib import Path
 
+          sparkle = "http://www.andymatuschak.org/xml-namespaces/sparkle"
+          ET.register_namespace("sparkle", sparkle)
+          release_dir = Path("distribution/macos/build/release")
           appcast = Path("distribution/macos/build/release/mde-macos-appcast.xml")
-          contents = appcast.read_text(encoding="utf-8")
-          old_title = "<title>Minecraft D Edition</title>"
-          new_title = "<title>Minecraft: D Edition</title>"
-          if contents.count(old_title) != 1:
-              raise SystemExit("Unexpected generated appcast title")
-          appcast.write_text(contents.replace(old_title, new_title, 1), encoding="utf-8")
+          tree = ET.parse(appcast)
+          channel = tree.getroot().find("channel")
+          if channel is None or channel.find("title") is None:
+              raise SystemExit("Generated appcast has no channel title")
+          channel.find("title").text = "Minecraft: D Edition"
+
+          items = channel.findall("item")
+          if not items:
+              raise SystemExit("Generated appcast has no update items")
+          version_tag = f"{{{sparkle}}}version"
+          try:
+              newest = max(items, key=lambda item: int(item.findtext(version_tag)))
+          except (TypeError, ValueError):
+              raise SystemExit("Generated appcast has an invalid build version")
+          # The preceding archive is input for delta generation only. Keeping
+          # its item would advertise a full-DMG URL that is not republished.
+          for item in items:
+              if item is not newest:
+                  channel.remove(item)
+
+          delta_from = f"{{{sparkle}}}deltaFrom"
+          for enclosure in newest.findall(f"{{{sparkle}}}deltas/enclosure"):
+              if delta_from not in enclosure.attrib:
+                  continue
+              url = urllib.parse.urlsplit(enclosure.attrib["url"])
+              old_name = urllib.parse.unquote(url.path.rsplit("/", 1)[-1])
+              safe_name = old_name.replace(" ", ".")
+              old_path = release_dir / old_name
+              safe_path = release_dir / safe_name
+              if old_path != safe_path:
+                  old_path.rename(safe_path)
+              safe_url_path = url.path.rsplit("/", 1)[0] + "/" \
+                  + urllib.parse.quote(safe_name)
+              enclosure.attrib["url"] = urllib.parse.urlunsplit(
+                  url._replace(path=safe_url_path))
+
+          tree.write(appcast, encoding="utf-8", xml_declaration=True)
           PY
 
           if [[ -f "$release_dir/Minecraft.D.Edition-macOS-previous-arm64.dmg" ]]; then
@@ -219,3 +255,12 @@ jobs:
           done < <(find "$release_dir" -maxdepth 1 -name '*.delta' -print0)
           gh release upload Test "${assets[@]}" --clobber \
             --repo "$GITHUB_REPOSITORY"
+
+          while IFS=$'\t' read -r asset_id asset_name; do
+            [[ -n "$asset_id" ]] || continue
+            if [[ ! -f "$release_dir/$asset_name" ]]; then
+              gh api --method DELETE \
+                "repos/$GITHUB_REPOSITORY/releases/assets/$asset_id"
+            fi
+          done < <(gh api "repos/$GITHUB_REPOSITORY/releases/tags/Test" \
+            --jq '.assets[] | select(.name | endswith(".delta")) | [.id, .name] | @tsv')
