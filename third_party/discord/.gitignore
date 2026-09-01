@@ -1,0 +1,6 @@
+# Discord distributes these files through the Developer Portal. Keep the
+# public layout/documentation, but never commit downloaded SDK packages or
+# machine-specific application configuration.
+discord_social_sdk/
+application.local.json
+downloads/
