@@ -1,7 +1,7 @@
 $ErrorActionPreference = 'Stop'
 Add-Type -AssemblyName System.Drawing
 
-$sourcePng = Join-Path $PSScriptRoot '..\assets\minecraft_d\textures\gui\title\mcde_logo.png'
+$sourcePng = Join-Path $PSScriptRoot '..\branding\minecraft_d_edition.png'
 $iconPath = Join-Path $PSScriptRoot 'minecraft_d_edition.ico'
 $resourceScript = Join-Path $PSScriptRoot 'app_icon.rc'
 $resourceOutput = Join-Path $PSScriptRoot 'app_icon.res'

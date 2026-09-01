@@ -37,6 +37,7 @@ import minecraftd.client.menu.account_menu_state : AccountDialog,
     AccountMenuState;
 import minecraftd.platform.clock : monotonicMilliseconds, monotonicSeconds,
     sleepMilliseconds;
+import minecraftd.platform.desktop.discord_presence : DiscordPresence;
 import minecraftd.platform.input;
 import minecraftd.platform.paths : platformPaths;
 import minecraftd.platform.update : startUpdater;
@@ -90,6 +91,8 @@ final class GameClient
         scope (exit) destroy(accountMenu);
         EosService eos;
         scope (exit) if (eos !is null) destroy(eos);
+        auto discord = new DiscordPresence();
+        scope (exit) destroy(discord);
 
         EosService ensureEos()
         {
@@ -102,11 +105,13 @@ final class GameClient
         {
             if (eos !is null)
                 eos.tick();
+            discord.tick();
         }
 
         bool initialSession = true;
         while (window.running)
         {
+        discord.menu();
         IntegratedGameServer integratedServer;
         EosHostBridge eosHostBridge;
         GameConnection gameConnection;
@@ -798,6 +803,10 @@ final class GameClient
             if (!window.running) break;
             continue;
         }
+        if (integratedServer !is null)
+            discord.singleplayer();
+        else
+            discord.multiplayer(serverMenu.serverName);
         auto pauseMenu = new PauseMenuState();
         scope (exit) destroy(pauseMenu);
         auto deathScreen = new DeathScreenState();

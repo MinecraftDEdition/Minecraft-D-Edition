@@ -62,15 +62,13 @@ activity sharing disabled, or an SDK error must never stop the game from
 launching or disconnect a world. Updates should occur on state transitions,
 not every render frame, and the presence should be cleared during clean exit.
 
-## Developer Portal inputs still required
+## Configured application
 
-1. A Discord Developer application named `Minecraft: D Edition` with the
-   Social SDK enabled.
-2. Its numeric Application ID in a local copy named `application.local.json`.
-3. The latest official C++ Social SDK archive extracted as shown above.
-4. At least one Rich Presence Art Asset uploaded in the portal. The initial
-   integration expects the lowercase asset key `mcde-logo`; 1024 by 1024 is
-   recommended by Discord.
+The release build uses public Application ID `1544456552436469790`. Its large
+activity art is loaded from the HTTPS-hosted canonical project image, so no
+private credentials and no separately uploaded Discord art asset are needed.
+The official C++ Social SDK must still be extracted as shown above for local
+release builds.
 
 `application.local.json`, the downloaded SDK, and packaged SDK runtimes are
 ignored by Git. The Application ID itself is public and may be moved into the

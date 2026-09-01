@@ -21,9 +21,8 @@ a { color: inherit; }
 
 .site-header { position: sticky; top: 0; z-index: 30; border-bottom: 1px solid #383834; background: rgba(25,25,23,.97); box-shadow: 0 4px 0 rgba(0,0,0,.25); }
 .nav-shell { min-height: 76px; display: grid; grid-template-columns: 190px 1fr auto; align-items: center; gap: 2rem; }
-.brand { width: 185px; display: grid; justify-items: center; gap: 1px; text-decoration: none; }
-.brand-main { width: 100%; height: auto; }
-.brand-edition { width: 43%; height: auto; }
+.brand { width: 185px; display: block; text-decoration: none; }
+.brand-logo { width: 100%; height: 62px; object-fit: cover; object-position: center; }
 .nav-links, .nav-actions { display: flex; align-items: center; gap: 1.8rem; }
 .nav-links a, .account-link { font-size: .82rem; font-weight: 800; letter-spacing: .04em; text-decoration: none; text-transform: uppercase; }
 .nav-links a:hover, .account-link:hover { color: var(--green-bright); }
@@ -35,7 +34,7 @@ a { color: inherit; }
 
 .hero { position: relative; min-height: min(760px, calc(100vh - 76px)); overflow: hidden; isolation: isolate; }
 .hero-image, .hero-shade { position: absolute; inset: 0; width: 100%; height: 100%; }
-.hero-image { z-index: -3; object-fit: cover; object-position: center; filter: saturate(.9) contrast(1.04); }
+.hero-image { z-index: -3; object-fit: cover; object-position: center; image-rendering: pixelated; filter: saturate(.9) contrast(1.04); }
 .hero-shade { z-index: -2; background: linear-gradient(90deg, rgba(0,0,0,.78) 0%, rgba(0,0,0,.4) 43%, rgba(0,0,0,.1) 75%), linear-gradient(0deg, rgba(0,0,0,.45), transparent 45%); }
 .hero::after { content: ""; position: absolute; inset: auto 0 0; height: 14px; z-index: 3; background: repeating-linear-gradient(90deg, #151512 0 24px, #20201c 24px 48px); }
 .hero-copy { width: min(1180px, calc(100% - 2rem)); margin: 0 auto; padding-top: clamp(7rem, 16vh, 11rem); }

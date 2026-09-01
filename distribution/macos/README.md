@@ -23,6 +23,7 @@ Minecraft D Edition.app/
     Frameworks/SDL3.framework
     Frameworks/libMoltenVK.dylib
     Frameworks/libEOSSDK-Mac-Shipping.dylib
+    Frameworks/libdiscord_partner_sdk.dylib
     Frameworks/Sparkle.framework
 ```
 
@@ -47,6 +48,11 @@ player DMG contains Epic's distributable macOS runtime inside the signed app,
 plus the same restricted `eos.client.json` used by Windows. Consequently,
 Windows and macOS clients use the same EOS product, invitation format, game
 protocol, NAT traversal, and relay transport.
+
+Discord Rich Presence is compiled through the same small C ABI bridge as the
+Windows build. The release workflow decrypts a minimal licensed SDK bundle,
+packages `libdiscord_partner_sdk.dylib`, and publishes only activity state;
+Discord being closed or unavailable is never a launch failure.
 
 ## Release gate
 

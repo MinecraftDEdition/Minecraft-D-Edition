@@ -57,6 +57,33 @@ jobs:
           test -f "$eos_root/SDK/Bin/libEOSSDK-Mac-Shipping.dylib"
           echo "MDE_EOS_SDK_ROOT=$eos_root/SDK" >> "$GITHUB_ENV"
 
+      - name: Prepare Discord Social SDK
+        env:
+          GH_TOKEN: ${{ github.token }}
+          DISCORD_SDK_ARCHIVE_KEY: ${{ secrets.DISCORD_SDK_ARCHIVE_KEY }}
+        run: |
+          test -n "$DISCORD_SDK_ARCHIVE_KEY"
+          encrypted="$RUNNER_TEMP/mde-discord-social-sdk-v1.10.19337.zip.enc"
+          archive="$RUNNER_TEMP/mde-discord-social-sdk-v1.10.19337.zip"
+          discord_root="$RUNNER_TEMP/mde-discord-social-sdk"
+          gh release download build-dependencies \
+            --repo "$GITHUB_REPOSITORY" \
+            --pattern 'mde-discord-social-sdk-v1.10.19337.zip.enc' \
+            --dir "$RUNNER_TEMP"
+          printf '%s  %s\n' \
+            'efa73921b689171f3ecbfb8b7d9153db3f57fb372816a398a4afdcddfebe45b3' \
+            "$encrypted" | shasum -a 256 --check
+          "$(brew --prefix openssl@3)/bin/openssl" enc -d -aes-256-cbc \
+            -pbkdf2 -iter 200000 -in "$encrypted" -out "$archive" \
+            -pass env:DISCORD_SDK_ARCHIVE_KEY
+          mkdir -p "$discord_root"
+          ditto -x -k "$archive" "$discord_root"
+          sdk="$discord_root/discord_social_sdk"
+          test -f "$sdk/include/discordpp.h"
+          test -f "$sdk/include/cdiscord.h"
+          test -f "$sdk/lib/release/libdiscord_partner_sdk.dylib"
+          echo "MDE_DISCORD_SDK_ROOT=$sdk" >> "$GITHUB_ENV"
+
       - name: Configure secure update signing
         env:
           SPARKLE_PRIVATE_KEY: ${{ secrets.MACOS_SPARKLE_ED25519 }}
@@ -82,6 +109,7 @@ jobs:
           MDE_BUILD_NUMBER: ${{ github.run_number }}
           MDE_CONTENT_ROOT: ${{ github.workspace }}/distribution/macos/build/content
           MDE_REQUIRE_EOS: 1
+          MDE_REQUIRE_DISCORD: 1
         run: bash distribution/macos/build_macos.sh
 
       - name: Smoke-test application launch
@@ -136,10 +164,15 @@ jobs:
       - name: Inspect application
         run: |
           file 'distribution/macos/build/bundle/Minecraft D Edition.app/Contents/MacOS/Minecraft D Edition'
-          otool -L 'distribution/macos/build/bundle/Minecraft D Edition.app/Contents/MacOS/Minecraft D Edition'
+          executable='distribution/macos/build/bundle/Minecraft D Edition.app/Contents/MacOS/Minecraft D Edition'
+          otool -L "$executable"
           eos='distribution/macos/build/bundle/Minecraft D Edition.app/Contents/Frameworks/libEOSSDK-Mac-Shipping.dylib'
+          discord='distribution/macos/build/bundle/Minecraft D Edition.app/Contents/Frameworks/libdiscord_partner_sdk.dylib'
           test -f "$eos"
+          test -f "$discord"
           lipo -info "$eos"
+          lipo -info "$discord"
+          otool -L "$executable" | grep -F '@rpath/libdiscord_partner_sdk.dylib'
           codesign --verify --deep --strict --verbose=2 \
             'distribution/macos/build/bundle/Minecraft D Edition.app'
 

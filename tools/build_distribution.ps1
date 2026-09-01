@@ -47,6 +47,7 @@ $requiredFiles = @(
     'Minecraft D Edition.exe',
     'Minecraft D Edition Launcher.exe',
     'EOSSDK-Win64-Shipping.dll',
+    'discord_partner_sdk.dll',
     'SDL3.dll'
 )
 foreach ($relative in $requiredFiles) {
@@ -90,6 +91,11 @@ catch {
 # managed by the updater, while eos.local.json remains an optional local override.
 Copy-Item -LiteralPath $eosLocalConfig `
     -Destination (Join-Path $runtime 'data\eos.client.json')
+
+New-Item -ItemType Directory -Path (Join-Path $runtime 'licenses') | Out-Null
+Copy-Item -LiteralPath (Join-Path $ProjectRoot `
+    'third_party\discord\License-Notices.txt') `
+    -Destination (Join-Path $runtime 'licenses\Discord-Social-SDK-Notices.txt')
 
 # Deflate output differs between Windows PowerShell's .NET Framework and modern
 # .NET. Always use PowerShell 7 so unchanged content keeps the same shard hash.

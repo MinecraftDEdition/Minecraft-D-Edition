@@ -50,6 +50,9 @@ access. Development and releases use the separate Admin checkout at
 - `website/account/` contains the Cloudflare Worker account site and protected
   profile API; Auth0 handles credentials while D1 stores usernames, sessions,
   and validated player skins.
+- `third_party/discord/` documents the optional Discord Social SDK dependency;
+  Windows and macOS releases publish menu, singleplayer, and named multiplayer
+  activity without requiring a Discord login inside the game.
 
 ## Renderer selection
 

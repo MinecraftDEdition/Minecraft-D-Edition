@@ -31,6 +31,8 @@ third_party/eos/EOS-SDK-*/
 EOSSDK-Win64-Shipping.dll
 SDL3.dll
 native/eos_abi_bridge.obj
+native/discord_abi_bridge.obj
+discord_partner_sdk.dll
 data/eos.local.json
 data/eos.client.json
 data/eos-cache/

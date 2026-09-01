@@ -40,9 +40,8 @@ a { color: #a8db8b; }
 }
 .brand { display: flex; align-items: center; gap: 12px; color: var(--text); text-decoration: none; font-weight: 800; }
 .brand-mark {
-  width: 39px; height: 39px; display: grid; place-items: center;
-  background: linear-gradient(#79bd51 50%, #4f8c35 50%);
-  border: 3px solid #111; box-shadow: 3px 3px 0 #000; font: 900 24px/1 monospace;
+  width: 44px; height: 44px; display: block; object-fit: cover;
+  border: 3px solid #111; box-shadow: 3px 3px 0 #000; image-rendering: pixelated;
 }
 .back-link { color: var(--muted); text-decoration: none; font-weight: 700; }
 .back-link:hover { color: white; }
