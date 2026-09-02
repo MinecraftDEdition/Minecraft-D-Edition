@@ -12,7 +12,7 @@ import minecraftd.client.network.multiplayer_client : MultiplayerClient;
 import minecraftd.client.particle.particle_system : ParticleSystem, ParticleTextureSet;
 import minecraftd.client.audio.sound_manager : SoundManager;
 import minecraftd.client.render.block_renderer : BlockRenderer, BlockTextureSet,
-    WaterGeometry;
+    FireGeometry, WaterGeometry;
 import minecraftd.client.render.camera : Camera;
 import minecraftd.client.render.chat_renderer : ChatRenderer;
 import minecraftd.client.render.font_renderer : FontRenderer;
@@ -53,9 +53,9 @@ version (Windows)
 import minecraftd.platform.desktop.vulkan.device : VulkanDevice;
 import minecraftd.platform.clock : monotonicSeconds;
 import minecraftd.world.block : BlockId, bareHandDestroyProgress,
-    isNetherPortal, isWater, isWaterSource;
+    isFire, isNetherPortal, isWater, isWaterSource;
 import minecraftd.world.world : BlockHit, World;
-import minecraftd.world.chunk : ChunkCoordinate, chunkCoordinate;
+import minecraftd.world.chunk : Chunk, ChunkCoordinate, chunkCoordinate;
 import minecraftd.world.world_settings : GameMode;
 import minecraftd.world.world_settings : DimensionId;
 
@@ -78,14 +78,23 @@ private struct RenderChunkSection
     Vertex[][uint] blocks;
     Vertex[] portals;
     WaterGeometry water;
+    FireGeometry fire;
     ResidentRange[] opaqueRanges;
     ResidentRange glassRange;
     ResidentRange portalRange;
     ResidentRange waterUndersideRange;
     ResidentRange waterSurfaceRange;
     ResidentRange waterWallsRange;
+    ResidentRange fireLayer0Range;
+    ResidentRange fireLayer1Range;
     int minimumY;
     int maximumY;
+}
+
+private struct DirtySection
+{
+    ChunkCoordinate coordinate;
+    int verticalBand;
 }
 
 private struct RenderChunkGeometry
@@ -142,6 +151,9 @@ final class GameRenderer
     private uint[] portalFrames;
     private uint[] waterStillFrames;
     private uint[] waterFlowFrames;
+    private uint[] fire0Frames;
+    private uint[] fire1Frames;
+    private bool[DirtySection] dirtyFluidSections;
     private Vertex[][uint][ItemId] itemMeshes;
     private BlockTextureSet blockTextures;
     private bool meshSmoothLighting=true;
@@ -182,6 +194,7 @@ final class GameRenderer
     private int netherAmbienceTicks;
     private int underwaterAmbienceTicks;
     private uint waterDisplayTicks;
+    private uint fireDisplayTicks;
     private float lastMeshMilliseconds;
     private float lastAssemblyMilliseconds;
     private float lastGraphicsMilliseconds;
@@ -222,6 +235,8 @@ final class GameRenderer
         portalFrames = loadAnimatedFrames("textures/block/nether_portal.png");
         waterStillFrames=loadAnimatedFrames("textures/block/water_still.png");
         waterFlowFrames=loadAnimatedFrames("textures/block/water_flow.png");
+        fire0Frames=loadAnimatedFrames("textures/block/fire_0.png");
+        fire1Frames=loadAnimatedFrames("textures/block/fire_1.png");
         const flintImage=images.loadPng(resources.resolveAsset("minecraft",
             "textures/item/flint_and_steel.png"));
         const flintTexture=graphics.uploadTexture(flintImage);
@@ -336,7 +351,8 @@ final class GameRenderer
             load("textures/gui/sprites/tooltip/background.png"),
             load("textures/gui/sprites/tooltip/frame.png"),
             load("textures/gui/sprites/container/slot_highlight_back.png"),
-            load("textures/gui/sprites/container/slot_highlight_front.png"));
+            load("textures/gui/sprites/container/slot_highlight_front.png"),
+            loadFrom("minecraft_d","textures/gui/sprites/virtual_cursor.png"));
         chatRenderer = new ChatRenderer(asciiImage, asciiTexture.descriptorIndex,
             solidTexture.descriptorIndex);
         itemMeshes[ItemId.grassBlock] = blocks.buildItem(BlockId.grass, blockTextures);
@@ -389,6 +405,15 @@ final class GameRenderer
             bubblePopTextures[index]=load("textures/particle/bubble_pop_"
                 ~to!string(index)~".png");
         }
+        uint[8] smokeTextures;
+        foreach(index;0..8)
+        {
+            import std.conv:to;
+            // FireBlock uses the normal/large-smoke sheet. big_smoke_*
+            // belongs to campfire particles.
+            smokeTextures[index]=load("textures/particle/generic_"
+                ~to!string(7-index)~".png");
+        }
         particles = new ParticleSystem(world, ParticleTextureSet(
             blockTextures.grassSide, blockTextures.dirt, blockTextures.stone,
             blockTextures.obsidian, blockTextures.netherrack,
@@ -403,7 +428,7 @@ final class GameRenderer
             blockTextures.glass,
             load("textures/particle/critical_hit.png"),poofTextures,
             portalTextures,splashTextures,load("textures/particle/bubble.png"),
-            bubblePopTextures));
+            bubblePopTextures,smokeTextures));
         sounds = new SoundManager(resources);
         applyOptions();
     }
@@ -703,6 +728,7 @@ final class GameRenderer
         previousPortalProgress = player.portalProgress;
         tickPortalBlocks(player);
         tickWaterBlocks(player);
+        tickFireBlocks(player);
         if (player.dimension == DimensionId.nether)
         {
             if (netherAmbienceTicks-- <= 0)
@@ -772,8 +798,10 @@ final class GameRenderer
             localDeathPoofed=false;
         if (player.hurtSoundDue)
         {
-            sounds.playPlayerHurt();
+            if(player.fireHurtSoundDue)sounds.playFireHurt();
+            else sounds.playPlayerHurt();
             player.hurtSoundDue = false;
+            player.fireHurtSoundDue = false;
         }
         if (player.fallSoundDue != 0)
         {
@@ -858,19 +886,28 @@ final class GameRenderer
     {
         const center = Vec3(x + 0.5f, y + 0.5f, z + 0.5f);
         if (newBlock == BlockId.air && oldBlock != BlockId.air
-            && !isNetherPortal(oldBlock) && !isWater(oldBlock))
+            && !isNetherPortal(oldBlock) && !isWater(oldBlock)
+            && !isFire(oldBlock))
         {
-            // The authoritative world is already empty, but a tall chunk's
-            // replacement mesh is intentionally assembled over several
-            // frames. Remove the old block's cached quads now so its break
-            // particles can never appear while the cube is still visible.
-            discardCachedBlockFaces(x,y,z,oldBlock);
+            // Patch the affected 16-block section immediately. Removing only
+            // the broken cube's old faces exposed an unmeshed cavity until the
+            // incremental chunk rebuild reached this Y level, briefly letting
+            // the camera see through the ground.
+            refreshCachedBlockNeighborhood(x,y,z);
             sounds.playBreak(oldBlock, center);
             particles.spawnBlockBreak(x, y, z, oldBlock);
         }
         else if (newBlock != BlockId.air && !isNetherPortal(newBlock)
-            && !isWater(newBlock))
+            && !isWater(newBlock)&&!isFire(newBlock))
+        {
+            refreshCachedBlockNeighborhood(x,y,z);
             sounds.playPlace(newBlock,center);
+        }
+        if(isWater(oldBlock)||isWater(newBlock)||isFire(oldBlock)
+            ||isFire(newBlock))
+            queueFluidRemesh(x,y,z);
+        if(isFire(newBlock)&&!isFire(oldBlock))sounds.playFireIgnite(center);
+        if(isFire(oldBlock)&&!isFire(newBlock))sounds.playFireExtinguish(center);
         // Render coalesces all changes received this tick into one revision
         // rebuild, avoiding a full remesh for every cell in a flowing front.
         if (mining && miningHit.x == x && miningHit.y == y && miningHit.z == z)
@@ -897,6 +934,7 @@ final class GameRenderer
             netherAmbienceTicks = 3600;
         }
         clearChunkMeshes();
+        dirtyFluidSections.clear();
         meshJobActive=false;
         cancelMining();
     }
@@ -913,13 +951,15 @@ final class GameRenderer
         const DeathScreenState deathState = null, int deathMouseX = 0,
         int deathMouseY = 0,const InventoryMenuState inventoryState=null,
         int inventoryMouseX=0,int inventoryMouseY=0,
-        bool debugVisible=false,float debugFps=0.0f)
+        bool controllerInventoryCursor=false,bool debugVisible=false,
+        float debugFps=0.0f)
     {
         const renderStarted=monotonicSeconds();
         const frameSeconds = elapsedSeconds >= previousElapsedSeconds
             ? elapsedSeconds - previousElapsedSeconds : 0.0f;
         previousElapsedSeconds = elapsedSeconds;
         multiplayer.advanceDroppedItems(frameSeconds > 0.1f ? 0.1f : frameSeconds);
+        flushFluidRemeshes();
         // Only one 16-block-high chunk section is meshed per presented frame.
         // This keeps procedural terrain work out of a single long frame.
         syncChunkMeshes(player.position,player.yaw,1);
@@ -1037,6 +1077,11 @@ final class GameRenderer
         const flowTexture=waterFlowFrames.length
             ?waterFlowFrames[waterFrame%waterFlowFrames.length]
             :blockTextures.waterFlow;
+        const fireFrame=cast(size_t)(elapsedSeconds*20.0f);
+        const fire0Texture=fire0Frames.length
+            ?fire0Frames[fireFrame%fire0Frames.length]:blockTextures.dirt;
+        const fire1Texture=fire1Frames.length
+            ?fire1Frames[fireFrame%fire1Frames.length]:fire0Texture;
 
         const targeted=world.rayCast(player.eyePosition(partialTick),
             forwardFromYawPitch(player.yaw,player.pitch),5.0f);
@@ -1124,10 +1169,10 @@ final class GameRenderer
             auto geometry = remote.gameMode == GameMode.spectator
                 ? players.buildSpectatorHead(remote.interpolatedPosition(partialTick),
                     remote.interpolatedBodyYaw(partialTick)+180.0f,
-                    remote.headYawOffset(partialTick),remote.pitch)
+                    remote.headYawOffset(partialTick),remote.interpolatedPitch())
                 : players.buildSteve(remote.interpolatedPosition(partialTick),
                     remote.interpolatedBodyYaw(partialTick) + 180.0f,
-                    remote.headYawOffset(partialTick), remote.pitch,
+                    remote.headYawOffset(partialTick), remote.interpolatedPitch(),
                     remote.interpolatedWalkAnimationPosition(partialTick),
                     remote.interpolatedWalkAnimationSpeed(partialTick),
                     remote.interpolatedAttackProgress(partialTick), remote.crouching,
@@ -1151,6 +1196,9 @@ final class GameRenderer
                 remote.gameMode == GameMode.spectator
                     ? DrawLayer.entityShadow : DrawLayer.worldDoubleSided,
                 terrainFog);
+            if(remote.fireTicks>0&&remote.gameMode!=GameMode.spectator)
+                appendEntityFire(remote.interpolatedPosition(partialTick),
+                    remote.height(),fire1Texture,viewProjection,terrainFog);
             if(remote.gameMode!=GameMode.spectator&&!remoteHeld.empty())
                 appendHeldBlock(remoteHeld,remote.interpolatedPosition(partialTick),
                     remote.interpolatedBodyYaw(partialTick)+180.0f,
@@ -1187,6 +1235,9 @@ final class GameRenderer
                     player.gameMode == GameMode.spectator
                         ? DrawLayer.entityShadow : DrawLayer.worldDoubleSided,
                     terrainFog);
+            if(player.fireTicks>0&&player.gameMode!=GameMode.spectator)
+                appendEntityFire(localPosition,player.height(),fire1Texture,
+                    viewProjection,terrainFog);
             if(player.gameMode!=GameMode.spectator&&!displayedMainHand.empty()
                 &&player.health>0)
                 appendHeldBlock(displayedMainHand,localPosition,modelBodyYaw,
@@ -1197,11 +1248,13 @@ final class GameRenderer
                     elapsedSeconds*20.0f,accountSkinModel=="slim",
                     viewProjection,terrainFog);
             appendTranslucentWorld(camera,portalTexture,stillTexture,flowTexture,
+                fire0Texture,fire1Texture,
                 viewProjection,terrainFog);
         }
         else
         {
             appendTranslucentWorld(camera,portalTexture,stillTexture,flowTexture,
+                fire0Texture,fire1Texture,
                 viewProjection,terrainFog);
             const equipProgress = 1.0f - lerp(partialTick,
                 previousMainHandHeight, mainHandHeight);
@@ -1303,6 +1356,8 @@ final class GameRenderer
         {
             if (portalAmount > 0.0f && perspective == CameraPerspective.firstPerson)
                 appendPortalOverlay(portalAmount);
+            if(player.fireTicks>0&&perspective==CameraPerspective.firstPerson)
+                appendFireOverlay(fire1Texture);
             hud.appendSurvivalHud(frame, width, height, player, hudTextures,
                 blockTextures, hudFont, fontTexture, partialTick);
             hud.appendSelectedItemName(frame,width,height,lastItemHighlight,
@@ -1332,7 +1387,7 @@ final class GameRenderer
                 inventoryMouseY,player.inventory,inventoryTextures,blockTextures,
                 hud,hudFont,fontTexture,partialTick,players,player,
                 accountSkin.descriptorIndex,elapsedSeconds*20.0f,
-                accountSkinModel=="slim");
+                accountSkinModel=="slim",controllerInventoryCursor);
         lastAssemblyMilliseconds=cast(float)((monotonicSeconds()
             -meshingFinished)*1000.0);
         if(debugVisible)
@@ -1365,6 +1420,30 @@ private:
         if(seen)
             sounds.randomFlowingWaterAmbient(Vec3(chosenX+0.5f,chosenY+0.5f,
                 chosenZ+0.5f));
+    }
+
+    void tickFireBlocks(const LocalPlayer player)
+    {
+        ++fireDisplayTicks;
+        const centerX=cast(int)floorf(player.position.x);
+        const centerY=cast(int)floorf(player.position.y);
+        const centerZ=cast(int)floorf(player.position.z);
+        int chosenX,chosenY,chosenZ;
+        uint seen;
+        foreach(y;centerY-4..centerY+5)
+        foreach(z;centerZ-8..centerZ+9)
+        foreach(x;centerX-8..centerX+9)
+        {
+            if(!isFire(world.getBlock(x,y,z)))continue;
+            ++seen;
+            if(cast(uint)(visualRandom()*seen)==0)
+            {chosenX=x;chosenY=y;chosenZ=z;}
+        }
+        if(!seen)return;
+        const position=Vec3(chosenX+0.5f,chosenY+0.5f,chosenZ+0.5f);
+        sounds.randomFireAmbient(position);
+        if(fireDisplayTicks%8==0)
+            particles.spawnFireSmoke(chosenX,chosenY,chosenZ);
     }
 
     void tickPortalBlocks(const LocalPlayer player)
@@ -1442,8 +1521,45 @@ private:
             DrawLayer.overlay);
     }
 
+    void appendFireOverlay(uint texture)
+    {
+        Vertex[] output;
+        const color=Color(1,1,1,0.85f);
+        // Two low camera-space sheets reproduce Java's animated first-person
+        // fire obstruction while leaving the crosshair and HUD readable.
+        appendQuad(output,Vec3(-1.15f,-1.05f,0),Vec3(0.15f,-1.05f,0),
+            Vec3(0.05f,0.48f,0),Vec3(-1.05f,0.30f,0),Vec2(0,1),Vec2(1,1),
+            Vec2(1,0),Vec2(0,0),color,color,color,color);
+        appendQuad(output,Vec3(-0.15f,-1.05f,0),Vec3(1.15f,-1.05f,0),
+            Vec3(1.05f,0.30f,0),Vec3(-0.05f,0.48f,0),Vec2(0,1),Vec2(1,1),
+            Vec2(1,0),Vec2(0,0),color,color,color,color);
+        frame.append(output,texture,Mat4.identity(),DrawLayer.overlay);
+    }
+
+    void appendEntityFire(Vec3 feet,float entityHeight,uint texture,
+        Mat4 viewProjection,FogSettings fog)
+    {
+        Vertex[] output;
+        const color=Color(1,1,1,0.9f);
+        const half=0.42f;
+        appendQuad(output,Vec3(feet.x-half,feet.y,feet.z),
+            Vec3(feet.x+half,feet.y,feet.z),
+            Vec3(feet.x+half,feet.y+entityHeight,feet.z),
+            Vec3(feet.x-half,feet.y+entityHeight,feet.z),
+            Vec2(0,1),Vec2(1,1),Vec2(1,0),Vec2(0,0),
+            color,color,color,color);
+        appendQuad(output,Vec3(feet.x,feet.y,feet.z+half),
+            Vec3(feet.x,feet.y,feet.z-half),
+            Vec3(feet.x,feet.y+entityHeight,feet.z-half),
+            Vec3(feet.x,feet.y+entityHeight,feet.z+half),
+            Vec2(0,1),Vec2(1,1),Vec2(1,0),Vec2(0,0),
+            color,color,color,color);
+        frame.append(output,texture,viewProjection,DrawLayer.translucent,fog);
+    }
+
     void appendTranslucentWorld(const Camera camera,uint portalTexture,
-        uint stillTexture,uint flowTexture,Mat4 viewProjection,FogSettings fog)
+        uint stillTexture,uint flowTexture,uint fire0Texture,uint fire1Texture,
+        Mat4 viewProjection,FogSettings fog)
     {
         // Chunk order is back-to-front for alpha blending; section order is
         // reversed as well. All ranges point at the same retained chunk buffer.
@@ -1468,6 +1584,10 @@ private:
                     stillTexture,viewProjection,DrawLayer.translucent,fog);
                 appendResidentRange(geometry.mesh,section.waterWallsRange,
                     flowTexture,viewProjection,DrawLayer.translucent,fog);
+                appendResidentRange(geometry.mesh,section.fireLayer0Range,
+                    fire0Texture,viewProjection,DrawLayer.translucent,fog);
+                appendResidentRange(geometry.mesh,section.fireLayer1Range,
+                    fire1Texture,viewProjection,DrawLayer.translucent,fog);
             }
         }
     }
@@ -1671,6 +1791,8 @@ private:
                 meshJobCoordinate,meshJobNextY,sectionMaximum);
             section.water=blocks.buildWaterChunkRange(meshJobCoordinate,
                 meshJobNextY,sectionMaximum);
+            section.fire=blocks.buildFireChunkRange(meshJobCoordinate,
+                meshJobNextY,sectionMaximum);
             meshJobGeometry.sections~=section;
             meshJobNextY=sectionMaximum+1;
             if(meshJobNextY>meshJobMaximumY)
@@ -1696,7 +1818,8 @@ private:
         {
             foreach(unused,vertices;section.blocks)vertexCount+=vertices.length;
             vertexCount+=section.portals.length+section.water.underside.length
-                +section.water.surface.length+section.water.walls.length;
+                +section.water.surface.length+section.water.walls.length
+                +section.fire.layer0.length+section.fire.layer1.length;
         }
         Vertex[] packed;
         packed.reserve(vertexCount);
@@ -1719,6 +1842,10 @@ private:
                 section.water.surface,blockTextures.waterStill);
             appendPackedRange(packed,section.waterWallsRange,
                 section.water.walls,blockTextures.waterFlow);
+            appendPackedRange(packed,section.fireLayer0Range,
+                section.fire.layer0,blockTextures.dirt);
+            appendPackedRange(packed,section.fireLayer1Range,
+                section.fire.layer1,blockTextures.dirt);
         }
         const replacement=graphics.uploadStaticMesh(packed);
         const previous=geometry.mesh;
@@ -1782,6 +1909,92 @@ private:
             }
         }
         if(changed)finalizeChunkGeometry(*cached);
+    }
+
+    void refreshCachedBlockNeighborhood(int x,int y,int z)
+    {
+        const center=ChunkCoordinate(chunkCoordinate(x),chunkCoordinate(z));
+        ChunkCoordinate[] affected=[center];
+        const localX=x-center.x*Chunk.width;
+        const localZ=z-center.z*Chunk.depth;
+        if(localX==0)affected~=ChunkCoordinate(center.x-1,center.z);
+        else if(localX==Chunk.width-1)
+            affected~=ChunkCoordinate(center.x+1,center.z);
+        if(localZ==0)affected~=ChunkCoordinate(center.x,center.z-1);
+        else if(localZ==Chunk.depth-1)
+            affected~=ChunkCoordinate(center.x,center.z+1);
+
+        foreach(coordinate;affected)
+        {
+            auto cached=coordinate in chunkMeshes;
+            if(cached is null)continue;
+            bool rebuilt;
+            foreach(ref section;cached.sections)
+            {
+                // Include the section on either side of a vertical boundary;
+                // one owns the removed cube and the other owns the newly
+                // exposed neighbor face.
+                if(y<section.minimumY-1||y>section.maximumY+1)continue;
+                section.blocks=blocks.buildChunkRange(blockTextures,coordinate,
+                    section.minimumY,section.maximumY);
+                section.portals=blocks.buildPortalsChunkRange(coordinate,
+                    section.minimumY,section.maximumY);
+                section.water=blocks.buildWaterChunkRange(coordinate,
+                    section.minimumY,section.maximumY);
+                section.fire=blocks.buildFireChunkRange(coordinate,
+                    section.minimumY,section.maximumY);
+                rebuilt=true;
+            }
+            if(rebuilt)finalizeChunkGeometry(*cached);
+        }
+    }
+
+
+    void queueFluidRemesh(int x,int y,int z)
+    {
+        const center=ChunkCoordinate(chunkCoordinate(x),chunkCoordinate(z));
+        ChunkCoordinate[] affected=[center];
+        const localX=x-center.x*Chunk.width;
+        const localZ=z-center.z*Chunk.depth;
+        if(localX==0)affected~=ChunkCoordinate(center.x-1,center.z);
+        else if(localX==Chunk.width-1)affected~=ChunkCoordinate(center.x+1,center.z);
+        if(localZ==0)affected~=ChunkCoordinate(center.x,center.z-1);
+        else if(localZ==Chunk.depth-1)affected~=ChunkCoordinate(center.x,center.z+1);
+        foreach(coordinate;affected)
+        foreach(sampleY;y-1..y+2)
+            dirtyFluidSections[DirtySection(coordinate,sampleY>>4)]=true;
+    }
+
+    void flushFluidRemeshes()
+    {
+        if(!dirtyFluidSections.length)return;
+        bool[ChunkCoordinate] changedChunks;
+        foreach(dirty,present;dirtyFluidSections)
+        {
+            auto cached=dirty.coordinate in chunkMeshes;
+            if(cached is null)continue;
+            foreach(ref section;cached.sections)
+            {
+                if((section.minimumY>>4)!=dirty.verticalBand
+                    &&(section.maximumY>>4)!=dirty.verticalBand)continue;
+                section.blocks=blocks.buildChunkRange(blockTextures,
+                    dirty.coordinate,section.minimumY,section.maximumY);
+                section.portals=blocks.buildPortalsChunkRange(dirty.coordinate,
+                    section.minimumY,section.maximumY);
+                section.water=blocks.buildWaterChunkRange(dirty.coordinate,
+                    section.minimumY,section.maximumY);
+                section.fire=blocks.buildFireChunkRange(dirty.coordinate,
+                    section.minimumY,section.maximumY);
+                changedChunks[dirty.coordinate]=true;
+            }
+        }
+        dirtyFluidSections.clear();
+        foreach(coordinate,present;changedChunks)
+            if(auto cached=coordinate in chunkMeshes)
+            {
+                cached.revision=world.chunkRevision(coordinate.x,coordinate.z);
+                finalizeChunkGeometry(*cached);
+            }
     }
 
     static void removeBlockFaceQuads(ref Vertex[] geometry,int x,int y,int z)

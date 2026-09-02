@@ -76,13 +76,15 @@ try {
         -Wait -PassThru
     if ($process.ExitCode -ne 0) { throw "Launcher exited with $($process.ExitCode)" }
 
-    foreach ($attempt in 1..150) {
+    foreach ($attempt in 1..600) {
         $installedManifest = Join-Path $oldRuntime '.mde-installed-manifest.txt'
+        $verifiedState = Join-Path $oldRuntime '.mde-verified-files-v1.txt'
         if ((Test-Path -LiteralPath $installedManifest) -and
-            (Get-Content -Raw $installedManifest) -match "version`tsmoke-new") {
+            (Get-Content -Raw $installedManifest) -match "version`tsmoke-new" -and
+            (Test-Path -LiteralPath $verifiedState)) {
             break
         }
-        if ($attempt -eq 150) { throw 'Deferred launcher update did not complete.' }
+        if ($attempt -eq 600) { throw 'Deferred launcher update did not complete.' }
         Start-Sleep -Milliseconds 100
     }
 
@@ -117,13 +119,29 @@ try {
 
     # A matching version must still repair files that disappeared or were
     # corrupted after installation, without needing the original Setup EXE.
+    # Normal launches use the verified cache immediately and refresh its full
+    # SHA-256 audit in the background once per day; age it here to exercise the
+    # synchronous repair path deterministically.
     Remove-Item -LiteralPath (Join-Path $oldRuntime 'assets\added.txt')
     Write-Utf8 (Join-Path $oldRuntime 'assets\changed.txt') 'corrupted'
+    [IO.File]::SetLastWriteTimeUtc((Join-Path $oldRuntime `
+        '.mde-verified-files-v1.txt'), [DateTime]::UtcNow.AddDays(-2))
     $repair = Start-Process -FilePath `
         (Join-Path $oldRuntime 'Minecraft D Edition Launcher.exe') `
         -WorkingDirectory $oldRuntime -ArgumentList '--updater-check-only' `
         -Wait -PassThru
     if ($repair.ExitCode -ne 0) { throw "Repair check exited with $($repair.ExitCode)" }
+    $repairMarker = Join-Path $oldRuntime '.mde-verification-required'
+    foreach ($attempt in 1..100) {
+        if (Test-Path -LiteralPath $repairMarker) { break }
+        if ($attempt -eq 100) { throw 'Background integrity audit did not request repair.' }
+        Start-Sleep -Milliseconds 50
+    }
+    $repair = Start-Process -FilePath `
+        (Join-Path $oldRuntime 'Minecraft D Edition Launcher.exe') `
+        -WorkingDirectory $oldRuntime -ArgumentList '--updater-check-only' `
+        -Wait -PassThru
+    if ($repair.ExitCode -ne 0) { throw "Repair pass exited with $($repair.ExitCode)" }
     if ((Get-Content -Raw (Join-Path $oldRuntime 'assets\changed.txt')) -ne 'new' `
         -or (Get-Content -Raw (Join-Path $oldRuntime 'assets\added.txt')) -ne 'added') {
         throw 'A same-version integrity repair did not restore managed files.'

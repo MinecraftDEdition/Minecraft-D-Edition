@@ -12,9 +12,10 @@ not embed a copy of the game. Start Menu and optional desktop shortcuts open
 the launcher, which obtains the real runtime files from GitHub Releases. It:
 
 1. downloads the tiny `mde-update-pointer-v1.txt` release asset;
-2. launches immediately when its installed version matches;
-3. downloads and verifies the full manifest only for a new version;
-4. compares the old and new SHA-256 file lists;
+2. launches immediately from its verified-file cache when the installed
+   version matches;
+3. refreshes full SHA-256 integrity in a hidden, low-priority daily audit;
+4. compares cached size, timestamp, and SHA-256 records for a new version;
 5. downloads only the content-addressed ZIP shards containing changed files;
 6. stages and verifies every changed file before modifying the installation;
 7. keeps rollback copies while applying the update; and
@@ -80,8 +81,10 @@ Run both distribution smoke tests before publishing:
 ```
 
 The updater test serves two synthetic releases locally and verifies changed,
-added, removed, unchanged, and save files. The installer test performs a full
-silent install, checks the installed launcher, then uninstalls it.
+added, removed, unchanged, and save files, deferred launcher replacement, and
+same-version repair after a background integrity audit. The installer test
+performs a full silent install, checks the installed launcher, then uninstalls
+it.
 
 ## Publish to the Test release
 

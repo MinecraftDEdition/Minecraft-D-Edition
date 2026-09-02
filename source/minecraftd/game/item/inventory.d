@@ -411,6 +411,7 @@ ItemId blockItem(BlockId block)
     final switch (block)
     {
         case BlockId.air: return ItemId.none;
+        case BlockId.fire: return ItemId.none;
         case BlockId.grass: return ItemId.grassBlock;
         case BlockId.dirt: return ItemId.dirt;
         case BlockId.stone: return ItemId.stone;
@@ -493,7 +494,7 @@ ItemId bareHandDrop(BlockId block)
         case BlockId.air, BlockId.stone, BlockId.obsidian,
              BlockId.bricks, BlockId.cobblestone, BlockId.glass,
              BlockId.netherPortalX, BlockId.netherPortalZ,
-             BlockId.bedrock: return ItemId.none;
+             BlockId.bedrock, BlockId.fire: return ItemId.none;
         case BlockId.waterSource, BlockId.waterFlow1, BlockId.waterFlow2,
              BlockId.waterFlow3, BlockId.waterFlow4, BlockId.waterFlow5,
              BlockId.waterFlow6, BlockId.waterFlow7, BlockId.waterFalling:

@@ -175,6 +175,32 @@ final class SoundManager
             0.9f + randomFloat() * 0.2f, playerVolume);
     }
 
+    void playFireHurt()
+    {
+        play("entity/player/hurt/fire_hurt"~randomChoice(3)~".ogg",1.0f,
+            0.9f+randomFloat()*0.2f,playerVolume);
+    }
+
+    void playFireIgnite(Vec3 position)
+    {
+        playAt("fire/ignite.ogg",position,1.0f,0.8f+randomFloat()*0.4f,
+            soundVolume,16.0f);
+    }
+
+    void playFireExtinguish(Vec3 position)
+    {
+        // block.fire.extinguish resolves to Minecraft's short fizz sample.
+        playAt("random/fizz.ogg",position,1.0f,
+            0.8f+randomFloat()*0.4f,soundVolume,16.0f);
+    }
+
+    void randomFireAmbient(Vec3 position)
+    {
+        if(randomFloat()<1.0f/24.0f)
+            playAt("fire/fire.ogg",position,1.0f,
+                0.8f+randomFloat()*0.4f,soundVolume,16.0f);
+    }
+
 private:
     string blockBreakPath(string family)
     {

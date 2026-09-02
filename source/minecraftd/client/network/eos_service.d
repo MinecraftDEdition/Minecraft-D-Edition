@@ -11,6 +11,8 @@ import std.json : JSONType, JSONValue, parseJSON;
 import std.path : buildPath;
 import std.socket : InternetAddress, SocketOSException, SocketShutdown, TcpSocket;
 import std.string : fromStringz, toStringz;
+import minecraftd.network.game_protocol : GamePacketType, decodeFrameLength,
+    maximumGamePacketBytes;
 import minecraftd.platform.paths : platformPaths;
 
 private extern(C) nothrow
@@ -247,13 +249,19 @@ private:
     }
 }
 
+private struct HostOutgoing
+{
+    ubyte channel;
+    ubyte[] data;
+}
+
 private final class HostPeer
 {
     string remoteUserId;
     TcpSocket socket;
     Thread receiveThread;
     Mutex outgoingMutex;
-    ubyte[][] outgoing;
+    HostOutgoing[] outgoing;
     shared bool running;
 
     this(string remoteUserId, ushort localPort)
@@ -283,7 +291,7 @@ private final class HostPeer
             atomicStore(running, false);
     }
 
-    ubyte[][] takeOutgoing()
+    HostOutgoing[] takeOutgoing()
     {
         synchronized (outgoingMutex)
         {
@@ -316,14 +324,39 @@ private:
     void receiveLoop()
     {
         ubyte[EosService.streamChunkBytes] buffer;
+        ubyte[] stream;
         while (atomicLoad(running))
         {
             try
             {
                 const amount = socket.receive(buffer[]);
                 if (amount <= 0) break;
-                synchronized (outgoingMutex)
-                    outgoing ~= buffer[0 .. amount].dup;
+                stream~=buffer[0..amount];
+                while(stream.length>=4)
+                {
+                    const bodyLength=decodeFrameLength(stream[0..4]);
+                    if(bodyLength==0||bodyLength>maximumGamePacketBytes)
+                    {
+                        atomicStore(running,false);
+                        return;
+                    }
+                    const frameLength=cast(size_t)bodyLength+4;
+                    if(stream.length<frameLength)break;
+                    const channel=stream[4]==cast(ubyte)GamePacketType.chunkData
+                        ?cast(ubyte)1:cast(ubyte)0;
+                    size_t offset;
+                    synchronized(outgoingMutex)
+                    while(offset<frameLength)
+                    {
+                        const remaining=frameLength-offset;
+                        const count=remaining<EosService.streamChunkBytes
+                            ?remaining:EosService.streamChunkBytes;
+                        outgoing~=HostOutgoing(channel,
+                            stream[offset..offset+count].dup);
+                        offset+=count;
+                    }
+                    stream=stream[frameLength..$];
+                }
             }
             catch (SocketOSException)
                 break;
@@ -401,7 +434,7 @@ final class EosHostBridge
         foreach (remote, peer; peers)
         {
             foreach (chunk; peer.takeOutgoing())
-                if (!eos.send(remote, socketName, 0, chunk))
+                if (!eos.send(remote, socketName, chunk.channel, chunk.data))
                     atomicStore(peer.running, false);
             if (!atomicLoad(peer.running))
                 remove ~= remote;

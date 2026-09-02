@@ -15,12 +15,14 @@ the EOS Windows DLL, SDL3 for the shared controller layer, and either the
 DirectX 12 or Vulkan renderer selected by the player.
 
 The installed launcher is the updater; the original Setup executable is not
-needed after installation. On every launch it verifies the size and SHA-256
-of each managed file against the signed release manifest, even when the
-installed version already matches the current release. The published pointer,
-manifest, shards, and every extracted file are SHA-256 verified. Only missing
-or changed managed files are applied. Replacements are staged, verified,
-installed atomically, and rolled back if any part of the update fails.
+needed after installation. A matching release starts immediately from a local
+verified-file cache. Once a day, a hidden low-priority helper audits every
+managed file with SHA-256; a failed audit leaves a repair marker so the next
+launch downloads only missing or changed files. New versions use cached size,
+timestamp, and hash records to avoid re-reading unchanged assets. The published
+pointer, manifest, shards, and every extracted file are SHA-256 verified.
+Replacements are staged, installed atomically, and rolled back if any part of
+the update fails.
 
 Launcher updates use `Minecraft D Edition Launcher.update.exe` as a managed
 sidecar. This lets both older and current installations replace the updater

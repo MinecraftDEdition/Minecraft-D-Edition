@@ -30,7 +30,8 @@ import minecraftd.network.game_protocol : DroppedItemState, GamePacketType,
     gameProtocolVersion, maximumGamePacketBytes;
 import minecraftd.server.host_commands : BanList, HostCommandKind,
     parseHostCommand;
-import minecraftd.world.block : BlockId, bareHandDestroyProgress;
+import minecraftd.world.block : BlockId, bareHandDestroyProgress, isFire,
+    isWater;
 import minecraftd.world.chunk : Chunk, ChunkCoordinate, chunkCoordinate;
 import minecraftd.world.world : GenerationProgress, World;
 import minecraftd.world.nether_portal : PortalAxis, PortalRectangle,
@@ -401,6 +402,9 @@ private:
                 simulateInput(serverPlayer, input);
         }
 
+        foreach(serverPlayer;players)
+            tickPlayerFire(serverPlayer);
+
         tickDroppedItems();
         if (serverTick % 5 == 0)
         {
@@ -427,6 +431,14 @@ private:
                     change.newBlock,0,DimensionId.overworld);
             foreach(change;netherWorld.tickWaterAround(netherCenters,
                 netherSimulation))
+                broadcastBlockChange(change.x,change.y,change.z,change.oldBlock,
+                    change.newBlock,0,DimensionId.nether);
+            foreach(change;world.tickFireAround(overworldCenters,
+                overworldSimulation,serverTick))
+                broadcastBlockChange(change.x,change.y,change.z,change.oldBlock,
+                    change.newBlock,0,DimensionId.overworld);
+            foreach(change;netherWorld.tickFireAround(netherCenters,
+                netherSimulation,serverTick))
                 broadcastBlockChange(change.x,change.y,change.z,change.oldBlock,
                     change.newBlock,0,DimensionId.nether);
         }
@@ -651,6 +663,30 @@ private:
             placeSelectedBlock(serverPlayer);
         serverPlayer.input.usePressed = false;
         serverPlayer.input.attackPressed = false;
+    }
+
+    void tickPlayerFire(ServerPlayer serverPlayer)
+    {
+        auto player=serverPlayer.player;
+        if(player.health<=0.0f){player.fireTicks=0;return;}
+        auto activeWorld=worldFor(serverPlayer.dimension);
+        if(activeWorld.intersectsWater(player.boundingBox()))
+        {
+            player.fireTicks=0;
+            return;
+        }
+        const inside=activeWorld.intersectsFire(player.boundingBox());
+        if(inside&&player.fireTicks<160)player.fireTicks=160;
+        else if(!inside&&player.fireTicks>0)--player.fireTicks;
+        if(player.fireTicks<=0)return;
+        const cadence=inside?10u:20u;
+        if(serverTick%cadence!=0)return;
+        const before=player.health;
+        player.takeDamage(1.0f);
+        if(player.health>=before)return;
+        recordDamage(serverPlayer,DamageCause.fire);
+        if(player.health<=0.0f)
+            handleDeath(serverPlayer,DamageCause.fire,"");
     }
 
     void acceptLogin(ServerPeer peer, const(ubyte)[] payload)
@@ -951,26 +987,39 @@ private:
         auto activeWorld = worldFor(serverPlayer.dimension);
         if (stack.item == ItemId.flintAndSteel)
         {
-            const ignitionHit = activeWorld.rayCast(player.eyePosition(1.0f),
+            const ignitionHit = activeWorld.rayCastForPlacement(
+                player.eyePosition(1.0f),
                 forwardFromYawPitch(player.yaw, player.pitch), 5.0f);
             PortalRectangle rectangle;
-            if (!ignitionHit.hit || !igniteNetherPortal(activeWorld,
-                    ignitionHit.placeX, ignitionHit.placeY, ignitionHit.placeZ,
-                    rectangle))
+            if(!ignitionHit.hit)
                 return;
             player.attack(true);
-            broadcastPortal(rectangle, serverPlayer.id,
-                serverPlayer.dimension);
+            if(igniteNetherPortal(activeWorld,ignitionHit.placeX,
+                ignitionHit.placeY,ignitionHit.placeZ,rectangle))
+                broadcastPortal(rectangle,serverPlayer.id,
+                    serverPlayer.dimension);
+            else if(activeWorld.canPlaceFire(ignitionHit.placeX,
+                ignitionHit.placeY,ignitionHit.placeZ))
+            {
+                const old=activeWorld.getBlock(ignitionHit.placeX,
+                    ignitionHit.placeY,ignitionHit.placeZ);
+                activeWorld.setBlock(ignitionHit.placeX,ignitionHit.placeY,
+                    ignitionHit.placeZ,BlockId.fire);
+                broadcastBlockChange(ignitionHit.placeX,ignitionHit.placeY,
+                    ignitionHit.placeZ,old,BlockId.fire,serverPlayer.id,
+                    serverPlayer.dimension);
+            }
             return;
         }
         const block = placedBlock(stack.item);
         if (block == BlockId.air)
             return;
-        const hit = activeWorld.rayCast(player.eyePosition(1.0f),
+        const hit = activeWorld.rayCastForPlacement(player.eyePosition(1.0f),
             forwardFromYawPitch(player.yaw, player.pitch), 5.0f);
+        const replaced=hit.hit?activeWorld.getBlock(hit.placeX,hit.placeY,
+            hit.placeZ):BlockId.air;
         if (!hit.hit || !activeWorld.inBounds(hit.placeX, hit.placeY, hit.placeZ)
-            || activeWorld.getBlock(hit.placeX, hit.placeY, hit.placeZ)
-                != BlockId.air)
+            || (replaced!=BlockId.air&&!isWater(replaced)&&!isFire(replaced)))
             return;
         const placedBounds = Aabb(hit.placeX, hit.placeY, hit.placeZ,
             hit.placeX + 1.0f, hit.placeY + 1.0f, hit.placeZ + 1.0f);
@@ -981,7 +1030,7 @@ private:
             player.inventory.removeOne(slot);
         player.attack(true);
         broadcastBlockChange(hit.placeX, hit.placeY, hit.placeZ,
-            BlockId.air, block, serverPlayer.id, serverPlayer.dimension);
+            replaced, block, serverPlayer.id, serverPlayer.dimension);
     }
 
     void dropSelectedItem(ServerPlayer serverPlayer, bool wholeStack = false)
@@ -1160,6 +1209,10 @@ private:
                 serverPlayer.deathMessage = serverPlayer.name
                     ~ " fell out of the world";
                 break;
+            case DamageCause.fire:
+                serverPlayer.deathMessage = serverPlayer.name
+                    ~ " went up in flames";
+                break;
             case DamageCause.generic:
                 serverPlayer.deathMessage = attackerName.length
                     ? serverPlayer.name ~ " was slain by " ~ attackerName
@@ -1323,6 +1376,7 @@ private:
         state.inWater=player.inWater;
         state.eyeInWater=player.eyeInWater;
         state.swimming=player.swimming;
+        state.fireTicks=cast(ushort)(player.fireTicks<0?0:player.fireTicks);
         return state;
     }
 

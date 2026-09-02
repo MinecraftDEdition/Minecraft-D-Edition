@@ -9,6 +9,7 @@ import minecraftd.client.render.mesh:Color,DrawLayer,FrameMesh,Vertex,appendQuad
 import minecraftd.common.math3d:Mat4,Vec2,Vec3;
 import minecraftd.game.entity.player:Player;
 import minecraftd.game.item.inventory:Inventory,ItemStack,itemCategory,itemName;
+import minecraftd.platform.input:GamepadButton,GamepadState,Point;
 
 struct InventoryTextureSet
 {
@@ -18,6 +19,7 @@ struct InventoryTextureSet
     uint tooltipFrame;
     uint slotHighlightBack;
     uint slotHighlightFront;
+    uint controllerCursor;
 }
 
 final class InventoryMenuState
@@ -26,8 +28,11 @@ final class InventoryMenuState
     uint lastClickMilliseconds;
     int lastClickSlot=-1;
     int lastClickButton=-1;
+    private float controllerCursorX;
+    private float controllerCursorY;
+    private bool controllerCursorInitialized;
 
-    void open(){active=true;lastClickSlot=-1;}
+    void open(){active=true;lastClickSlot=-1;controllerCursorInitialized=false;}
     void close(){active=false;lastClickSlot=-1;}
 
     bool doubleClick(int slot,int button,uint now)
@@ -37,6 +42,44 @@ final class InventoryMenuState
         lastClickSlot=slot;
         lastClickButton=button;
         lastClickMilliseconds=now;
+        return result;
+    }
+
+    void updateControllerCursor(float stickX,float stickY,GamepadState gamepad,
+        float frameSeconds,uint viewportWidth,uint viewportHeight)
+    {
+        if(!controllerCursorInitialized)
+        {
+            const scale=inventoryGuiScale(viewportWidth,viewportHeight);
+            const logicalWidth=cast(int)viewportWidth/scale;
+            const logicalHeight=cast(int)viewportHeight/scale;
+            const left=(logicalWidth-InventoryMenuRenderer.imageWidth)/2;
+            const top=(logicalHeight-InventoryMenuRenderer.imageHeight)/2;
+            controllerCursorX=(left+16)*scale;
+            controllerCursorY=(top+92)*scale;
+            controllerCursorInitialized=true;
+        }
+        float x=stickX;
+        float y=-stickY;
+        if(gamepad.down(GamepadButton.dpadLeft))x=-1;
+        else if(gamepad.down(GamepadButton.dpadRight))x=1;
+        if(gamepad.down(GamepadButton.dpadUp))y=-1;
+        else if(gamepad.down(GamepadButton.dpadDown))y=1;
+        const shortest=viewportWidth<viewportHeight?viewportWidth:viewportHeight;
+        const speed=cast(float)shortest*0.9f;
+        controllerCursorX+=x*speed*frameSeconds;
+        controllerCursorY+=y*speed*frameSeconds;
+        if(controllerCursorX<0)controllerCursorX=0;
+        if(controllerCursorY<0)controllerCursorY=0;
+        if(controllerCursorX>=viewportWidth)controllerCursorX=viewportWidth-1;
+        if(controllerCursorY>=viewportHeight)controllerCursorY=viewportHeight-1;
+    }
+
+    Point controllerCursor() const
+    {
+        Point result;
+        result.x=cast(int)controllerCursorX;
+        result.y=cast(int)controllerCursorY;
         return result;
     }
 }
@@ -90,7 +133,7 @@ final class InventoryMenuRenderer
         const HudRenderer itemRenderer,const FontRenderer font,uint fontTexture,
         float partialTick,PlayerRenderer playerRenderer,
         const Player player,uint playerTexture,float ageInTicks,
-        bool slimArms = false)const
+        bool slimArms = false,bool drawControllerCursor = false)const
     {
         const scale=guiScale(viewportWidth,viewportHeight);
         const logicalWidth=cast(float)viewportWidth/scale;
@@ -144,6 +187,13 @@ final class InventoryMenuRenderer
             appendTooltip(frame,inventory.slot(hovered),logicalMouseX,
                 logicalMouseY,logicalWidth,logicalHeight,
                 textures.tooltipBackground,textures.tooltipFrame,font,fontTexture);
+        if(drawControllerCursor)
+        {
+            const cursorSize=(29+scale-1)/scale;
+            appendFullSprite(frame,textures.controllerCursor,
+                logicalMouseX-cursorSize/2,logicalMouseY-cursorSize/2,
+                cursorSize,cursorSize,logicalWidth,logicalHeight);
+        }
     }
 
     void appendPlayerShowcase(ref FrameMesh frame,int boxX,int boxY,
@@ -206,9 +256,7 @@ private:
 
     static int guiScale(uint width,uint height)
     {
-        int result=1;
-        while(result<8&&width/(result+1)>=320&&height/(result+1)>=240)++result;
-        return result;
+        return inventoryGuiScale(width,height);
     }
 
     static void slotPosition(int index,int left,int top,out int x,out int y)
@@ -333,10 +381,28 @@ private:
     }
 }
 
+private int inventoryGuiScale(uint width,uint height)
+{
+    int result=1;
+    while(result<8&&width/(result+1)>=320&&height/(result+1)>=240)++result;
+    return result;
+}
+
 unittest
 {
     auto renderer=new InventoryMenuRenderer();
     scope(exit)destroy(renderer);
     // At 854x480 the auto GUI scale is two, so physical coordinates double.
     assert(renderer.hitSlot(854,480,(125+8)*2,(37+84)*2)==0);
+
+    auto state=new InventoryMenuState();
+    scope(exit)destroy(state);
+    GamepadState gamepad;
+    gamepad.connected=true;
+    state.open();
+    state.updateControllerCursor(0,0,gamepad,0,854,480);
+    const initial=state.controllerCursor;
+    assert(renderer.hitSlot(854,480,initial.x,initial.y)==0);
+    state.updateControllerCursor(1,0,gamepad,0.1f,854,480);
+    assert(state.controllerCursor.x>initial.x);
 }

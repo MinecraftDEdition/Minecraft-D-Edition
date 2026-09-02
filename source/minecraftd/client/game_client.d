@@ -46,7 +46,7 @@ import minecraftd.platform.window : CursorShape, GameWindow;
 import minecraftd.server.integrated_game_server : IntegratedGameServer;
 import minecraftd.world.world : World;
 import minecraftd.world.world_settings : WorldEntry, WorldType,
-    saveWorldMetadata;
+    gameModeName, saveWorldMetadata;
 import minecraftd.network.game_protocol : PlayerActionType,PlayerInputCommand, inputAttack,
     inputBack, inputCrouch, inputForward, inputJump, inputLeft, inputRight,
     inputSprint;
@@ -131,11 +131,13 @@ final class GameClient
         bool worldTextMouseSelecting;
         bool serverTextMouseSelecting;
         string lastAccountMessage;
+        string activeWorldName;
 
         bool startLocalWorld(const WorldEntry entry)
         {
             try
             {
+                activeWorldName=entry.settings.name.idup;
                 renderer.renderLoadingScreen("Preparing world", 0);
                 integratedServer = new IntegratedGameServer(entry.settings,
                     entry.directory, (int percent) {
@@ -803,10 +805,11 @@ final class GameClient
             if (!window.running) break;
             continue;
         }
+        const initialMode=player.hardcore?"Hardcore":gameModeName(player.gameMode);
         if (integratedServer !is null)
-            discord.singleplayer();
+            discord.singleplayer(initialMode);
         else
-            discord.multiplayer(serverMenu.serverName);
+            discord.multiplayer(serverMenu.serverName,initialMode);
         auto pauseMenu = new PauseMenuState();
         scope (exit) destroy(pauseMenu);
         auto deathScreen = new DeathScreenState();
@@ -943,14 +946,6 @@ final class GameClient
                 gameNavigationHitTest=(int x,int y)=>cast(int)
                     renderer.deathActionAt(x,y,deathScreen);
             }
-            else if(inventoryMenu.active)
-            {
-                gameNavigationActive=true;
-                gameNavigationToken=800;
-                gameNavigationNone=-1;
-                gameNavigationHitTest=(int x,int y)=>
-                    renderer.inventorySlotAt(x,y);
-            }
             else if(pauseMenu.active)
             {
                 gameNavigationActive=true;
@@ -983,6 +978,13 @@ final class GameClient
                 if(!consumed)uiNavigation.move(direction);
                 uiCursor=uiNavigation.cursor(mouseCursor);
             }
+            if(inventoryMenu.active&&uiNavigation.usingController)
+            {
+                inventoryMenu.updateControllerCursor(controllerLeftX,
+                    controllerLeftY,gamepad,cast(float)frameSeconds,
+                    window.width,window.height);
+                uiCursor=inventoryMenu.controllerCursor;
+            }
             if(controllerUiActive)
                 window.setCursorVisible(!uiNavigation.usingController);
             const uiAcceptPressed = window.pressed(VK_LBUTTON)
@@ -1004,6 +1006,20 @@ final class GameClient
                 debugVisible=!debugVisible;
 
             multiplayer.poll(chat);
+            // Presence follows authoritative game-mode snapshots live. A
+            // published integrated world remains singleplayer until another
+            // participant is actually present, then uses the world name as
+            // its multiplayer server name.
+            const presenceMode=player.hardcore?"Hardcore":gameModeName(player.gameMode);
+            if(integratedServer !is null)
+            {
+                if(multiplayer.remotePlayers().length)
+                    discord.multiplayer(activeWorldName,presenceMode);
+                else
+                    discord.singleplayer(presenceMode);
+            }
+            else
+                discord.multiplayer(serverMenu.serverName,presenceMode);
             if (!multiplayer.loginComplete
                 && multiplayer.disconnectReason.length)
             {
@@ -1080,6 +1096,9 @@ final class GameClient
             const attackPressed = window.pressed(
                 options.key(OptionsAction.bindAttack))
                 || gamepad.rightTriggerPressed;
+            const usePressed = window.pressed(
+                options.key(OptionsAction.bindUse))
+                || gamepad.leftTriggerPressed;
             const pickBlockPressed = window.pressed(
                 options.key(OptionsAction.bindPickBlock))
                 || gamepad.pressed(GamepadButton.x);
@@ -1094,12 +1113,18 @@ final class GameClient
                 || gamepad.pressed(GamepadButton.y);
             if (!window.down(VK_LBUTTON) && gamepad.rightTrigger <= 0)
                 suppressPrimaryUntilRelease = false;
-            if (!chat.active && !pauseMenu.active && !deathScreen.active)
-                pendingUse = pendingUse || ((window.pressed(
-                    options.key(OptionsAction.bindUse))
-                    || gamepad.leftTriggerPressed)
-                    && player.gameMode != player.gameMode.adventure
-                    && player.gameMode != player.gameMode.spectator);
+            if (!chat.active && !pauseMenu.active && !inventoryMenu.active
+                && !deathScreen.active && !(options.active&&options.fromGame)
+                && usePressed
+                && player.gameMode != player.gameMode.adventure
+                && player.gameMode != player.gameMode.spectator)
+            {
+                pendingUse = true;
+                // Predict the main-hand swing immediately. Waiting for the
+                // authoritative placement snapshot made underwater use look
+                // inert even when the block was successfully placed.
+                player.attack();
+            }
 
             if (options.active && options.fromGame)
             {
@@ -1172,7 +1197,8 @@ final class GameClient
                 const cursor=uiCursor;
                 const hovered=renderer.inventorySlotAt(cursor.x,cursor.y);
                 window.setCursorShape(CursorShape.arrow);
-                if(escapePressed||inventoryPressed)
+                if(escapePressed||window.pressed(
+                    options.key(OptionsAction.bindInventory)))
                     setInventoryMenu(false);
                 else
                 {
@@ -1182,6 +1208,10 @@ final class GameClient
                         multiplayer.requestInventoryAction(
                             PlayerActionType.inventoryDrop,cast(ubyte)hovered,
                             window.down(VK_CONTROL)?1:0);
+                    if(gamepad.pressed(GamepadButton.y)&&hovered>=0)
+                        multiplayer.requestInventoryAction(
+                            PlayerActionType.inventoryQuickMove,
+                            cast(ubyte)hovered);
                     foreach(slot;0..9)
                         if(window.pressed(options.key(cast(OptionsAction)
                             (cast(int)OptionsAction.bindHotbar1+slot)))
@@ -1194,6 +1224,7 @@ final class GameClient
                         const pressed=button==0
                             ?uiAcceptPressed
                             :(window.pressed(VK_RBUTTON)
+                                ||gamepad.pressed(GamepadButton.x)
                                 ||gamepad.leftTriggerPressed);
                         if(!pressed)continue;
                         if(hovered>=0)
@@ -1674,6 +1705,7 @@ final class GameClient
                 integratedServer !is null, deathScreen,
                 deathCursor.x, deathCursor.y,inventoryMenu,
                 inventoryCursor.x,inventoryCursor.y,
+                inventoryMenu.active&&uiNavigation.usingController,
                 debugVisible,debugFps);
             const frameFinished = monotonicSeconds();
             const maximumFps=options.integer("maxFps",120);

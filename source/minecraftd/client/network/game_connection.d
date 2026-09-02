@@ -143,7 +143,7 @@ final class GameConnection
         private EosService eosService;
         private string eosRemoteUserId;
         private string eosSocketName;
-        private ubyte[] eosStream;
+        private ubyte[][2] eosStreams;
     }
 
     this(string playerName = "Steve", string host = "127.0.0.1",
@@ -206,7 +206,7 @@ final class GameConnection
                 eosService = null;
                 eosRemoteUserId = null;
                 eosSocketName = null;
-                eosStream = null;
+                foreach(ref stream;eosStreams)stream=null;
             }
             return;
         }
@@ -240,7 +240,7 @@ final class GameConnection
             if (wasRunning)
                 eosService.closePeer(eosRemoteUserId, eosSocketName);
             eosService = null;
-            eosStream.length = 0;
+            foreach(ref stream;eosStreams)stream.length=0;
         }
         if (socket !is null)
         {
@@ -325,10 +325,11 @@ private:
         while (eosService.receive(packet))
         {
             if (packet.remoteUserId != eosRemoteUserId
-                || packet.socketName != eosSocketName || packet.channel != 0)
+                || packet.socketName != eosSocketName || packet.channel > 1)
                 continue;
             GamePacket[] decoded;
-            if (!appendAndDecodeFrames(eosStream, decoded, packet.data))
+            if (!appendAndDecodeFrames(eosStreams[packet.channel], decoded,
+                packet.data))
             {
                 atomicStore(running, false);
                 return;

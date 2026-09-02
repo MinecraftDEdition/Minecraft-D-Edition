@@ -43,14 +43,15 @@ final class DiscordPresence
         update("In Menu", "");
     }
 
-    void singleplayer()
+    void singleplayer(string gameMode)
     {
-        update("Singleplayer", "");
+        update("Singleplayer"~(gameMode.length?" · "~gameMode:""), "");
     }
 
-    void multiplayer(string serverName)
+    void multiplayer(string serverName,string gameMode)
     {
-        update("Multiplayer", serverName.length ? serverName : "Multiplayer Server");
+        update("Multiplayer"~(gameMode.length?" · "~gameMode:""),
+            serverName.length ? serverName : "Multiplayer Server");
     }
 
     void tick()

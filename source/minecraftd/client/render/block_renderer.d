@@ -4,7 +4,7 @@ import minecraftd.client.render.mesh : Vertex, Color, appendQuad;
 import minecraftd.client.render.texture_manager : ImageData;
 import minecraftd.client.render.world_lighting : WorldLighting;
 import minecraftd.common.math3d : Vec2, Vec3;
-import minecraftd.world.block : BlockId, isOpaque, isWater, waterHeight;
+import minecraftd.world.block : BlockId, isFire, isOpaque, isWater, waterHeight;
 import minecraftd.world.chunk : Chunk, ChunkCoordinate;
 import minecraftd.world.world : World;
 import std.conv : to;
@@ -47,6 +47,12 @@ struct WaterGeometry
     Vertex[] surface;
     Vertex[] walls;
     Vertex[] underside;
+}
+
+struct FireGeometry
+{
+    Vertex[] layer0;
+    Vertex[] layer1;
 }
 
 unittest
@@ -310,6 +316,25 @@ final class BlockRenderer
         return result;
     }
 
+    FireGeometry buildFireChunkRange(ChunkCoordinate coordinate,int minimumY,
+        int maximumY)
+    {
+        FireGeometry result;
+        const loaded=world.chunkAt(coordinate.x,coordinate.z);
+        if(loaded is null||loaded.empty)return result;
+        if(minimumY<loaded.minimumOccupiedY())minimumY=loaded.minimumOccupiedY();
+        if(maximumY>loaded.maximumOccupiedY())maximumY=loaded.maximumOccupiedY();
+        foreach(y;minimumY..maximumY+1)
+        foreach(localZ;0..Chunk.depth)foreach(localX;0..Chunk.width)
+        {
+            const x=coordinate.x*Chunk.width+localX;
+            const z=coordinate.z*Chunk.depth+localZ;
+            if(!isFire(world.getBlock(x,y,z)))continue;
+            appendFire(result,x,y,z);
+        }
+        return result;
+    }
+
     /// Standalone six-faced block model used by dropped items and GUI icons.
     Vertex[][uint] buildItem(BlockId block, const BlockTextureSet textures)
     {
@@ -469,7 +494,7 @@ private:
                     x=baseX+fixed;y=minimumY+v;z=baseZ+u;break;
             }
             const block=world.getBlock(x,y,z);
-            if(block==BlockId.air||isWater(block)
+            if(block==BlockId.air||isWater(block)||isFire(block)
                 ||block==BlockId.netherPortalX||block==BlockId.netherPortalZ)
                 continue;
             const normal=faceNormal(face);
@@ -693,7 +718,61 @@ private:
                  BlockId.waterFlow3, BlockId.waterFlow4, BlockId.waterFlow5,
                  BlockId.waterFlow6, BlockId.waterFlow7, BlockId.waterFalling:
                 return textures.waterStill;
+            case BlockId.fire: return textures.stone;
         }
+    }
+
+    static void appendFire(ref FireGeometry result,int x,int y,int z)
+    {
+        const color=Color(1,1,1,1);
+        const fx=cast(float)x,fy=cast(float)y,fz=cast(float)z;
+        enum float floorLow=0.057f;
+        enum float floorHigh=1.351f;
+        enum float sideHigh=1.4f;
+
+        void flame(ref Vertex[] output,Vec3 a,Vec3 b,Vec3 c,Vec3 d,
+            bool mirror=false)
+        {
+            appendQuad(output,a,b,c,d,
+                mirror?Vec2(1,1):Vec2(0,1),mirror?Vec2(0,1):Vec2(1,1),
+                mirror?Vec2(0,0):Vec2(1,0),mirror?Vec2(1,0):Vec2(0,0),
+                color,color,color,color);
+        }
+
+        // Faithfully reproduce Java's template_fire_floor shape: four
+        // full-width sheets tilted 22.5 degrees around the block centre. The
+        // previous pair of narrow diagonal cards resembled a campfire flame.
+        flame(result.layer0,Vec3(fx,fy+floorLow,fz+0.738f),
+            Vec3(fx+1,fy+floorLow,fz+0.738f),
+            Vec3(fx+1,fy+floorHigh,fz+0.202f),
+            Vec3(fx,fy+floorHigh,fz+0.202f));
+        flame(result.layer1,Vec3(fx+1,fy+floorLow,fz+0.263f),
+            Vec3(fx,fy+floorLow,fz+0.263f),
+            Vec3(fx,fy+floorHigh,fz+0.798f),
+            Vec3(fx+1,fy+floorHigh,fz+0.798f),true);
+        flame(result.layer0,Vec3(fx+0.355f,fy+0.019f,fz+1),
+            Vec3(fx+0.355f,fy+0.019f,fz),
+            Vec3(fx+0.891f,fy+1.313f,fz),
+            Vec3(fx+0.891f,fy+1.313f,fz+1),true);
+        flame(result.layer1,Vec3(fx+0.645f,fy+0.019f,fz),
+            Vec3(fx+0.645f,fy+0.019f,fz+1),
+            Vec3(fx+0.109f,fy+1.313f,fz+1),
+            Vec3(fx+0.109f,fy+1.313f,fz));
+
+        // An unsupported floor fire also receives Java's four cardinal side
+        // variants. Alternating fire_0/fire_1 keeps the authentic animation
+        // variation without introducing a separate per-block model system.
+        enum float edge=0.01f;
+        flame(result.layer0,Vec3(fx,fy,fz+edge),Vec3(fx+1,fy,fz+edge),
+            Vec3(fx+1,fy+sideHigh,fz+edge),Vec3(fx,fy+sideHigh,fz+edge));
+        flame(result.layer1,Vec3(fx+1,fy,fz+1-edge),
+            Vec3(fx,fy,fz+1-edge),Vec3(fx,fy+sideHigh,fz+1-edge),
+            Vec3(fx+1,fy+sideHigh,fz+1-edge),true);
+        flame(result.layer0,Vec3(fx+edge,fy,fz+1),Vec3(fx+edge,fy,fz),
+            Vec3(fx+edge,fy+sideHigh,fz),Vec3(fx+edge,fy+sideHigh,fz+1),true);
+        flame(result.layer1,Vec3(fx+1-edge,fy,fz),
+            Vec3(fx+1-edge,fy,fz+1),Vec3(fx+1-edge,fy+sideHigh,fz+1),
+            Vec3(fx+1-edge,fy+sideHigh,fz));
     }
 
     float waterCornerHeight(int cornerX,int y,int cornerZ) const

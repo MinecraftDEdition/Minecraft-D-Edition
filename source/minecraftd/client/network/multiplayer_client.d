@@ -71,6 +71,19 @@ struct ClientDroppedItem
     }
 }
 
+private struct RemoteMotionSample
+{
+    uint tick;
+    Vec3 position;
+    Vec3 velocity;
+    float bodyYaw;
+    float headYaw;
+    float pitch;
+    float walkPosition;
+    float walkSpeed;
+    float attackProgress;
+}
+
 final class RemotePlayer : Player
 {
     uint networkId;
@@ -86,9 +99,15 @@ final class RemotePlayer : Player
     private Vec3 renderPosition;
     private float renderBodyYaw;
     private float renderHeadYaw;
+    private float renderPitch;
+    private float renderWalkPosition;
+    private float renderWalkSpeed;
+    private float renderAttackProgress;
     private bool renderStateInitialized;
+    private RemoteMotionSample[] motionSamples;
+    private double renderTick;
 
-    void pushSnapshot(const NetworkPlayerState state)
+    void pushSnapshot(const NetworkPlayerState state, uint snapshotTick)
     {
         const wasOnGround = onGround;
         if (!state.onGround && state.position.y < position.y)
@@ -151,21 +170,40 @@ final class RemotePlayer : Player
         inWater=state.inWater;
         eyeInWater=state.eyeInWater;
         swimming=state.swimming;
+        fireTicks=state.fireTicks;
+
+        const sample = RemoteMotionSample(snapshotTick,state.position,
+            state.velocity,state.bodyYaw,state.yaw,state.pitch,
+            state.walkPosition,state.walkSpeed,state.attackProgress);
+        bool teleport;
+        if (motionSamples.length)
+        {
+            const displacement=state.position-motionSamples[$-1].position;
+            teleport=displacement.lengthSquared()>64.0f;
+        }
+        if(teleport)
+        {
+            motionSamples.length=0;
+            renderStateInitialized=false;
+        }
+        if(!motionSamples.length||snapshotTick>motionSamples[$-1].tick)
+            motionSamples~=sample;
+        else if(snapshotTick==motionSamples[$-1].tick)
+            motionSamples[$-1]=sample;
+        if(motionSamples.length>8)
+            motionSamples=motionSamples[$-8..$];
 
         if (!renderStateInitialized)
         {
             renderPosition = state.position;
             renderBodyYaw = state.bodyYaw;
             renderHeadYaw = state.yaw;
+            renderPitch = state.pitch;
+            renderWalkPosition = state.walkPosition;
+            renderWalkSpeed = state.walkSpeed;
+            renderAttackProgress = state.attackProgress;
+            renderTick = snapshotTick;
             renderStateInitialized = true;
-        }
-        else
-        {
-            const displacement = state.position - renderPosition;
-            if (displacement.x * displacement.x
-                + displacement.y * displacement.y
-                + displacement.z * displacement.z > 64.0f)
-                renderPosition = state.position;
         }
     }
 
@@ -173,12 +211,71 @@ final class RemotePlayer : Player
     {
         if (!renderStateInitialized)
             return;
-        // Server snapshots arrive at 20 Hz. A roughly 70 ms exponential
-        // window absorbs packet bunching without tying motion to local ticks.
-        const amount = clamp(frameSeconds * 14.0f, 0.0f, 1.0f);
-        renderPosition += (position - renderPosition) * amount;
-        renderBodyYaw += Player.wrapDegrees(bodyYaw - renderBodyYaw) * amount;
-        renderHeadYaw += Player.wrapDegrees(yaw - renderHeadYaw) * amount;
+        if(!motionSamples.length)return;
+
+        // Render behind the newest 20 TPS state so ordinary Internet packet
+        // bunching is absorbed by real samples instead of producing the old
+        // approach-stop-approach motion. The clock gently corrects its buffer
+        // depth and may extrapolate for at most 75 ms during a late packet.
+        const newestTick=cast(double)motionSamples[$-1].tick;
+        const buffered=newestTick-renderTick;
+        double clockRate=20.0;
+        if(buffered<2.25)clockRate*=0.75;
+        else if(buffered>3.25)clockRate*=1.2;
+        renderTick+=cast(double)frameSeconds*clockRate;
+        if(renderTick>newestTick+1.5)renderTick=newestTick+1.5;
+        if(renderTick<cast(double)motionSamples[0].tick)
+            renderTick=motionSamples[0].tick;
+
+        while(motionSamples.length>2
+            &&cast(double)motionSamples[1].tick<=renderTick)
+            motionSamples=motionSamples[1..$];
+
+        const a=motionSamples[0];
+        RemoteMotionSample b=a;
+        bool hasUpper;
+        foreach(candidate;motionSamples[1..$])
+            if(cast(double)candidate.tick>=renderTick)
+            {
+                b=candidate;
+                hasUpper=true;
+                break;
+            }
+        float amount;
+        if(hasUpper&&b.tick>a.tick)
+        {
+            amount=clamp(cast(float)((renderTick-a.tick)/(b.tick-a.tick)),
+                0.0f,1.0f);
+            // Cubic Hermite interpolation uses the authoritative velocities
+            // to keep direction changes smooth across snapshot boundaries.
+            const t2=amount*amount;
+            const t3=t2*amount;
+            const h00=2*t3-3*t2+1;
+            const h10=t3-2*t2+amount;
+            const h01=-2*t3+3*t2;
+            const h11=t3-t2;
+            float seconds=(b.tick-a.tick)*0.05f;
+            if(seconds>0.15f)seconds=0.15f;
+            renderPosition=a.position*h00+a.velocity*(h10*seconds)
+                +b.position*h01+b.velocity*(h11*seconds);
+        }
+        else
+        {
+            const latest=motionSamples[$-1];
+            float seconds=cast(float)((renderTick-newestTick)*0.05);
+            seconds=clamp(seconds,0.0f,0.075f);
+            renderPosition=latest.position+latest.velocity*seconds;
+            b=latest;
+            amount=1.0f;
+        }
+        renderBodyYaw=a.bodyYaw+Player.wrapDegrees(b.bodyYaw-a.bodyYaw)*amount;
+        renderHeadYaw=a.headYaw+Player.wrapDegrees(b.headYaw-a.headYaw)*amount;
+        renderPitch=a.pitch+(b.pitch-a.pitch)*amount;
+        renderWalkPosition=a.walkPosition+(b.walkPosition-a.walkPosition)*amount;
+        renderWalkSpeed=a.walkSpeed+(b.walkSpeed-a.walkSpeed)*amount;
+        renderAttackProgress=b.attackProgress<a.attackProgress
+            ?b.attackProgress:a.attackProgress
+                +(b.attackProgress-a.attackProgress)*amount;
     }
 
     override Vec3 interpolatedPosition(float partialTick) const
@@ -189,6 +286,26 @@ final class RemotePlayer : Player
     override float interpolatedBodyYaw(float partialTick) const
     {
         return renderBodyYaw;
+    }
+
+    float interpolatedPitch() const
+    {
+        return renderPitch;
+    }
+
+    override float interpolatedWalkAnimationPosition(float partialTick) const
+    {
+        return renderWalkPosition;
+    }
+
+    override float interpolatedWalkAnimationSpeed(float partialTick) const
+    {
+        return renderWalkSpeed;
+    }
+
+    override float interpolatedAttackProgress(float partialTick) const
+    {
+        return renderAttackProgress;
     }
 
     override float headYawOffset(float partialTick) const
@@ -533,7 +650,7 @@ private:
                     remoteById[state.id] = remote;
                     existing = state.id in remoteById;
                 }
-                (*existing).pushSnapshot(state);
+                (*existing).pushSnapshot(state,tickValue);
             }
         }
         uint[] removed;
@@ -616,6 +733,7 @@ private:
         localPlayer.inWater=state.inWater;
         localPlayer.eyeInWater=state.eyeInWater;
         localPlayer.swimming=state.swimming;
+        localPlayer.fireTicks=state.fireTicks;
         foreach (slot; 0 .. localPlayer.inventory.hotbar.length)
         {
             const oldStack = oldInventory.hotbar[slot];
@@ -631,6 +749,7 @@ private:
             localPlayer.damageFlashTicks = 20;
             localPlayer.hungerJiggleTicks = 10;
             localPlayer.hurtSoundDue = true;
+            localPlayer.fireHurtSoundDue = state.damageCause == DamageCause.fire;
             if (state.damageCause == DamageCause.fall)
             {
                 const damage = oldHealth - state.health;
@@ -794,13 +913,13 @@ unittest
     state.position = Vec3(2.0f, 3.0f, 4.0f);
     state.bodyYaw = 170.0f;
     state.yaw = 175.0f;
-    remote.pushSnapshot(state);
+    remote.pushSnapshot(state,1);
     assert(remote.interpolatedPosition(0.5f) == state.position);
 
     state.position = Vec3(3.0f, 3.0f, 4.0f);
     state.bodyYaw = -170.0f;
     state.yaw = -165.0f;
-    remote.pushSnapshot(state);
+    remote.pushSnapshot(state,2);
     remote.advanceInterpolation(1.0f / 60.0f);
     const rendered = remote.interpolatedPosition(0.0f);
     assert(rendered.x > 2.0f && rendered.x < 3.0f);

@@ -153,6 +153,60 @@ namespace MinecraftDEdition.Updater
         }
     }
 
+    internal sealed class FileStateRecord
+    {
+        internal long Size;
+        internal long LastWriteUtcTicks;
+        internal string Sha256;
+    }
+
+    /// <summary>
+    /// A local, disposable record of files which have already passed SHA-256
+    /// verification. The release manifest remains the authority; this cache
+    /// only avoids reopening thousands of unchanged resource files on every
+    /// launch. Missing files and any size/timestamp change still fall back to
+    /// a real hash, so interrupted installs and ordinary corruption repair in
+    /// exactly the same way as before.
+    /// </summary>
+    internal sealed class FileStateCache
+    {
+        internal string Version;
+        internal readonly Dictionary<string, FileStateRecord> Files =
+            new Dictionary<string, FileStateRecord>(StringComparer.OrdinalIgnoreCase);
+
+        internal static FileStateCache Parse(string text)
+        {
+            string[] lines = text.Replace("\r\n", "\n").Split('\n');
+            if (lines.Length == 0 || lines[0] != "MDE-FILE-STATE\t1")
+                throw new InvalidDataException("Unsupported file-state cache format.");
+            FileStateCache result = new FileStateCache();
+            foreach (string line in lines.Skip(1))
+            {
+                if (String.IsNullOrWhiteSpace(line)) continue;
+                string[] fields = line.Split('\t');
+                if (fields[0] == "version" && fields.Length == 2)
+                    result.Version = fields[1];
+                else if (fields[0] == "file" && fields.Length == 5)
+                {
+                    string path = UpdateManifest.ValidateRelativePath(fields[1]);
+                    FileStateRecord state = new FileStateRecord();
+                    state.Size = Int64.Parse(fields[2]);
+                    state.LastWriteUtcTicks = Int64.Parse(fields[3]);
+                    state.Sha256 = fields[4].ToLowerInvariant();
+                    if (state.Sha256.Length != 64 || state.Sha256.Any(
+                        delegate(char c) { return !Uri.IsHexDigit(c); }))
+                        throw new InvalidDataException("Invalid cached file hash.");
+                    result.Files.Add(path, state);
+                }
+                else
+                    throw new InvalidDataException("Malformed file-state cache line.");
+            }
+            if (String.IsNullOrWhiteSpace(result.Version))
+                throw new InvalidDataException("File-state cache has no version.");
+            return result;
+        }
+    }
+
     internal sealed class LauncherForm : Form
     {
         private const string Repository = "MinecraftDEdition/Minecraft-D-Edition";
@@ -164,6 +218,9 @@ namespace MinecraftDEdition.Updater
         private const string LauncherUpdateExecutable =
             "Minecraft D Edition Launcher.update.exe";
         private const string InstalledManifest = ".mde-installed-manifest.txt";
+        private const string VerifiedFileState = ".mde-verified-files-v1.txt";
+        private const string VerificationRequired =
+            ".mde-verification-required";
 
         private readonly string[] gameArguments;
         private readonly bool checkOnly;
@@ -291,6 +348,8 @@ namespace MinecraftDEdition.Updater
             string overrideUrl = Environment.GetEnvironmentVariable("MDE_UPDATE_MANIFEST_URL");
             string installedPath = Path.Combine(root, InstalledManifest);
             UpdateManifest installed = TryReadManifest(installedPath);
+            FileStateCache verified = TryReadFileState(
+                Path.Combine(root, VerifiedFileState));
             string manifestUrl;
             UpdatePointer pointer = null;
             if (!String.IsNullOrWhiteSpace(overrideUrl))
@@ -315,9 +374,8 @@ namespace MinecraftDEdition.Updater
 
             byte[] remoteBytes = null;
             // A verified installed copy of the current manifest avoids a
-            // redundant multi-megabyte download, but never skips checking the
-            // files themselves. Deleted or corrupted files are repaired even
-            // when the version number has not changed.
+            // redundant multi-megabyte download. The fast current-version path
+            // is backed by the periodic full integrity audit below.
             if (pointer != null && installed != null
                 && String.Equals(installed.Version, pointer.Version,
                     StringComparison.Ordinal))
@@ -370,11 +428,30 @@ namespace MinecraftDEdition.Updater
             if (pointer != null && !String.Equals(pointer.Version, remote.Version,
                 StringComparison.Ordinal))
                 throw new InvalidDataException("The update pointer and manifest disagree.");
-            List<FileRecord> changed = FindChangedFiles(root, remote);
+            string verificationMarker = Path.Combine(root, VerificationRequired);
+            bool currentVersion = pointer != null && installed != null
+                && String.Equals(installed.Version, remote.Version,
+                    StringComparison.Ordinal)
+                && !File.Exists(verificationMarker);
+            if (currentVersion && gameInstalled)
+            {
+                string statePath = Path.Combine(root, VerifiedFileState);
+                if (verified == null
+                    || !String.Equals(verified.Version, remote.Version,
+                        StringComparison.Ordinal)
+                    || DateTime.UtcNow - File.GetLastWriteTimeUtc(statePath)
+                        > TimeSpan.FromDays(1))
+                    StartBackgroundVerification(root);
+                SetStatus("Minecraft: D Edition is up to date.");
+                SetDetails("Starting version " + remote.Version + ".");
+                return true;
+            }
+            List<FileRecord> changed = FindChangedFiles(root, remote, verified);
             List<string> removed = FindRemovedFiles(installed, remote);
             if (changed.Count == 0 && removed.Count == 0)
             {
                 WriteInstalledManifest(root, remote.RawText);
+                WriteFileState(root, remote);
                 SetStatus("Minecraft: D Edition is up to date.");
                 SetDetails("All installed files match version " + remote.Version + ".");
                 return true;
@@ -435,6 +512,7 @@ namespace MinecraftDEdition.Updater
             }
             ApplyWithRollback(root, work, stage, changed, removed);
             WriteInstalledManifest(root, remote.RawText);
+            WriteFileState(root, remote);
             TryDeleteDirectory(work);
             SetStatus("Update complete.");
             SetDetails("Starting Minecraft: D Edition...");
@@ -442,18 +520,44 @@ namespace MinecraftDEdition.Updater
         }
 
         private static List<FileRecord> FindChangedFiles(string root,
-            UpdateManifest remote)
+            UpdateManifest remote, FileStateCache verified)
         {
             List<FileRecord> changed = new List<FileRecord>();
+            List<FileRecord> hashRequired = new List<FileRecord>();
             foreach (FileRecord file in remote.Files.Values)
             {
                 string destination = LocalPath(root, file.Path);
-                if (File.Exists(destination) && new FileInfo(destination).Length == file.Size
-                    && HashFile(destination).Equals(file.Sha256,
+                if (!File.Exists(destination))
+                {
+                    changed.Add(file);
+                    continue;
+                }
+                FileInfo info = new FileInfo(destination);
+                if (info.Length != file.Size)
+                {
+                    changed.Add(file);
+                    continue;
+                }
+                FileStateRecord state;
+                if (verified != null
+                    && verified.Files.TryGetValue(file.Path, out state)
+                    && state.Size == info.Length
+                    && state.LastWriteUtcTicks == info.LastWriteTimeUtc.Ticks
+                    && state.Sha256.Equals(file.Sha256,
                         StringComparison.OrdinalIgnoreCase))
                     continue;
-                changed.Add(file);
+                hashRequired.Add(file);
             }
+            // A missing/old cache is still reliable, but its one-time recovery
+            // scan uses all available cores instead of serially hashing 26,000+
+            // resources on the UI's critical startup path.
+            Parallel.ForEach(hashRequired, file =>
+            {
+                string destination = LocalPath(root, file.Path);
+                if (!HashFile(destination).Equals(file.Sha256,
+                    StringComparison.OrdinalIgnoreCase))
+                    lock (changed) changed.Add(file);
+            });
             return changed;
         }
 
@@ -589,6 +693,98 @@ namespace MinecraftDEdition.Updater
             string destination = Path.Combine(root, InstalledManifest);
             string temporary = destination + ".new";
             File.WriteAllText(temporary, text, new UTF8Encoding(false));
+            if (File.Exists(destination))
+                File.Replace(temporary, destination, null);
+            else
+                File.Move(temporary, destination);
+            string marker = Path.Combine(root, VerificationRequired);
+            try { if (File.Exists(marker)) File.Delete(marker); }
+            catch { }
+        }
+
+        private static void StartBackgroundVerification(string root)
+        {
+            try
+            {
+                ProcessStartInfo start = new ProcessStartInfo(
+                    Application.ExecutablePath);
+                start.WorkingDirectory = root;
+                start.UseShellExecute = false;
+                start.CreateNoWindow = true;
+                start.WindowStyle = ProcessWindowStyle.Hidden;
+                start.Arguments = "--verify-install-cache " + QuoteArgument(root);
+                Process.Start(start);
+            }
+            catch { }
+        }
+
+        internal static int VerifyInstallCache(string rootArgument)
+        {
+            string root = Path.GetFullPath(rootArgument)
+                .TrimEnd(Path.DirectorySeparatorChar);
+            string manifestPath = Path.Combine(root, InstalledManifest);
+            UpdateManifest manifest = TryReadManifest(manifestPath);
+            if (manifest == null) return 1;
+            int invalid = 0;
+            Parallel.ForEach(manifest.Files.Values, file =>
+            {
+                if (Interlocked.CompareExchange(ref invalid, 0, 0) != 0)
+                    return;
+                try
+                {
+                    string path = LocalPath(root, file.Path);
+                    if (!File.Exists(path) || new FileInfo(path).Length != file.Size
+                        || !HashFile(path).Equals(file.Sha256,
+                            StringComparison.OrdinalIgnoreCase))
+                        Interlocked.Exchange(ref invalid, 1);
+                }
+                catch
+                {
+                    Interlocked.Exchange(ref invalid, 1);
+                }
+            });
+            if (invalid == 0)
+            {
+                WriteFileState(root, manifest);
+                return 0;
+            }
+            File.WriteAllText(Path.Combine(root, VerificationRequired),
+                "A managed file needs repair.", new UTF8Encoding(false));
+            return 2;
+        }
+
+        internal static FileStateCache TryReadFileState(string path)
+        {
+            try
+            {
+                return File.Exists(path) ? FileStateCache.Parse(
+                    File.ReadAllText(path, Encoding.UTF8)) : null;
+            }
+            catch
+            {
+                return null;
+            }
+        }
+
+        internal static void WriteFileState(string root, UpdateManifest manifest)
+        {
+            List<string> lines = new List<string>();
+            lines.Add("MDE-FILE-STATE\t1");
+            lines.Add("version\t" + manifest.Version);
+            foreach (FileRecord file in manifest.Files.Values.OrderBy(
+                delegate(FileRecord record) { return record.Path; },
+                StringComparer.OrdinalIgnoreCase))
+            {
+                string path = LocalPath(root, file.Path);
+                if (!File.Exists(path)) continue;
+                FileInfo info = new FileInfo(path);
+                lines.Add("file\t" + file.Path + "\t" + info.Length.ToString()
+                    + "\t" + info.LastWriteTimeUtc.Ticks.ToString()
+                    + "\t" + file.Sha256);
+            }
+            string destination = Path.Combine(root, VerifiedFileState);
+            string temporary = destination + ".new";
+            File.WriteAllLines(temporary, lines, new UTF8Encoding(false));
             if (File.Exists(destination))
                 File.Replace(temporary, destination, null);
             else
@@ -978,6 +1174,7 @@ namespace MinecraftDEdition.Updater
                     changed, removed);
                 LauncherForm.PromoteLauncherSidecar(root);
                 LauncherForm.WriteInstalledManifest(root, manifest.RawText);
+                LauncherForm.WriteFileState(root, manifest);
                 File.WriteAllText(Path.Combine(work, "completed"),
                     manifest.Version, new UTF8Encoding(false));
 
@@ -1015,6 +1212,15 @@ namespace MinecraftDEdition.Updater
         [STAThread]
         private static void Main(string[] args)
         {
+            if (args.Length == 2 && String.Equals(args[0],
+                "--verify-install-cache", StringComparison.OrdinalIgnoreCase))
+            {
+                try { Process.GetCurrentProcess().PriorityClass =
+                    ProcessPriorityClass.BelowNormal; }
+                catch { }
+                Environment.ExitCode = LauncherForm.VerifyInstallCache(args[1]);
+                return;
+            }
             if (args.Length == 4 && String.Equals(args[0],
                 "--apply-staged-update", StringComparison.OrdinalIgnoreCase))
             {

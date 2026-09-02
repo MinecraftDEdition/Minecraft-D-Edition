@@ -6,8 +6,8 @@ import std.file : exists, mkdirRecurse, read, write;
 import std.path : buildPath;
 import minecraftd.common.aabb : Aabb;
 import minecraftd.common.math3d : Vec3;
-import minecraftd.world.block : BlockId, isOpaque, isSolid, isWater, isWaterSource,
-    waterForLevel, waterHeight, waterLevel;
+import minecraftd.world.block : BlockId, isFire, isFlammable, isOpaque, isSolid,
+    isWater, isWaterSource, waterForLevel, waterHeight, waterLevel;
 import minecraftd.world.chunk : Chunk, ChunkCoordinate, chunkCoordinate,
     localCoordinate;
 import minecraftd.world.world_settings : WorldSettings, WorldType,
@@ -59,6 +59,27 @@ unittest
     assert(!testWorld.isPointInWater(Vec3(30.5f,29.95f,30.5f)));
     const ray=testWorld.rayCast(Vec3(30.5f,29.5f,28.0f),Vec3(0,0,1),4.0f);
     assert(!ray.hit); // selection rays pass through fluid blocks
+    // Placement rays treat fluid exactly like air regardless of eye height.
+    // A block placed from above replaces the shallow water cell immediately
+    // above the solid support instead of being incorrectly perched on water.
+    testWorld.setBlock(30,28,30,BlockId.stone);
+    const surfacePlacement=testWorld.rayCastForPlacement(
+        Vec3(30.5f,31.0f,30.5f),Vec3(0,-1,0),4.0f);
+    assert(surfacePlacement.hit&&surfacePlacement.block==BlockId.stone);
+    assert(surfacePlacement.placeY==29);
+    testWorld.setBlock(30,29,31,BlockId.stone);
+    const submergedPlacement=testWorld.rayCastForPlacement(
+        Vec3(30.5f,29.4f,30.2f),Vec3(0,0,1),3.0f);
+    assert(submergedPlacement.hit&&submergedPlacement.block==BlockId.stone);
+    assert(submergedPlacement.placeZ==30); // replace the intervening fluid
+
+    testWorld.setBlock(20,1,20,BlockId.netherrack);
+    assert(testWorld.canPlaceFire(20,2,20));
+    testWorld.setBlock(20,2,20,BlockId.fire);
+    assert(testWorld.intersectsFire(Aabb(19.8f,2,19.8f,20.2f,3,20.2f)));
+    const center=[Vec3(20.5f,2,20.5f)];
+    testWorld.tickFireAround(center,1,30);
+    assert(testWorld.getBlock(20,2,20)==BlockId.fire); // eternal support
 }
 
 unittest
@@ -95,6 +116,11 @@ struct WaterUpdate
     int x, y, z;
     BlockId oldBlock;
     BlockId newBlock;
+}
+
+private struct BlockPosition
+{
+    int x, y, z;
 }
 
 final class World
@@ -490,6 +516,49 @@ public:
         return BlockHit.init;
     }
 
+    /// Fluids are replaceable placement space, just like air. The ray always
+    /// continues to the first solid support and reports the last traversed
+    /// cell as the destination, independent of whether the eye began above or
+    /// below the water surface.
+    BlockHit rayCastForPlacement(Vec3 origin, Vec3 direction,
+        float maximumDistance = 5.0f) const
+    {
+        direction = direction.normalized();
+        int x=cast(int)floorf(origin.x), y=cast(int)floorf(origin.y),
+            z=cast(int)floorf(origin.z);
+        const stepX=direction.x>0?1:(direction.x<0?-1:0);
+        const stepY=direction.y>0?1:(direction.y<0?-1:0);
+        const stepZ=direction.z>0?1:(direction.z<0?-1:0);
+        enum float infinity=float.max;
+        const deltaX=stepX==0?infinity:fabsf(1.0f/direction.x);
+        const deltaY=stepY==0?infinity:fabsf(1.0f/direction.y);
+        const deltaZ=stepZ==0?infinity:fabsf(1.0f/direction.z);
+        float nextX=stepX>0?(x+1.0f-origin.x)*deltaX:
+            (stepX<0?(origin.x-x)*deltaX:infinity);
+        float nextY=stepY>0?(y+1.0f-origin.y)*deltaY:
+            (stepY<0?(origin.y-y)*deltaY:infinity);
+        float nextZ=stepZ>0?(z+1.0f-origin.z)*deltaZ:
+            (stepZ<0?(origin.z-z)*deltaZ:infinity);
+        float distance;
+        int previousX=x,previousY=y,previousZ=z;
+        foreach(_;0..256)
+        {
+            const block=getBlock(x,y,z);
+            if(block!=BlockId.air&&!isFire(block)&&!isWater(block))
+                return BlockHit(true,x,y,z,block,distance,
+                    previousX,previousY,previousZ);
+            previousX=x;previousY=y;previousZ=z;
+            if(nextX<=nextY&&nextX<=nextZ)
+            {distance=nextX;nextX+=deltaX;x+=stepX;}
+            else if(nextY<=nextZ)
+            {distance=nextY;nextY+=deltaY;y+=stepY;}
+            else
+            {distance=nextZ;nextZ+=deltaZ;z+=stepZ;}
+            if(distance>maximumDistance)break;
+        }
+        return BlockHit.init;
+    }
+
     /// True when a point is below the local fluid surface. Water with water
     /// directly above is treated as a full-height column, matching FluidState.
     bool isPointInWater(Vec3 point) const
@@ -518,6 +587,33 @@ public:
             const height=isWater(getBlock(x,y+1,z))?1.0f:waterHeight(block);
             if(bounds.minY<y+height && bounds.maxY>y)return true;
         }
+        return false;
+    }
+
+    bool intersectsFire(Aabb bounds) const
+    {
+        const minX=cast(int)floorf(bounds.minX);
+        const maxX=cast(int)floorf(bounds.maxX-0.0001f);
+        const minY=cast(int)floorf(bounds.minY);
+        const maxY=cast(int)floorf(bounds.maxY-0.0001f);
+        const minZ=cast(int)floorf(bounds.minZ);
+        const maxZ=cast(int)floorf(bounds.maxZ-0.0001f);
+        foreach(y;minY..maxY+1)foreach(z;minZ..maxZ+1)
+        foreach(x;minX..maxX+1)
+            if(isFire(getBlock(x,y,z)))return true;
+        return false;
+    }
+
+    bool canPlaceFire(int x,int y,int z) const
+    {
+        if(!inBounds(x,y,z))return false;
+        const target=getBlock(x,y,z);
+        if(target!=BlockId.air&&!isFire(target))return false;
+        if(y>minimumBuildY()&&isSolid(getBlock(x,y-1,z)))return true;
+        foreach(offset;[[-1,0,0],[1,0,0],[0,-1,0],[0,1,0],
+            [0,0,-1],[0,0,1]])
+            if(isFlammable(getBlock(x+offset[0],y+offset[1],z+offset[2])))
+                return true;
         return false;
     }
 
@@ -594,7 +690,7 @@ private:
             const x=coordinate.x*Chunk.width+localX;
             const z=coordinate.z*Chunk.depth+localZ;
             const current=getBlock(x,y,z);
-            if(current!=BlockId.air && !isWater(current))continue;
+            if(current!=BlockId.air && !isWater(current)&&!isFire(current))continue;
             BlockId next=BlockId.air;
             if(isWaterSource(current))next=BlockId.waterSource;
             else if(y<maximumBuildY() && isWater(getBlock(x,y+1,z)))
@@ -607,7 +703,12 @@ private:
                 {
                     const neighbor=getBlock(x+offset[0],y,z+offset[1]);
                     if(isWaterSource(neighbor))++sources;
-                    const level=waterLevel(neighbor);
+                    int level=waterLevel(neighbor);
+                    // The foot of a falling column spreads horizontally as a
+                    // fresh level-one flow after it reaches solid terrain.
+                    if(neighbor==BlockId.waterFalling
+                        &&isSolid(getBlock(x+offset[0],y-1,z+offset[1])))
+                        level=0;
                     if(level>=0 && level<8 && level<best)best=level;
                 }
                 if(sources>=2 && y>minimumBuildY()
@@ -621,6 +722,10 @@ private:
             {
                 const oldLevel=waterLevel(current);
                 if(oldLevel>=0 && oldLevel<7)next=waterForLevel(oldLevel+1);
+                // Orphaned falling columns used to be immortal because level
+                // eight missed the draining branch. Remove the disconnected
+                // tail in one scheduled fluid step.
+                else if(current==BlockId.waterFalling)next=BlockId.air;
             }
             if(next!=current)changes~=WaterUpdate(x,y,z,current,next);
         }
@@ -629,6 +734,77 @@ private:
     }
 
 public:
+    /// Scheduled fire updates use the same authoritative block-change stream
+    /// as water. Netherrack supports eternal fire, ordinary planks burn and
+    /// spread, and unsupported fire expires instead of becoming a permanent
+    /// cosmetic billboard.
+    WaterUpdate[] tickFireAround(const(Vec3)[] centers,int radius,uint tick)
+    {
+        WaterUpdate[] changes;
+        if(tick%30!=0)return changes;
+        bool[ChunkCoordinate] selected;
+        foreach(center;centers)
+        {
+            const centerX=chunkCoordinate(cast(int)floorf(center.x));
+            const centerZ=chunkCoordinate(cast(int)floorf(center.z));
+            foreach(z;centerZ-radius..centerZ+radius+1)
+            foreach(x;centerX-radius..centerX+radius+1)
+                if(hasChunk(x,z))selected[ChunkCoordinate(x,z)]=true;
+        }
+        bool[BlockPosition] queued;
+        void queue(int x,int y,int z,BlockId next)
+        {
+            const position=BlockPosition(x,y,z);
+            if(position in queued)return;
+            const old=getBlock(x,y,z);
+            if(old==next)return;
+            queued[position]=true;
+            changes~=WaterUpdate(x,y,z,old,next);
+        }
+        foreach(coordinate,present;selected)
+        {
+            const loaded=chunkAt(coordinate.x,coordinate.z);
+            if(loaded is null||loaded.empty)continue;
+            foreach(y;loaded.minimumOccupiedY()..loaded.maximumOccupiedY()+1)
+            foreach(localZ;0..Chunk.depth)foreach(localX;0..Chunk.width)
+            {
+                const x=coordinate.x*Chunk.width+localX;
+                const z=coordinate.z*Chunk.depth+localZ;
+                if(!isFire(getBlock(x,y,z)))continue;
+                bool wet;
+                foreach(offset;[[-1,0,0],[1,0,0],[0,-1,0],[0,1,0],
+                    [0,0,-1],[0,0,1]])
+                    if(isWater(getBlock(x+offset[0],y+offset[1],z+offset[2])))
+                        wet=true;
+                const below=getBlock(x,y-1,z);
+                bool adjacentFuel;
+                foreach(offset;[[-1,0,0],[1,0,0],[0,-1,0],[0,1,0],
+                    [0,0,-1],[0,0,1]])
+                    if(isFlammable(getBlock(x+offset[0],y+offset[1],z+offset[2])))
+                        adjacentFuel=true;
+                if(wet||(!isSolid(below)&&!adjacentFuel))
+                {queue(x,y,z,BlockId.air);continue;}
+                const random=hash(x,y,z,cast(long)settings.seed+tick);
+                if(below!=BlockId.netherrack&&!isFlammable(below)
+                    &&!adjacentFuel&&(random&3)==0)
+                    queue(x,y,z,BlockId.air);
+                foreach(index,offset;[[-1,0,0],[1,0,0],[0,-1,0],[0,1,0],
+                    [0,0,-1],[0,0,1]])
+                {
+                    const nx=x+offset[0],ny=y+offset[1],nz=z+offset[2];
+                    if(isFlammable(getBlock(nx,ny,nz))
+                        &&((random>>(index*3))&7)<2)
+                        queue(nx,ny,nz,BlockId.fire);
+                    const above=getBlock(nx,ny+1,nz);
+                    if(isFlammable(getBlock(nx,ny,nz))
+                        &&above==BlockId.air&&((random>>(index*4))&15)==0)
+                        queue(nx,ny+1,nz,BlockId.fire);
+                }
+            }
+        }
+        foreach(change;changes)setBlock(change.x,change.y,change.z,change.newBlock);
+        return changes;
+    }
 
     bool isUnobstructed(Aabb bounds) const
     {

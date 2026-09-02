@@ -67,6 +67,8 @@ class Player : Entity
     bool waterExitDue;
     bool swimSoundDue;
     bool drowningDamageDue;
+    /// Remaining authoritative burn duration in 20 Hz game ticks.
+    int fireTicks;
 
     // Survival state uses Java's half-heart/food scale (20 = ten icons).
     float health = 20.0f;
@@ -95,6 +97,7 @@ class Player : Entity
     int damageFlashTicks;
     int hungerJiggleTicks;
     bool hurtSoundDue;
+    bool fireHurtSoundDue;
     ubyte fallSoundDue; // 0 none, 1 small, 2 big
 
     float height() const
@@ -376,11 +379,13 @@ class Player : Entity
         deathTime = 0;
         hurtTime = damageFlashTicks = hungerJiggleTicks = 0;
         hurtSoundDue = false;
+        fireHurtSoundDue = false;
         fallSoundDue = 0;
         crouching = sprinting = attacking = false;
         inWater=eyeInWater=swimming=false;
         airSupply=maximumAirSupply;
         waterEntryDue=waterExitDue=swimSoundDue=drowningDamageDue=false;
+        fireTicks=0;
         attackProgress = previousAttackProgress = 0.0f;
         gameMode = mode;
         flying = mode == GameMode.spectator;

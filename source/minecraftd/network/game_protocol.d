@@ -27,7 +27,7 @@ enum GamePacketType : ubyte
 }
 
 enum uint maximumGamePacketBytes = 1024 * 1024;
-enum ushort gameProtocolVersion = 19;
+enum ushort gameProtocolVersion = 21;
 
 enum ubyte chunkEncodingRaw = 0;
 enum ubyte chunkEncodingRle = 1;
@@ -39,6 +39,7 @@ enum DamageCause : ubyte
     fall,
     drown,
     voidDamage,
+    fire,
 }
 
 enum CombatEventType : ubyte
@@ -137,6 +138,7 @@ struct NetworkPlayerState
     bool inWater;
     bool eyeInWater;
     bool swimming;
+    ushort fireTicks;
 }
 
 struct DroppedItemState
@@ -236,6 +238,7 @@ struct PacketWriter
         putU8(cast(ubyte) player.dimension); putF32(player.portalProgress);
         putU16(cast(ushort)player.airSupply);
         putBool(player.inWater); putBool(player.eyeInWater); putBool(player.swimming);
+        putU16(player.fireTicks);
     }
     void putDroppedItem(const DroppedItemState item)
     {
@@ -344,6 +347,7 @@ struct PacketReader
         result.airSupply = cast(short)readU16();
         result.inWater = readBool(); result.eyeInWater = readBool();
         result.swimming = readBool();
+        result.fireTicks = readU16();
         return result;
     }
     DroppedItemState readDroppedItem()
@@ -521,6 +525,7 @@ unittest
     player.mainHandRight = false;
     player.dimension = DimensionId.nether;
     player.portalProgress = 0.75f;
+    player.fireTicks = 137;
     player.inventory.storage[4] = ItemStack(ItemId.stone,37,2);
     player.inventory.carried = ItemStack(ItemId.dirt,12,0);
     PacketWriter stateWriter;
@@ -535,6 +540,7 @@ unittest
     assert(restored.skinParts == 0x2A && !restored.mainHandRight);
     assert(restored.dimension == DimensionId.nether
         && restored.portalProgress == 0.75f);
+    assert(restored.fireTicks == 137);
     assert(restored.inventory.storage[4].item==ItemId.stone
         && restored.inventory.storage[4].count==37);
     assert(restored.inventory.carried.item==ItemId.dirt

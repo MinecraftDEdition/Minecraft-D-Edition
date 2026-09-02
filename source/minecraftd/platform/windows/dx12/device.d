@@ -36,7 +36,9 @@ final class Dx12Device : GraphicsDevice
     }
     // Vanilla's GUI and particle atlases already push this prototype past 64
     // individual SRVs; leave headroom for the upcoming blocks and controller UI.
-    enum uint maxTextures = 256;
+    // Animated block and particle textures consume one descriptor per frame.
+    // Keep enough headroom for future asset additions on every renderer.
+    enum uint maxTextures = 1024;
     // Streamed terrain can legitimately place several hundred thousand
     // visible vertices in one frame. Keep a bounded buffer, but size it for
     // the supported 12-chunk view rather than the old 3x3 prototype map.

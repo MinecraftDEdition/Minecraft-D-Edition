@@ -82,6 +82,10 @@ Imported Minecraft assets are for local development only. They are not original 
 - Hold left mouse to mine; the arm, destroy-stage overlay, particles, and block-local sounds progress together.
 - Right-click places the selected block stack when the target face is clear.
 - `1` through `9` or the mouse wheel selects a hotbar slot.
+- With a controller, `Y` opens the inventory, the left stick or D-pad moves the
+  inventory-only virtual cursor, `A` takes or places a stack, `X` takes half or
+  places one, `Y` quick-moves a hovered stack, and `B` closes the screen. Main
+  menus continue to use direct D-pad/left-stick focus navigation.
 - `F5` cycles first person, third person behind, and third person front.
 - **Options...** is available from both the title screen and pause menu. Its
   Java 26.2-style hierarchy includes dedicated Online, Skin, Sound, Video,

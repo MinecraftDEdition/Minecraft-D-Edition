@@ -27,7 +27,9 @@
 
 namespace {
 
-constexpr uint32_t MaxTextures = 256;
+// Animated block and particle textures consume one descriptor per frame.
+// Match the D3D12 capacity so Vulkan/MoltenVK builds load the same assets.
+constexpr uint32_t MaxTextures = 1024;
 constexpr uint32_t MaxVertices = 500000;
 
 struct Vertex {

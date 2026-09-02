@@ -35,6 +35,7 @@ enum BlockId : ubyte
     cobblestone,
     glass,
     bedrock,
+    fire,
 }
 
 struct BlockSoundType
@@ -77,6 +78,8 @@ BlockSoundType soundType(BlockId block)
             return BlockSoundType("glass", 1.0f, 1.0f);
         case BlockId.bedrock:
             return BlockSoundType("stone", 1.0f, 1.0f);
+        case BlockId.fire:
+            return BlockSoundType("stone", 0.0f, 1.0f);
     }
 }
 
@@ -84,7 +87,7 @@ bool isOpaque(BlockId block)
 {
     return block != BlockId.air && block != BlockId.netherPortalX
         && block != BlockId.netherPortalZ && block != BlockId.glass
-        && !isWater(block);
+        && !isWater(block) && block != BlockId.fire;
 }
 
 bool isSolid(BlockId block)
@@ -105,6 +108,23 @@ bool isWater(BlockId block)
 bool isWaterSource(BlockId block)
 {
     return block == BlockId.waterSource;
+}
+
+bool isFire(BlockId block)
+{
+    return block == BlockId.fire;
+}
+
+/// Java's ordinary wooden planks burn; crimson and warped planks deliberately
+/// do not. Keeping this in the block registry prevents the fire simulator and
+/// renderer from growing separate, contradictory material tables.
+bool isFlammable(BlockId block)
+{
+    return block == BlockId.oakPlanks || block == BlockId.sprucePlanks
+        || block == BlockId.birchPlanks || block == BlockId.junglePlanks
+        || block == BlockId.acaciaPlanks || block == BlockId.darkOakPlanks
+        || block == BlockId.mangrovePlanks || block == BlockId.cherryPlanks
+        || block == BlockId.bambooPlanks || block == BlockId.paleOakPlanks;
 }
 
 /// Java's flowing-water amount is 8 for a source/falling column and 7..1 for
@@ -158,6 +178,7 @@ float hardness(BlockId block)
             return 2.0f;
         case BlockId.glass: return 0.3f;
         case BlockId.bedrock: return -1.0f;
+        case BlockId.fire: return -1.0f;
     }
 }
 
@@ -223,6 +244,7 @@ FallSurface fallSurface(BlockId block)
              BlockId.cobblestone, BlockId.glass:
             return FallSurface.normal;
         case BlockId.bedrock: return FallSurface.normal;
+        case BlockId.fire: return FallSurface.normal;
     }
 }
 
@@ -254,4 +276,6 @@ unittest
     assert(soundType(BlockId.crimsonPlanks).family == "nether_wood");
     assert(soundType(BlockId.glass).family == "glass");
     assert(isSolid(BlockId.bedrock) && hardness(BlockId.bedrock) < 0.0f);
+    assert(!isSolid(BlockId.fire) && isFlammable(BlockId.oakPlanks));
+    assert(!isFlammable(BlockId.crimsonPlanks));
 }

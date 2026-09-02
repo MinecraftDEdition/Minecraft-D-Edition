@@ -38,6 +38,7 @@ struct ParticleTextureSet
     uint[4] splash;
     uint bubble;
     uint[5] bubblePop;
+    uint[8] smoke;
 }
 
 private struct TerrainParticle
@@ -99,6 +100,16 @@ private struct WaterParticle
     bool splash;
 }
 
+private struct SmokeParticle
+{
+    Vec3 position;
+    Vec3 previousPosition;
+    Vec3 velocity;
+    float size;
+    int age;
+    int lifetime;
+}
+
 /// Java-style terrain particles shared by block destruction and sprint trails.
 final class ParticleSystem
 {
@@ -110,6 +121,7 @@ final class ParticleSystem
     private PoofParticle[] poofParticles;
     private PortalParticle[] portalParticles;
     private WaterParticle[] waterParticles;
+    private SmokeParticle[] smokeParticles;
     private uint randomState = 0x6D2B79F5u;
     private int level;
 
@@ -122,7 +134,8 @@ final class ParticleSystem
     size_t count() const
     {
         return particles.length + criticalParticles.length + poofParticles.length
-            + portalParticles.length + waterParticles.length;
+            + portalParticles.length + waterParticles.length
+            + smokeParticles.length;
     }
     void setLevel(int value) { level=value<0?0:(value>2?2:value); }
 
@@ -315,6 +328,21 @@ final class ParticleSystem
         waterParticles~=particle;
     }
 
+    void spawnFireSmoke(int blockX,int blockY,int blockZ)
+    {
+        if(level==2&&randomFloat()<0.5f)return;
+        SmokeParticle particle;
+        particle.position=particle.previousPosition=Vec3(
+            blockX+0.25f+randomFloat()*0.5f,
+            blockY+0.75f+randomFloat()*0.35f,
+            blockZ+0.25f+randomFloat()*0.5f);
+        particle.velocity=Vec3((randomFloat()-0.5f)*0.008f,
+            0.025f+randomFloat()*0.015f,(randomFloat()-0.5f)*0.008f);
+        particle.size=0.10f+randomFloat()*0.05f;
+        particle.lifetime=30+cast(int)(randomFloat()*20.0f);
+        smokeParticles~=particle;
+    }
+
     void tick()
     {
         size_t destination;
@@ -403,6 +431,19 @@ final class ParticleSystem
             waterParticles[destination++]=particle;
         }
         waterParticles.length=destination;
+
+        destination=0;
+        foreach(particle;smokeParticles)
+        {
+            particle.previousPosition=particle.position;
+            if(particle.age++>=particle.lifetime)continue;
+            particle.position+=particle.velocity;
+            particle.velocity.x*=0.96f;
+            particle.velocity.z*=0.96f;
+            particle.velocity.y+=0.00035f;
+            smokeParticles[destination++]=particle;
+        }
+        smokeParticles.length=destination;
     }
 
     Vertex[][uint] build(const Camera camera, float partialTick) const
@@ -534,6 +575,27 @@ final class ParticleSystem
                 Vec2(0,1),Vec2(1,1),Vec2(1,0),Vec2(0,0),
                 color,color,color,color);
         }
+        foreach(particle;smokeParticles)
+        {
+            const center=Vec3(
+                lerp(partialTick,particle.previousPosition.x,particle.position.x),
+                lerp(partialTick,particle.previousPosition.y,particle.position.y),
+                lerp(partialTick,particle.previousPosition.z,particle.position.z));
+            const growth=1.0f+cast(float)particle.age/particle.lifetime*0.75f;
+            const horizontal=right*particle.size*growth;
+            const vertical=up*particle.size*growth;
+            int frame=particle.age*8/particle.lifetime;
+            if(frame<0)frame=0;if(frame>7)frame=7;
+            const texture=textures.smoke[frame];
+            auto geometry=texture in result;
+            if(geometry is null){result[texture]=[];geometry=texture in result;}
+            const fade=1.0f-cast(float)particle.age/particle.lifetime;
+            const color=Color(0.35f,0.35f,0.35f,fade*0.85f);
+            appendQuad(*geometry,center-horizontal-vertical,
+                center+horizontal-vertical,center+horizontal+vertical,
+                center-horizontal+vertical,Vec2(0,1),Vec2(1,1),Vec2(1,0),
+                Vec2(0,0),color,color,color,color);
+        }
         return result;
     }
 
@@ -594,6 +656,7 @@ private:
                  BlockId.waterFlow3, BlockId.waterFlow4, BlockId.waterFlow5,
                  BlockId.waterFlow6, BlockId.waterFlow7, BlockId.waterFalling:
                 return textures.dirt;
+            case BlockId.fire: return textures.dirt;
         }
     }
 

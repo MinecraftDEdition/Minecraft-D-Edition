@@ -1,7 +1,8 @@
 module minecraftd.client.render.world_lighting;
 
 import minecraftd.common.math3d : Vec3, clamp;
-import minecraftd.world.block : BlockId, isNetherPortal, isOpaque, isWater;
+import minecraftd.world.block : BlockId, isFire, isNetherPortal, isOpaque,
+    isWater;
 import minecraftd.world.chunk : Chunk, ChunkCoordinate, chunkCoordinate;
 import minecraftd.world.world : World;
 import minecraftd.world.world_settings : DimensionId;
@@ -225,7 +226,10 @@ private:
             }
         }
     }
-    static ubyte blockEmission(BlockId cell){return isNetherPortal(cell)?11:0;}
+    static ubyte blockEmission(BlockId cell)
+    {
+        return isFire(cell)?15:(isNetherPortal(cell)?11:0);
+    }
     static float minecraftBrightness(ubyte level)
     {
         const normalized=cast(float)level/15.0f;

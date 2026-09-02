@@ -49,7 +49,9 @@ function Get-ChunkIndex([string]$RelativePath) {
 
 $excluded = @(
     'Minecraft D Edition Launcher.exe',
-    '.mde-installed-manifest.txt'
+    '.mde-installed-manifest.txt',
+    '.mde-verified-files-v1.txt',
+    '.mde-verification-required'
 )
 $records = [Collections.Generic.List[object]]::new()
 $hashedFiles = 0

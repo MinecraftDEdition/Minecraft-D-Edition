@@ -70,7 +70,9 @@ the game.
 6. EOS P2P establishes a direct route when possible and uses Epic's relay
    network when required.
 7. A packet bridge reconstructs the existing length-framed game stream and
-   forwards it to the host's local `IntegratedGameServer`.
+   forwards it to the host's local `IntegratedGameServer`. Live state and
+   actions use reliable channel 0, while large terrain snapshots use reliable
+   channel 1 so chunk delivery cannot head-of-line block player movement.
 8. If the host leaves, the session ends. EOS does not make the world persistent
    and does not transfer authority to another player.
 
