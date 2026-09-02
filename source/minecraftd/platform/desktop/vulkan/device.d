@@ -3,7 +3,7 @@ import std.path : buildPath;
 import std.string : fromStringz, toStringz;
 
 import minecraftd.client.render.graphics_device : GraphicsDevice, TextureHandle;
-import minecraftd.client.render.mesh : FrameMesh, Vertex;
+import minecraftd.client.render.mesh : FrameMesh, MeshHandle, Vertex;
 import minecraftd.client.render.texture_manager : ImageData;
 
 private extern(C) nothrow
@@ -15,6 +15,10 @@ private extern(C) nothrow
     void mdVkDestroy(void* context);
     int mdVkUploadTexture(void* context, const(ubyte)* rgba, uint width,
         uint height, uint* index, char* error, uint errorCapacity);
+    int mdVkUploadStaticMesh(void* context, const(Vertex)* vertices,
+        uint vertexCount, ulong* id, char* error, uint errorCapacity);
+    int mdVkReleaseStaticMesh(void* context, ulong id, char* error,
+        uint errorCapacity);
     void mdVkResize(void* context, uint width, uint height);
     void mdVkSetVsync(void* context, int enabled);
     int mdVkRender(void* context, const(Vertex)* vertices, uint vertexCount,
@@ -25,6 +29,7 @@ private extern(C) nothrow
 
 private struct VulkanDraw
 {
+    ulong meshId;
     uint firstVertex;
     uint vertexCount;
     uint textureIndex;
@@ -32,6 +37,8 @@ private struct VulkanDraw
     float[16] transform;
     float[12] fog;
 }
+static assert(VulkanDraw.sizeof == 136,
+    "VulkanDraw must match native/vulkan_abi_bridge.cpp");
 
 final class VulkanDevice : GraphicsDevice
 {
@@ -73,6 +80,28 @@ final class VulkanDevice : GraphicsDevice
         return TextureHandle(index);
     }
 
+    override MeshHandle uploadStaticMesh(const Vertex[] vertices)
+    {
+        if (vertices.length == 0) return MeshHandle.init;
+        if (vertices.length > uint.max)
+            throw new Exception("Vulkan static mesh is too large");
+        char[1024] error = 0;
+        ulong id;
+        if (!mdVkUploadStaticMesh(context, vertices.ptr,
+            cast(uint) vertices.length, &id, error.ptr, cast(uint) error.length))
+            throw new Exception(message(error, "Unable to upload Vulkan terrain mesh"));
+        return MeshHandle(id, cast(uint) vertices.length);
+    }
+
+    override void releaseStaticMesh(MeshHandle mesh)
+    {
+        if (!mesh.valid) return;
+        char[1024] error = 0;
+        if (!mdVkReleaseStaticMesh(context, mesh.id, error.ptr,
+            cast(uint) error.length))
+            throw new Exception(message(error, "Unable to release Vulkan terrain mesh"));
+    }
+
     override TextureHandle menuBlurTexture() const
     {
         return TextureHandle(mdVkBlurTexture(context));
@@ -100,6 +129,7 @@ final class VulkanDevice : GraphicsDevice
         }
         foreach (index, draw; frame.draws)
         {
+            nativeDraws[index].meshId = draw.meshId;
             nativeDraws[index].firstVertex = draw.firstVertex;
             nativeDraws[index].vertexCount = draw.vertexCount;
             nativeDraws[index].textureIndex = draw.textureIndex;

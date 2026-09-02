@@ -54,6 +54,9 @@ extern "C" MCD_DISCORD_EXPORT void mcdDiscordUpdate(
 
         discordpp::Activity activity;
         activity.SetType(discordpp::ActivityTypes::Playing);
+        // Keep Discord's internal application/executable identity filename-safe
+        // while presenting the correctly punctuated title in Rich Presence.
+        activity.SetName("Minecraft: D Edition");
         activity.SetDetails(optionalText(details));
         activity.SetState(optionalText(state));
 

@@ -824,6 +824,10 @@ final class GameClient
         double previous = monotonicSeconds();
         double accumulator = 0.0;
         double elapsed = 0.0;
+        double debugSampleSeconds = 0.0;
+        uint debugSampleFrames;
+        float debugFps = 0.0f;
+        bool debugVisible;
         enum double tickSeconds = 1.0 / 20.0;
         uint inputSequence;
         uint reconnectTicks;
@@ -898,6 +902,14 @@ final class GameClient
             const current = monotonicSeconds();
             const frameSeconds = fmin(current - previous, 0.25);
             previous = current;
+            debugSampleSeconds += frameSeconds;
+            ++debugSampleFrames;
+            if(debugSampleSeconds>=0.25)
+            {
+                debugFps=cast(float)(debugSampleFrames/debugSampleSeconds);
+                debugSampleSeconds=0.0;
+                debugSampleFrames=0;
+            }
             const gamepad = window.gamepadState();
             const controllerDeadzone = options.number("controllerDeadzone",.05f);
             const controllerLeftX = controllerAxis(gamepad.leftX,
@@ -988,6 +1000,8 @@ final class GameClient
                 options.save();
                 renderer.resize(window.width, window.height);
             }
+            if(window.pressed(VK_F3))
+                debugVisible=!debugVisible;
 
             multiplayer.poll(chat);
             if (!multiplayer.loginComplete
@@ -1659,7 +1673,8 @@ final class GameClient
                 pauseMenu, menuCursor.x, menuCursor.y,
                 integratedServer !is null, deathScreen,
                 deathCursor.x, deathCursor.y,inventoryMenu,
-                inventoryCursor.x,inventoryCursor.y);
+                inventoryCursor.x,inventoryCursor.y,
+                debugVisible,debugFps);
             const frameFinished = monotonicSeconds();
             const maximumFps=options.integer("maxFps",120);
             if(maximumFps>0)

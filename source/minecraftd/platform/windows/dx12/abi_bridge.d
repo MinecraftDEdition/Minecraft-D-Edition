@@ -38,6 +38,7 @@ void mdTransition(void* list, void* resource, uint before, uint after);
 void mdSetRenderTargets(void* list, SIZE_T rtv, SIZE_T dsv);
 void mdPrepareDraw(void* list, void* rootSignature, void* descriptorHeap,
     float width, float height, ulong vertexAddress, uint stride, uint size);
+void mdBindVertexBuffer(void* list, ulong vertexAddress, uint stride, uint size);
 void mdDraw(void* list, const(float)* transform, const(float)* fog,
     ulong textureHandle,
     uint vertexCount, uint firstVertex);

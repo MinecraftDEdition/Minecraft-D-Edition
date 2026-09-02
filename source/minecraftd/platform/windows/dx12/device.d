@@ -9,7 +9,7 @@ import directx.d3d12;
 import directx.d3d12sdklayers;
 import directx.dxgi1_4;
 
-import minecraftd.client.render.mesh : DrawLayer, FrameMesh, Vertex;
+import minecraftd.client.render.mesh : DrawLayer, FrameMesh, MeshHandle, Vertex;
 import minecraftd.client.render.texture_manager : ImageData;
 import minecraftd.client.render.graphics_device : GraphicsDevice, TextureHandle;
 import minecraftd.platform.windows.dx12.command_context : requireSuccess;
@@ -18,10 +18,22 @@ import minecraftd.platform.windows.dx12.descriptor_heap : cpuHandle, gpuHandle;
 import minecraftd.platform.windows.dx12.shader : compileWorldShaders;
 import minecraftd.platform.windows.dx12.swap_chain : backBufferCount, backBufferFormat, depthBufferFormat;
 
-/// Small, deliberately synchronous D3D12 renderer. The fence-per-frame policy is
-/// simple and correct for this first playable milestone; frame overlap comes next.
+/// D3D12 renderer with one command allocator and streaming vertex buffer per
+/// swap-chain image. CPU frame construction can overlap the GPU's previous
+/// frame instead of stalling on a fence after every Present.
 final class Dx12Device : GraphicsDevice
 {
+    private struct StaticMesh
+    {
+        ID3D12Resource resource;
+        ulong gpuAddress;
+        uint byteCount;
+    }
+    private struct RetiredStaticMesh
+    {
+        ID3D12Resource resource;
+        ulong fenceValue;
+    }
     // Vanilla's GUI and particle atlases already push this prototype past 64
     // individual SRVs; leave headroom for the upcoming blocks and controller UI.
     enum uint maxTextures = 256;
@@ -29,6 +41,9 @@ final class Dx12Device : GraphicsDevice
     // visible vertices in one frame. Keep a bounded buffer, but size it for
     // the supported 12-chunk view rather than the old 3x3 prototype map.
     enum uint maxVertices = 2_000_000;
+    // directx-d 0.14 predates these Windows 10 DXGI constants.
+    enum uint swapChainAllowTearing = 0x800;
+    enum uint presentAllowTearing = 0x200;
 
     private HWND window;
     private uint width;
@@ -39,6 +54,8 @@ final class Dx12Device : GraphicsDevice
     private IDXGISwapChain3 swapChain;
     private ID3D12Device device;
     private ID3D12CommandQueue queue;
+    private ID3D12CommandAllocator[backBufferCount] allocators;
+    private ID3D12GraphicsCommandList[backBufferCount] commandLists;
     private ID3D12CommandAllocator allocator;
     private ID3D12GraphicsCommandList list;
     private ID3D12RootSignature rootSignature;
@@ -55,21 +72,27 @@ final class Dx12Device : GraphicsDevice
     private ID3D12DescriptorHeap srvHeap;
     private ID3D12Resource[backBufferCount] renderTargets;
     private ID3D12Resource depthBuffer;
-    private ID3D12Resource vertexBuffer;
+    private ID3D12Resource[backBufferCount] vertexBuffers;
     private ID3D12Resource blurCapture;
     private uint blurTextureIndex;
-    private D3D12_VERTEX_BUFFER_VIEW vertexView;
+    private D3D12_VERTEX_BUFFER_VIEW[backBufferCount] vertexViews;
     private ID3D12Resource[] textures;
+    private StaticMesh[ulong] staticMeshes;
+    private RetiredStaticMesh[] retiredStaticMeshes;
+    private ulong nextStaticMeshId = 1;
     private uint nextTexture;
 
     private ID3D12Fence fence;
     private ulong fenceValue = 1;
+    private ulong[backBufferCount] frameFenceValues;
     private HANDLE fenceEvent;
     private uint rtvStride;
     private uint srvStride;
     private D3D12_VIEWPORT viewport;
     private D3D12_RECT scissor;
     private bool vsync = true;
+    private bool tearingSupported;
+    private uint swapChainFlags;
 
     this(HWND window, uint width, uint height)
     {
@@ -88,13 +111,20 @@ final class Dx12Device : GraphicsDevice
             waitForGpu();
         if (fenceEvent !is null) CloseHandle(fenceEvent);
         foreach_reverse (ref texture; textures) if (texture !is null) texture.Release();
-        if (vertexBuffer !is null) vertexBuffer.Release();
+        foreach (id, ref mesh; staticMeshes)
+            if (mesh.resource !is null) mesh.resource.Release();
+        foreach (ref mesh; retiredStaticMeshes)
+            if (mesh.resource !is null) mesh.resource.Release();
+        foreach(ref vertexBuffer;vertexBuffers)
+            if(vertexBuffer !is null)vertexBuffer.Release();
         if (blurCapture !is null) blurCapture.Release();
         if (depthBuffer !is null) depthBuffer.Release();
         foreach (ref target; renderTargets) if (target !is null) target.Release();
         if (fence !is null) fence.Release();
-        if (list !is null) list.Release();
-        if (allocator !is null) allocator.Release();
+        foreach(ref commandList;commandLists)
+            if(commandList !is null)commandList.Release();
+        foreach(ref commandAllocator;allocators)
+            if(commandAllocator !is null)commandAllocator.Release();
         if (pipelineState !is null) pipelineState.Release();
         if (translucentPipelineState !is null) translucentPipelineState.Release();
         if (translucentCulledPipelineState !is null)
@@ -187,6 +217,67 @@ final class Dx12Device : GraphicsDevice
         return TextureHandle(nextTexture++);
     }
 
+    override MeshHandle uploadStaticMesh(const Vertex[] vertices)
+    {
+        if (vertices.length == 0)
+            return MeshHandle.init;
+        if (vertices.length > uint.max || vertices.length * Vertex.sizeof > uint.max)
+            throw new Exception("Static D3D12 mesh is too large");
+        const byteCount = cast(ulong) vertices.length * Vertex.sizeof;
+        auto bufferDesc = D3D12_RESOURCE_DESC(
+            D3D12_RESOURCE_DIMENSION_BUFFER, 0, byteCount, 1, 1, 1,
+            DXGI_FORMAT_UNKNOWN, DXGI_SAMPLE_DESC(1, 0),
+            D3D12_TEXTURE_LAYOUT_ROW_MAJOR, D3D12_RESOURCE_FLAG_NONE);
+        auto defaultHeap = D3D12_HEAP_PROPERTIES(
+            D3D12_HEAP_TYPE_DEFAULT, D3D12_CPU_PAGE_PROPERTY_UNKNOWN,
+            D3D12_MEMORY_POOL_UNKNOWN, 1, 1);
+        ID3D12Resource resident;
+        requireSuccess(device.CreateCommittedResource(&defaultHeap,
+            D3D12_HEAP_FLAG_NONE, &bufferDesc, D3D12_RESOURCE_STATE_COPY_DEST,
+            null, &IID_ID3D12Resource, &resident),
+            "Create resident terrain buffer");
+        scope(failure) if (resident !is null) resident.Release();
+
+        auto uploadHeap = D3D12_HEAP_PROPERTIES(
+            D3D12_HEAP_TYPE_UPLOAD, D3D12_CPU_PAGE_PROPERTY_UNKNOWN,
+            D3D12_MEMORY_POOL_UNKNOWN, 1, 1);
+        ID3D12Resource staging;
+        requireSuccess(device.CreateCommittedResource(&uploadHeap,
+            D3D12_HEAP_FLAG_NONE, &bufferDesc, D3D12_RESOURCE_STATE_GENERIC_READ,
+            null, &IID_ID3D12Resource, &staging),
+            "Create resident terrain staging buffer");
+        scope(exit) if (staging !is null) staging.Release();
+        if (!mdUploadBuffer(cast(void*) staging, vertices.ptr, byteCount))
+            throw new Exception("Unable to stage resident terrain mesh");
+
+        beginCommands();
+        list.CopyBufferRegion(resident, 0, staging, 0, byteCount);
+        transition(resident, D3D12_RESOURCE_STATE_COPY_DEST,
+            D3D12_RESOURCE_STATE_VERTEX_AND_CONSTANT_BUFFER);
+        executeCommands();
+        waitForGpu();
+
+        const id = nextStaticMeshId++;
+        staticMeshes[id] = StaticMesh(resident, resident.GetGPUVirtualAddress(),
+            cast(uint) byteCount);
+        return MeshHandle(id, cast(uint) vertices.length);
+    }
+
+    override void releaseStaticMesh(MeshHandle handle)
+    {
+        if (!handle.valid) return;
+        auto mesh = handle.id in staticMeshes;
+        if (mesh is null) return;
+        ulong lastUse;
+        foreach(value;frameFenceValues)if(value>lastUse)lastUse=value;
+        if(lastUse==0||fence.GetCompletedValue()>=lastUse)
+        {
+            if(mesh.resource !is null)mesh.resource.Release();
+        }
+        else retiredStaticMeshes~=RetiredStaticMesh(mesh.resource,lastUse);
+        staticMeshes.remove(handle.id);
+    }
+
     override TextureHandle menuBlurTexture() const { return TextureHandle(blurTextureIndex); }
 
     override void resize(uint resizedWidth, uint resizedHeight)
@@ -214,7 +305,7 @@ final class Dx12Device : GraphicsDevice
             }
         }
         requireSuccess(swapChain.ResizeBuffers(backBufferCount,
-            resizedWidth, resizedHeight, backBufferFormat, 0),
+            resizedWidth,resizedHeight,backBufferFormat,swapChainFlags),
             "Resize swap-chain buffers");
         width = resizedWidth;
         height = resizedHeight;
@@ -232,12 +323,16 @@ final class Dx12Device : GraphicsDevice
         const byteCount = frame.vertices.length * Vertex.sizeof;
         if (frame.vertices.length > maxVertices)
             throw new Exception("Frame exceeds dynamic vertex capacity");
-        if (byteCount != 0 && !mdUploadBuffer(cast(void*) vertexBuffer,
+        // Waiting occurs only when this particular back buffer is reused. With
+        // two swap-chain images this permits one complete CPU/GPU frame of
+        // overlap without allowing either upload buffer to be overwritten.
+        beginCommands();
+        if (byteCount != 0 && !mdUploadBuffer(
+            cast(void*)vertexBuffers[frameIndex],
             frame.vertices.ptr, byteCount))
             throw new Exception("Unable to upload dynamic vertex data");
-        vertexView.SizeInBytes = cast(uint) byteCount;
+        vertexViews[frameIndex].SizeInBytes = cast(uint) byteCount;
 
-        beginCommands();
         transition(renderTargets[frameIndex], D3D12_RESOURCE_STATE_PRESENT,
             D3D12_RESOURCE_STATE_RENDER_TARGET);
         auto rtv = cpuHandle(rtvHeap, frameIndex, rtvStride);
@@ -248,12 +343,32 @@ final class Dx12Device : GraphicsDevice
         mdClearRenderTargetView(cast(void*) list, rtv.ptr, skyColor.ptr);
         mdClearDepthStencilView(cast(void*) list, dsv.ptr);
         mdPrepareDraw(cast(void*) list, cast(void*) rootSignature, cast(void*) srvHeap,
-            cast(float) width, cast(float) height, vertexView.BufferLocation,
-            vertexView.StrideInBytes, vertexView.SizeInBytes);
+            cast(float) width, cast(float) height,
+            vertexViews[frameIndex].BufferLocation,
+            vertexViews[frameIndex].StrideInBytes,
+            vertexViews[frameIndex].SizeInBytes);
 
         DrawLayer activeLayer = DrawLayer.world;
+        ulong activeMeshId;
         foreach (draw; frame.draws)
         {
+            if (draw.meshId != activeMeshId)
+            {
+                activeMeshId = draw.meshId;
+                if (activeMeshId == 0)
+                    mdBindVertexBuffer(cast(void*) list,
+                        vertexViews[frameIndex].BufferLocation,
+                        vertexViews[frameIndex].StrideInBytes,
+                        vertexViews[frameIndex].SizeInBytes);
+                else
+                {
+                    auto resident = activeMeshId in staticMeshes;
+                    if (resident is null)
+                        throw new Exception("Draw references a released D3D12 mesh");
+                    mdBindVertexBuffer(cast(void*) list, resident.gpuAddress,
+                        Vertex.sizeof, resident.byteCount);
+                }
+            }
             if (draw.layer != activeLayer)
             {
                 activeLayer = draw.layer;
@@ -308,8 +423,10 @@ final class Dx12Device : GraphicsDevice
         transition(renderTargets[frameIndex], D3D12_RESOURCE_STATE_RENDER_TARGET,
             D3D12_RESOURCE_STATE_PRESENT);
         executeCommands();
-        requireSuccess(swapChain.Present(vsync ? 1 : 0, 0), "Present frame");
-        waitForGpu();
+        const presentFlags=!vsync&&tearingSupported?presentAllowTearing:0;
+        requireSuccess(swapChain.Present(vsync?1:0,presentFlags),
+            "Present frame");
+        signalFrame(frameIndex);
         frameIndex = swapChain.GetCurrentBackBufferIndex();
     }
 
@@ -351,7 +468,26 @@ private:
         swapDesc.SampleDesc.Count = 1;
         swapDesc.Windowed = TRUE;
         IDXGISwapChain baseSwap;
-        requireSuccess(factory.CreateSwapChain(queue, &swapDesc, &baseSwap), "Create swap chain");
+        // Opt into variable-rate presentation on modern Windows. Without the
+        // allow-tearing creation and Present flags, borderless/windowed flip
+        // chains may remain paced by the desktop's 60 Hz compositor even when
+        // the game's VSync option is disabled. Fall back cleanly on older or
+        // remote-display adapters that reject the flag.
+        swapDesc.Flags=swapChainAllowTearing;
+        auto swapResult=factory.CreateSwapChain(queue,&swapDesc,&baseSwap);
+        if(FAILED(swapResult))
+        {
+            swapDesc.Flags=0;
+            requireSuccess(factory.CreateSwapChain(queue,&swapDesc,&baseSwap),
+                "Create swap chain");
+            tearingSupported=false;
+            swapChainFlags=0;
+        }
+        else
+        {
+            tearingSupported=true;
+            swapChainFlags=swapChainAllowTearing;
+        }
         // directx-d exposes COM inheritance directly; retain the factory-owned
         // reference rather than performing a second interface write through void**.
         swapChain = cast(IDXGISwapChain3) baseSwap;
@@ -363,14 +499,24 @@ private:
         frameIndex = swapChain.GetCurrentBackBufferIndex();
 
         createHeapsAndTargets();
-        requireSuccess(device.CreateCommandAllocator(D3D12_COMMAND_LIST_TYPE_DIRECT,
-            &IID_ID3D12CommandAllocator, &allocator), "Create command allocator");
         createRootSignature();
         createPipelineState();
-        requireSuccess(device.CreateCommandList(0, D3D12_COMMAND_LIST_TYPE_DIRECT,
-            allocator, pipelineState, &IID_ID3D12GraphicsCommandList, cast(ID3D12CommandList*) &list),
-            "Create graphics command list");
-        requireSuccess(list.Close(), "Close initial command list");
+        foreach(index;0..backBufferCount)
+        {
+            requireSuccess(device.CreateCommandAllocator(
+                D3D12_COMMAND_LIST_TYPE_DIRECT,
+                &IID_ID3D12CommandAllocator,&allocators[index]),
+                "Create frame command allocator");
+            requireSuccess(device.CreateCommandList(0,
+                D3D12_COMMAND_LIST_TYPE_DIRECT,allocators[index],pipelineState,
+                &IID_ID3D12GraphicsCommandList,
+                cast(ID3D12CommandList*)&commandLists[index]),
+                "Create frame graphics command list");
+            requireSuccess(commandLists[index].Close(),
+                "Close initial frame command list");
+        }
+        allocator=allocators[frameIndex];
+        list=commandLists[frameIndex];
     }
 
     void createHeapsAndTargets()
@@ -509,12 +655,17 @@ private:
             D3D12_RESOURCE_DIMENSION_BUFFER, 0, bytes, 1, 1, 1,
             DXGI_FORMAT_UNKNOWN, DXGI_SAMPLE_DESC(1, 0), D3D12_TEXTURE_LAYOUT_ROW_MAJOR,
             D3D12_RESOURCE_FLAG_NONE);
-        requireSuccess(device.CreateCommittedResource(&heap, D3D12_HEAP_FLAG_NONE, &desc,
-            D3D12_RESOURCE_STATE_GENERIC_READ, null, &IID_ID3D12Resource,
-            &vertexBuffer), "Create dynamic vertex buffer");
-        vertexView.BufferLocation = vertexBuffer.GetGPUVirtualAddress();
-        vertexView.StrideInBytes = Vertex.sizeof;
-        vertexView.SizeInBytes = cast(uint) bytes;
+        foreach(index;0..backBufferCount)
+        {
+            requireSuccess(device.CreateCommittedResource(&heap,
+                D3D12_HEAP_FLAG_NONE,&desc,D3D12_RESOURCE_STATE_GENERIC_READ,
+                null,&IID_ID3D12Resource,&vertexBuffers[index]),
+                "Create frame vertex buffer");
+            vertexViews[index].BufferLocation=
+                vertexBuffers[index].GetGPUVirtualAddress();
+            vertexViews[index].StrideInBytes=Vertex.sizeof;
+            vertexViews[index].SizeInBytes=cast(uint)bytes;
+        }
 
         requireSuccess(device.CreateFence(0, D3D12_FENCE_FLAG_NONE, &IID_ID3D12Fence,
             &fence), "Create GPU fence");
@@ -557,6 +708,10 @@ private:
 
     void beginCommands()
     {
+        waitForFrame(frameIndex);
+        collectRetiredStaticMeshes();
+        allocator=allocators[frameIndex];
+        list=commandLists[frameIndex];
         requireSuccess(allocator.Reset(), "Reset command allocator");
         requireSuccess(list.Reset(allocator, pipelineState), "Reset command list");
     }
@@ -583,6 +738,38 @@ private:
             requireSuccess(fence.SetEventOnCompletion(value, fenceEvent), "Arm GPU fence event");
             WaitForSingleObject(fenceEvent, INFINITE);
         }
+    }
+
+    void waitForFrame(uint index)
+    {
+        const value=frameFenceValues[index];
+        if(value==0||fence.GetCompletedValue()>=value)return;
+        requireSuccess(fence.SetEventOnCompletion(value,fenceEvent),
+            "Arm frame fence event");
+        WaitForSingleObject(fenceEvent,INFINITE);
+    }
+
+    void signalFrame(uint index)
+    {
+        const value=fenceValue++;
+        requireSuccess(queue.Signal(fence,value),"Signal frame fence");
+        frameFenceValues[index]=value;
+    }
+
+    void collectRetiredStaticMeshes()
+    {
+        const completed=fence.GetCompletedValue();
+        size_t write;
+        foreach(index;0..retiredStaticMeshes.length)
+        {
+            auto mesh=retiredStaticMeshes[index];
+            if(mesh.fenceValue<=completed)
+            {
+                if(mesh.resource !is null)mesh.resource.Release();
+            }
+            else retiredStaticMeshes[write++]=mesh;
+        }
+        retiredStaticMeshes.length=write;
     }
 }
 

@@ -22,6 +22,7 @@
 #include <fstream>
 #include <stdexcept>
 #include <string>
+#include <unordered_map>
 #include <vector>
 
 namespace {
@@ -36,6 +37,7 @@ struct Vertex {
 };
 
 struct Draw {
+    uint64_t meshId;
     uint32_t firstVertex;
     uint32_t vertexCount;
     uint32_t textureIndex;
@@ -43,6 +45,7 @@ struct Draw {
     float transform[16];
     float fog[12];
 };
+static_assert(sizeof(Draw) == 136, "Vulkan Draw ABI changed unexpectedly");
 
 struct PushConstants {
     float transform[16];
@@ -54,6 +57,12 @@ struct Texture {
     VkDeviceMemory memory = VK_NULL_HANDLE;
     VkImageView view = VK_NULL_HANDLE;
     VkDescriptorSet set = VK_NULL_HANDLE;
+};
+
+struct StaticMesh {
+    VkBuffer buffer = VK_NULL_HANDLE;
+    VkDeviceMemory memory = VK_NULL_HANDLE;
+    uint32_t vertexCount = 0;
 };
 
 void copyError(char* output, uint32_t capacity, const std::string& text) {
@@ -140,6 +149,9 @@ struct Context {
     VkBuffer vertexBuffer = VK_NULL_HANDLE;
     VkDeviceMemory vertexMemory = VK_NULL_HANDLE;
     void* mappedVertices = nullptr;
+    std::unordered_map<uint64_t, StaticMesh> staticMeshes;
+    std::vector<StaticMesh> retiredStaticMeshes;
+    uint64_t nextStaticMeshId = 1;
     std::vector<Texture> textures;
     uint32_t blurTexture = 0;
     bool blurInitialized = false;
@@ -331,6 +343,68 @@ struct Context {
             writes.data(), 0, nullptr);
         textures.push_back(texture);
         return static_cast<uint32_t>(textures.size() - 1);
+    }
+
+    uint64_t uploadStaticMesh(const Vertex* vertices, uint32_t vertexCount) {
+        if (!vertices || vertexCount == 0)
+            throw std::runtime_error("Vulkan static mesh has no vertices");
+        require(vkWaitForFences(device, 1, &frameFence, VK_TRUE, UINT64_MAX),
+            "vkWaitForFences(static mesh upload)");
+        collectRetiredStaticMeshes();
+        const VkDeviceSize bytes = VkDeviceSize(vertexCount) * sizeof(Vertex);
+        VkBuffer staging = VK_NULL_HANDLE;
+        VkDeviceMemory stagingMemory = VK_NULL_HANDLE;
+        createBuffer(bytes, VK_BUFFER_USAGE_TRANSFER_SRC_BIT,
+            VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT | VK_MEMORY_PROPERTY_HOST_COHERENT_BIT,
+            staging, stagingMemory);
+        try {
+            void* mapped = nullptr;
+            require(vkMapMemory(device, stagingMemory, 0, bytes, 0, &mapped),
+                "vkMapMemory(static mesh)");
+            std::memcpy(mapped, vertices, static_cast<size_t>(bytes));
+            vkUnmapMemory(device, stagingMemory);
+
+            StaticMesh mesh;
+            mesh.vertexCount = vertexCount;
+            createBuffer(bytes,
+                VK_BUFFER_USAGE_TRANSFER_DST_BIT | VK_BUFFER_USAGE_VERTEX_BUFFER_BIT,
+                VK_MEMORY_PROPERTY_DEVICE_LOCAL_BIT, mesh.buffer, mesh.memory);
+            try {
+                beginCommands();
+                VkBufferCopy copy{0, 0, bytes};
+                vkCmdCopyBuffer(command, staging, mesh.buffer, 1, &copy);
+                submitAndWait();
+            } catch (...) {
+                if (mesh.buffer) vkDestroyBuffer(device, mesh.buffer, nullptr);
+                if (mesh.memory) vkFreeMemory(device, mesh.memory, nullptr);
+                throw;
+            }
+            const uint64_t id = nextStaticMeshId++;
+            staticMeshes.emplace(id, mesh);
+            vkDestroyBuffer(device, staging, nullptr);
+            vkFreeMemory(device, stagingMemory, nullptr);
+            return id;
+        } catch (...) {
+            if (staging) vkDestroyBuffer(device, staging, nullptr);
+            if (stagingMemory) vkFreeMemory(device, stagingMemory, nullptr);
+            throw;
+        }
+    }
+
+    void releaseStaticMesh(uint64_t id) {
+        if (id == 0) return;
+        const auto found = staticMeshes.find(id);
+        if (found == staticMeshes.end()) return;
+        retiredStaticMeshes.push_back(found->second);
+        staticMeshes.erase(found);
+    }
+
+    void collectRetiredStaticMeshes() {
+        for (auto& mesh : retiredStaticMeshes) {
+            if (mesh.buffer) vkDestroyBuffer(device, mesh.buffer, nullptr);
+            if (mesh.memory) vkFreeMemory(device, mesh.memory, nullptr);
+        }
+        retiredStaticMeshes.clear();
     }
 
     void createBlurCapture() {
@@ -750,6 +824,7 @@ struct Context {
             throw std::runtime_error("Vulkan frame exceeds dynamic vertex capacity");
         require(vkWaitForFences(device, 1, &frameFence, VK_TRUE, UINT64_MAX),
             "vkWaitForFences(frame)");
+        collectRetiredStaticMeshes();
         require(vkResetFences(device, 1, &frameFence),
             "vkResetFences(frame)");
         if (vertexCount) std::memcpy(mappedVertices, vertices,
@@ -783,7 +858,7 @@ struct Context {
         vkCmdSetViewport(command, 0, 1, &viewport);
         vkCmdSetScissor(command, 0, 1, &scissor);
         const VkDeviceSize offset = 0;
-        vkCmdBindVertexBuffers(command, 0, 1, &vertexBuffer, &offset);
+        VkBuffer activeVertexBuffer = VK_NULL_HANDLE;
         uint32_t activePipeline = UINT32_MAX;
         uint32_t previousLayer = UINT32_MAX;
         bool overlayPass = false;
@@ -791,6 +866,21 @@ struct Context {
             const Draw& draw = draws[i];
             if (draw.textureIndex >= textures.size())
                 throw std::runtime_error("Vulkan draw references an unknown texture");
+            VkBuffer requestedVertexBuffer = vertexBuffer;
+            if (draw.meshId != 0) {
+                const auto resident = staticMeshes.find(draw.meshId);
+                if (resident == staticMeshes.end())
+                    throw std::runtime_error("Vulkan draw references a released mesh");
+                if (draw.firstVertex + draw.vertexCount
+                        > resident->second.vertexCount)
+                    throw std::runtime_error("Vulkan resident draw is out of bounds");
+                requestedVertexBuffer = resident->second.buffer;
+            }
+            if (requestedVertexBuffer != activeVertexBuffer) {
+                vkCmdBindVertexBuffers(command, 0, 1,
+                    &requestedVertexBuffer, &offset);
+                activeVertexBuffer = requestedVertexBuffer;
+            }
             if (draw.layer == 5 && !overlayPass) {
                 vkCmdEndRenderPass(command);
                 transition(swapImages[imageIndex], VK_IMAGE_LAYOUT_PRESENT_SRC_KHR,
@@ -1110,6 +1200,14 @@ struct Context {
             if (texture.memory) vkFreeMemory(device, texture.memory, nullptr);
         }
         textures.clear();
+        for (auto& entry : staticMeshes) {
+            if (entry.second.buffer)
+                vkDestroyBuffer(device, entry.second.buffer, nullptr);
+            if (entry.second.memory)
+                vkFreeMemory(device, entry.second.memory, nullptr);
+        }
+        staticMeshes.clear();
+        collectRetiredStaticMeshes();
         if (mappedVertices) vkUnmapMemory(device, vertexMemory);
         if (vertexBuffer) vkDestroyBuffer(device, vertexBuffer, nullptr);
         if (vertexMemory) vkFreeMemory(device, vertexMemory, nullptr);
@@ -1162,6 +1260,29 @@ MCD_EXPORT int mdVkUploadTexture(void* context, const uint8_t* rgba,
     uint32_t errorCapacity) {
     try {
         *index = static_cast<Context*>(context)->uploadTexture(rgba, width, height);
+        return 1;
+    } catch (const std::exception& failure) {
+        copyError(error, errorCapacity, failure.what());
+        return 0;
+    }
+}
+
+MCD_EXPORT int mdVkUploadStaticMesh(void* context, const Vertex* vertices,
+    uint32_t vertexCount, uint64_t* id, char* error, uint32_t errorCapacity) {
+    try {
+        *id = static_cast<Context*>(context)->uploadStaticMesh(vertices,
+            vertexCount);
+        return 1;
+    } catch (const std::exception& failure) {
+        copyError(error, errorCapacity, failure.what());
+        return 0;
+    }
+}
+
+MCD_EXPORT int mdVkReleaseStaticMesh(void* context, uint64_t id,
+    char* error, uint32_t errorCapacity) {
+    try {
+        static_cast<Context*>(context)->releaseStaticMesh(id);
         return 1;
     } catch (const std::exception& failure) {
         copyError(error, errorCapacity, failure.what());

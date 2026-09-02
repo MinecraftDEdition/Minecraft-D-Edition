@@ -1,7 +1,8 @@
 module minecraftd.client.render.game_renderer;
 
-import core.stdc.math : floorf, sinf, sqrtf;
+import core.stdc.math : fabsf, floorf, sinf, sqrtf, tanf;
 import std.algorithm : sort;
+import std.format : format;
 version (Windows)
     import core.sys.windows.windows : HWND;
 
@@ -19,7 +20,7 @@ import minecraftd.client.render.entity_shadow_renderer : EntityShadowRenderer,
     EntityShadowStyle;
 import minecraftd.client.render.hud_renderer : HudRenderer, HudTextureSet;
 import minecraftd.client.render.mesh : Color, DrawLayer, FogSettings,
-    FrameMesh, Vertex, appendQuad;
+    FrameMesh, MeshHandle, Vertex, appendQuad;
 import minecraftd.common.math3d : Mat4, Vec2, Vec3, clamp, cross,
     forwardFromYawPitch, lerp;
 import minecraftd.client.render.player_renderer : PlayerRenderer, SkinLayers;
@@ -50,6 +51,7 @@ import minecraftd.game.entity.player : Player;
 version (Windows)
     import minecraftd.platform.windows.dx12.device : Dx12Device;
 import minecraftd.platform.desktop.vulkan.device : VulkanDevice;
+import minecraftd.platform.clock : monotonicSeconds;
 import minecraftd.world.block : BlockId, bareHandDestroyProgress,
     isNetherPortal, isWater, isWaterSource;
 import minecraftd.world.world : BlockHit, World;
@@ -64,12 +66,36 @@ enum CameraPerspective : ubyte
     thirdPersonFront,
 }
 
-private struct RenderChunkGeometry
+private struct ResidentRange
+{
+    uint firstVertex;
+    uint vertexCount;
+    uint textureIndex;
+}
+
+private struct RenderChunkSection
 {
     Vertex[][uint] blocks;
     Vertex[] portals;
     WaterGeometry water;
+    ResidentRange[] opaqueRanges;
+    ResidentRange glassRange;
+    ResidentRange portalRange;
+    ResidentRange waterUndersideRange;
+    ResidentRange waterSurfaceRange;
+    ResidentRange waterWallsRange;
+    int minimumY;
+    int maximumY;
+}
+
+private struct RenderChunkGeometry
+{
+    RenderChunkSection[] sections;
+    MeshHandle mesh;
+    uint vertexCount;
     uint revision;
+    int minimumY;
+    int maximumY;
 }
 
 /// Coordinates the same broad passes as Minecraft's client renderer: sky,
@@ -156,6 +182,10 @@ final class GameRenderer
     private int netherAmbienceTicks;
     private int underwaterAmbienceTicks;
     private uint waterDisplayTicks;
+    private float lastMeshMilliseconds;
+    private float lastAssemblyMilliseconds;
+    private float lastGraphicsMilliseconds;
+    private size_t lastResidentVertices;
 
     this(void* window, uint width, uint height, string projectRoot, World world,
         OptionsMenuState options, GraphicsApi graphicsApi = GraphicsApi.directX12)
@@ -390,6 +420,7 @@ final class GameRenderer
         // crash during a normal WM_CLOSE teardown.
         if (graphics !is null)
         {
+            clearChunkMeshes();
             destroy(graphics);
             graphics = null;
         }
@@ -521,7 +552,7 @@ final class GameRenderer
             const gamma=options.number("gamma",0.5f);
             if(smooth!=meshSmoothLighting||gamma!=meshGamma)
             {
-                chunkMeshes.clear();
+                clearChunkMeshes();
                 meshJobActive=false;
             }
             meshSmoothLighting=smooth;meshGamma=gamma;
@@ -865,7 +896,7 @@ final class GameRenderer
             sounds.playNetherAmbience();
             netherAmbienceTicks = 3600;
         }
-        chunkMeshes.clear();
+        clearChunkMeshes();
         meshJobActive=false;
         cancelMining();
     }
@@ -881,8 +912,10 @@ final class GameRenderer
         int menuMouseY = 0, bool canPublish = false,
         const DeathScreenState deathState = null, int deathMouseX = 0,
         int deathMouseY = 0,const InventoryMenuState inventoryState=null,
-        int inventoryMouseX=0,int inventoryMouseY=0)
+        int inventoryMouseX=0,int inventoryMouseY=0,
+        bool debugVisible=false,float debugFps=0.0f)
     {
+        const renderStarted=monotonicSeconds();
         const frameSeconds = elapsedSeconds >= previousElapsedSeconds
             ? elapsedSeconds - previousElapsedSeconds : 0.0f;
         previousElapsedSeconds = elapsedSeconds;
@@ -890,6 +923,8 @@ final class GameRenderer
         // Only one 16-block-high chunk section is meshed per presented frame.
         // This keeps procedural terrain work out of a single long frame.
         syncChunkMeshes(player.position,player.yaw,1);
+        const meshingFinished=monotonicSeconds();
+        lastMeshMilliseconds=cast(float)((meshingFinished-renderStarted)*1000.0);
         frame.clear(player.dimension == DimensionId.nether
             ? Color(0.20f,0.03f,0.03f,1.0f)
             : Color(0.48f,0.70f,1.0f,1.0f));
@@ -965,23 +1000,32 @@ final class GameRenderer
                 clouds.descriptorIndex, viewProjection, DrawLayer.world, cloudFog);
 
         admittedRenderChunks.length=0;
-        enum size_t opaqueVertexBudget=1_350_000;
+        lastResidentVertices=0;
         foreach(coordinate;visibleChunkCoordinates(camera))
         {
             auto chunkGeometry=coordinate in chunkMeshes;
-            if(chunkGeometry is null)continue;
-            size_t chunkVertices;
-            foreach(textureIndex,geometry;chunkGeometry.blocks)
-                if(textureIndex!=blockTextures.glass)
-                    chunkVertices+=geometry.length;
-            // Admit complete chunks nearest-first. The previous per-texture
-            // cutoff produced terrain with individual materials missing.
-            if(frame.vertices.length+chunkVertices>opaqueVertexBudget)break;
+            if(chunkGeometry is null||!chunkGeometry.mesh.valid)continue;
             admittedRenderChunks~=coordinate;
-            foreach(textureIndex,geometry;chunkGeometry.blocks)
-                if(textureIndex!=blockTextures.glass)
-                    frame.append(geometry,textureIndex,viewProjection,
+        }
+        // Terrain vertices remain in device-local buffers after a chunk is
+        // meshed. A frame now records only small section draw ranges instead
+        // of rebuilding and copying close to a million vertices every tick.
+        foreach(coordinate;admittedRenderChunks)
+        {
+            auto chunkGeometry=coordinate in chunkMeshes;
+            if(chunkGeometry is null)continue;
+            foreach(section;chunkGeometry.sections)
+            {
+                if(!sectionIntersectsFrustum(camera,coordinate,
+                    section.minimumY,section.maximumY))continue;
+                foreach(range;section.opaqueRanges)
+                {
+                    frame.appendResident(chunkGeometry.mesh,range.firstVertex,
+                        range.vertexCount,range.textureIndex,viewProjection,
                         DrawLayer.world,terrainFog);
+                    lastResidentVertices+=range.vertexCount;
+                }
+            }
         }
         const portalTexture=portalFrames.length
             ?portalFrames[cast(size_t)(elapsedSeconds*20.0f)%portalFrames.length]
@@ -1289,7 +1333,14 @@ final class GameRenderer
                 hud,hudFont,fontTexture,partialTick,players,player,
                 accountSkin.descriptorIndex,elapsedSeconds*20.0f,
                 accountSkinModel=="slim");
+        lastAssemblyMilliseconds=cast(float)((monotonicSeconds()
+            -meshingFinished)*1000.0);
+        if(debugVisible)
+            appendDebugOverlay(player,debugFps);
+        const graphicsStarted=monotonicSeconds();
         graphics.render(frame);
+        lastGraphicsMilliseconds=cast(float)((monotonicSeconds()
+            -graphicsStarted)*1000.0);
     }
 
 private:
@@ -1394,38 +1445,76 @@ private:
     void appendTranslucentWorld(const Camera camera,uint portalTexture,
         uint stillTexture,uint flowTexture,Mat4 viewProjection,FogSettings fog)
     {
-        // Select complete translucent chunks nearest-first to guarantee local
-        // water/glass/portal visibility, then submit that set back-to-front.
-        enum size_t safeFrameVertexBudget=1_750_000;
-        size_t selectedVertices=frame.vertices.length;
-        ChunkCoordinate[] selected;
-        foreach(coordinate;admittedRenderChunks)
+        // Chunk order is back-to-front for alpha blending; section order is
+        // reversed as well. All ranges point at the same retained chunk buffer.
+        foreach_reverse(index;0..admittedRenderChunks.length)
         {
+            const coordinate=admittedRenderChunks[index];
             auto geometry=coordinate in chunkMeshes;
             if(geometry is null)continue;
-            size_t count=geometry.portals.length+geometry.water.underside.length
-                +geometry.water.surface.length+geometry.water.walls.length;
-            if(auto glass=blockTextures.glass in geometry.blocks)
-                count+=glass.length;
-            if(selectedVertices+count>safeFrameVertexBudget)break;
-            selectedVertices+=count;selected~=coordinate;
-        }
-        foreach_reverse(index;0..selected.length)
-        {
-            auto geometry=selected[index] in chunkMeshes;
-            if(geometry is null)continue;
-            frame.append(geometry.portals,portalTexture,viewProjection,
-                DrawLayer.translucent,fog);
-            if(auto glass=blockTextures.glass in geometry.blocks)
-                frame.append(*glass,blockTextures.glass,viewProjection,
+            foreach_reverse(sectionIndex;0..geometry.sections.length)
+            {
+                const section=geometry.sections[sectionIndex];
+                if(!sectionIntersectsFrustum(camera,coordinate,
+                    section.minimumY,section.maximumY))continue;
+                appendResidentRange(geometry.mesh,section.portalRange,
+                    portalTexture,viewProjection,DrawLayer.translucent,fog);
+                appendResidentRange(geometry.mesh,section.glassRange,
+                    blockTextures.glass,viewProjection,
                     DrawLayer.translucentCulled,fog);
-            frame.append(geometry.water.underside,stillTexture,viewProjection,
-                DrawLayer.translucent,fog);
-            frame.append(geometry.water.surface,stillTexture,viewProjection,
-                DrawLayer.translucent,fog);
-            frame.append(geometry.water.walls,flowTexture,viewProjection,
-                DrawLayer.translucent,fog);
+                appendResidentRange(geometry.mesh,section.waterUndersideRange,
+                    stillTexture,viewProjection,DrawLayer.translucent,fog);
+                appendResidentRange(geometry.mesh,section.waterSurfaceRange,
+                    stillTexture,viewProjection,DrawLayer.translucent,fog);
+                appendResidentRange(geometry.mesh,section.waterWallsRange,
+                    flowTexture,viewProjection,DrawLayer.translucent,fog);
+            }
         }
+    }
+
+    void appendResidentRange(MeshHandle mesh,ResidentRange range,uint texture,
+        Mat4 transform,DrawLayer layer,FogSettings fog)
+    {
+        if(range.vertexCount==0)return;
+        frame.appendResident(mesh,range.firstVertex,range.vertexCount,texture,
+            transform,layer,fog);
+        lastResidentVertices+=range.vertexCount;
+    }
+
+    bool sectionIntersectsFrustum(const Camera camera,
+        ChunkCoordinate coordinate,int minimumY,int maximumY) const
+    {
+        const forward=forwardFromYawPitch(camera.yaw,camera.pitch);
+        const yawForward=forwardFromYawPitch(camera.yaw,0);
+        const right=Vec3(yawForward.z,0,-yawForward.x);
+        const up=cross(forward,right).normalized();
+        const verticalTangent=tanf(camera.fovDegrees*0.5f
+            *3.14159265f/180.0f);
+        const horizontalTangent=verticalTangent
+            *cast(float)width/cast(float)(height==0?1:height);
+        const upper=maximumY>=minimumY?maximumY+1:minimumY+1;
+        const center=Vec3(coordinate.x*16+8,(minimumY+upper)*0.5f,
+            coordinate.z*16+8);
+        const extents=Vec3(8,(upper-minimumY)*0.5f,8);
+        const relative=center-camera.position;
+        const depth=relative.x*forward.x+relative.y*forward.y
+            +relative.z*forward.z;
+        const side=relative.x*right.x+relative.y*right.y
+            +relative.z*right.z;
+        const vertical=relative.x*up.x+relative.y*up.y
+            +relative.z*up.z;
+        const depthRadius=fabsf(forward.x)*extents.x
+            +fabsf(forward.y)*extents.y+fabsf(forward.z)*extents.z;
+        const sideRadius=fabsf(right.x)*extents.x
+            +fabsf(right.y)*extents.y+fabsf(right.z)*extents.z;
+        const verticalRadius=fabsf(up.x)*extents.x
+            +fabsf(up.y)*extents.y+fabsf(up.z)*extents.z;
+        if(depth+depthRadius<0.05f)return false;
+        if(fabsf(side)-depth*horizontalTangent
+            >sideRadius+depthRadius*horizontalTangent)return false;
+        if(fabsf(vertical)-depth*verticalTangent
+            >verticalRadius+depthRadius*verticalTangent)return false;
+        return true;
     }
 
     ChunkCoordinate[] visibleChunkCoordinates(const Camera camera) const
@@ -1436,24 +1525,45 @@ private:
         if(distance>12)distance=12;
         const centerX=chunkCoordinate(cast(int)floorf(camera.position.x));
         const centerZ=chunkCoordinate(cast(int)floorf(camera.position.z));
-        const facing=forwardFromYawPitch(camera.yaw,0);
+        const forward=forwardFromYawPitch(camera.yaw,camera.pitch);
+        // Derive right from yaw rather than cross(up,forward), which becomes
+        // degenerate while looking exactly up or down.
+        const yawForward=forwardFromYawPitch(camera.yaw,0);
+        const right=Vec3(yawForward.z,0,-yawForward.x);
+        const up=cross(forward,right).normalized();
+        const verticalTangent=tanf(camera.fovDegrees*0.5f
+            *3.14159265f/180.0f);
+        const horizontalTangent=verticalTangent
+            *cast(float)width/cast(float)height;
         foreach(coordinate,geometry;chunkMeshes)
         {
             int dx=coordinate.x-centerX, dz=coordinate.z-centerZ;
             int ax=dx<0?-dx:dx,az=dz<0?-dz:dz;
             if(ax>distance||az>distance)continue;
-            if(ax>1||az>1)
-            {
-                const target=Vec3(coordinate.x*16+8-camera.position.x,0,
-                    coordinate.z*16+8-camera.position.z);
-                const length=sqrtf(target.lengthSquared());
-                if(length>0.001f)
-                {
-                    const dot=(target.x*facing.x+target.z*facing.z)/length;
-                    const padding=12.0f/length;
-                    if(dot+padding<-0.12f)continue;
-                }
-            }
+            const minimumY=geometry.minimumY;
+            const maximumY=geometry.maximumY>=minimumY
+                ?geometry.maximumY+1:minimumY+1;
+            const center=Vec3(coordinate.x*16+8,
+                (minimumY+maximumY)*0.5f,coordinate.z*16+8);
+            const extents=Vec3(8,(maximumY-minimumY)*0.5f,8);
+            const relative=center-camera.position;
+            const depth=relative.x*forward.x+relative.y*forward.y
+                +relative.z*forward.z;
+            const side=relative.x*right.x+relative.y*right.y
+                +relative.z*right.z;
+            const vertical=relative.x*up.x+relative.y*up.y
+                +relative.z*up.z;
+            const depthRadius=fabsf(forward.x)*extents.x
+                +fabsf(forward.y)*extents.y+fabsf(forward.z)*extents.z;
+            const sideRadius=fabsf(right.x)*extents.x
+                +fabsf(right.y)*extents.y+fabsf(right.z)*extents.z;
+            const verticalRadius=fabsf(up.x)*extents.x
+                +fabsf(up.y)*extents.y+fabsf(up.z)*extents.z;
+            if(depth+depthRadius<0.05f)continue;
+            if(fabsf(side)-depth*horizontalTangent
+                >sideRadius+depthRadius*horizontalTangent)continue;
+            if(fabsf(vertical)-depth*verticalTangent
+                >verticalRadius+depthRadius*verticalTangent)continue;
             result~=coordinate;
         }
         sort!((a,b){
@@ -1464,12 +1574,43 @@ private:
         return result;
     }
 
+    void appendDebugOverlay(const LocalPlayer player,float fps)
+    {
+        int scale=1;
+        while(scale<8&&width/(scale+1)>=320&&height/(scale+1)>=240)++scale;
+        const logicalWidth=cast(float)width/scale;
+        const logicalHeight=cast(float)height/scale;
+        const milliseconds=fps>0.001f?1000.0f/fps:0.0f;
+        const loaded=world.loadedChunkCoordinates().length;
+        const lines=[
+            format("Minecraft: D Edition  %.0f fps (%.1f ms)",fps,milliseconds),
+            format("XYZ: %.2f / %.2f / %.2f",player.position.x,
+                player.position.y,player.position.z),
+            format("Chunks: %s rendered / %s meshed / %s loaded",
+                admittedRenderChunks.length,chunkMeshes.length,loaded),
+            format("Vertices: %s resident / %s dynamic  Draw calls: %s",
+                lastResidentVertices,frame.vertices.length,frame.draws.length),
+            format("CPU mesh: %.1f ms  frame: %.1f ms  graphics: %.1f ms",
+                lastMeshMilliseconds,lastAssemblyMilliseconds,
+                lastGraphicsMilliseconds),
+        ];
+        foreach(index,line;lines)
+            frame.append(hudFont.buildText(line,4,4+cast(int)index*10,
+                    logicalWidth,logicalHeight,Color(1,1,1,1)),
+                fontTexture,Mat4.identity(),DrawLayer.overlay);
+    }
+
     void syncChunkMeshes(Vec3 position,float yaw,int maximumSections)
     {
         ChunkCoordinate[] stale;
         foreach(coordinate,geometry;chunkMeshes)
             if(!world.hasChunk(coordinate.x,coordinate.z))stale~=coordinate;
-        foreach(coordinate;stale)chunkMeshes.remove(coordinate);
+        foreach(coordinate;stale)
+        {
+            auto geometry=coordinate in chunkMeshes;
+            if(geometry !is null)graphics.releaseStaticMesh(geometry.mesh);
+            chunkMeshes.remove(coordinate);
+        }
 
         if(meshJobActive&&(!world.hasChunk(meshJobCoordinate.x,
             meshJobCoordinate.z)||world.chunkRevision(meshJobCoordinate.x,
@@ -1504,6 +1645,8 @@ private:
                 {
                     RenderChunkGeometry empty;
                     empty.revision=world.chunkRevision(best.x,best.z);
+                    if(auto previous=best in chunkMeshes)
+                        graphics.releaseStaticMesh(previous.mesh);
                     chunkMeshes[best]=empty;
                     continue;
                 }
@@ -1513,21 +1656,22 @@ private:
                 meshJobMaximumY=loaded.maximumOccupiedY();
                 meshJobRevision=world.chunkRevision(best.x,best.z);
                 meshJobGeometry=RenderChunkGeometry.init;
+                meshJobGeometry.minimumY=meshJobNextY;
+                meshJobGeometry.maximumY=meshJobMaximumY;
             }
 
             int sectionMaximum=meshJobNextY+15;
             if(sectionMaximum>meshJobMaximumY)sectionMaximum=meshJobMaximumY;
-            const blockPart=blocks.buildChunkRange(blockTextures,
+            RenderChunkSection section;
+            section.minimumY=meshJobNextY;
+            section.maximumY=sectionMaximum;
+            section.blocks=blocks.buildChunkRange(blockTextures,
                 meshJobCoordinate,meshJobNextY,sectionMaximum);
-            foreach(texture,geometry;blockPart)
-                meshJobGeometry.blocks[texture]~=geometry;
-            meshJobGeometry.portals~=blocks.buildPortalsChunkRange(
+            section.portals=blocks.buildPortalsChunkRange(
                 meshJobCoordinate,meshJobNextY,sectionMaximum);
-            const waterPart=blocks.buildWaterChunkRange(meshJobCoordinate,
+            section.water=blocks.buildWaterChunkRange(meshJobCoordinate,
                 meshJobNextY,sectionMaximum);
-            meshJobGeometry.water.surface~=waterPart.surface;
-            meshJobGeometry.water.walls~=waterPart.walls;
-            meshJobGeometry.water.underside~=waterPart.underside;
+            meshJobGeometry.sections~=section;
             meshJobNextY=sectionMaximum+1;
             if(meshJobNextY>meshJobMaximumY)
             {
@@ -1535,11 +1679,68 @@ private:
                     meshJobCoordinate.z)==meshJobRevision)
                 {
                     meshJobGeometry.revision=meshJobRevision;
+                    finalizeChunkGeometry(meshJobGeometry);
+                    if(auto previous=meshJobCoordinate in chunkMeshes)
+                        graphics.releaseStaticMesh(previous.mesh);
                     chunkMeshes[meshJobCoordinate]=meshJobGeometry;
                 }
                 meshJobActive=false;
             }
         }
+    }
+
+    void finalizeChunkGeometry(ref RenderChunkGeometry geometry)
+    {
+        size_t vertexCount;
+        foreach(section;geometry.sections)
+        {
+            foreach(unused,vertices;section.blocks)vertexCount+=vertices.length;
+            vertexCount+=section.portals.length+section.water.underside.length
+                +section.water.surface.length+section.water.walls.length;
+        }
+        Vertex[] packed;
+        packed.reserve(vertexCount);
+        foreach(ref section;geometry.sections)
+        {
+            section.opaqueRanges.length=0;
+            section.glassRange=ResidentRange.init;
+            foreach(texture,vertices;section.blocks)
+            {
+                ResidentRange range;
+                appendPackedRange(packed,range,vertices,texture);
+                if(texture==blockTextures.glass)section.glassRange=range;
+                else if(range.vertexCount)section.opaqueRanges~=range;
+            }
+            appendPackedRange(packed,section.portalRange,section.portals,
+                blockTextures.netherPortal);
+            appendPackedRange(packed,section.waterUndersideRange,
+                section.water.underside,blockTextures.waterStill);
+            appendPackedRange(packed,section.waterSurfaceRange,
+                section.water.surface,blockTextures.waterStill);
+            appendPackedRange(packed,section.waterWallsRange,
+                section.water.walls,blockTextures.waterFlow);
+        }
+        const replacement=graphics.uploadStaticMesh(packed);
+        const previous=geometry.mesh;
+        geometry.mesh=replacement;
+        geometry.vertexCount=cast(uint)packed.length;
+        if(previous.valid)graphics.releaseStaticMesh(previous);
+    }
+
+    static void appendPackedRange(ref Vertex[] packed,ref ResidentRange range,
+        const(Vertex)[] source,uint texture)
+    {
+        range=ResidentRange(cast(uint)packed.length,cast(uint)source.length,
+            texture);
+        packed~=source;
+    }
+
+    void clearChunkMeshes()
+    {
+        if(graphics !is null)
+            foreach(coordinate,geometry;chunkMeshes)
+                graphics.releaseStaticMesh(geometry.mesh);
+        chunkMeshes.clear();
     }
 
     void appendHeldBlock(ItemStack stack,Vec3 position,float bodyYawDegrees,
@@ -1567,12 +1768,20 @@ private:
         // touching a differently textured neighbor face sharing its boundary
         // (most notably an opaque block immediately behind glass).
         const blockModel=blocks.buildItem(oldBlock,blockTextures);
+        bool changed;
         foreach(texture,unused;blockModel)
         {
-            auto geometry=texture in cached.blocks;
-            if(geometry is null)continue;
-            removeBlockFaceQuads(*geometry,x,y,z);
+            foreach(ref section;cached.sections)
+            {
+                if(y<section.minimumY||y>section.maximumY)continue;
+                auto geometry=texture in section.blocks;
+                if(geometry is null)continue;
+                const before=geometry.length;
+                removeBlockFaceQuads(*geometry,x,y,z);
+                changed=changed||geometry.length!=before;
+            }
         }
+        if(changed)finalizeChunkGeometry(*cached);
     }
 
     static void removeBlockFaceQuads(ref Vertex[] geometry,int x,int y,int z)

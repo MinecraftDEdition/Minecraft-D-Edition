@@ -41,8 +41,19 @@ struct Vertex
     }
 }
 
+/// Opaque device-owned vertex allocation. Handle zero is reserved for the
+/// per-frame upload buffer used by UI, particles, entities, and view models.
+struct MeshHandle
+{
+    ulong id;
+    uint vertexCount;
+
+    @property bool valid() const { return id != 0; }
+}
+
 struct DrawCall
 {
+    ulong meshId;
     uint firstVertex;
     uint vertexCount;
     uint textureIndex;
@@ -138,9 +149,52 @@ struct FrameMesh
             throw new Exception("Mesh source is not a complete triangle list");
         const first = cast(uint) vertices.length;
         vertices ~= source;
-        draws ~= DrawCall(first, cast(uint) source.length, textureIndex,
+        draws ~= DrawCall(0, first, cast(uint) source.length, textureIndex,
             transform, layer, fog);
     }
+
+    /// References geometry retained by the graphics device without copying it
+    /// into this frame's CPU upload array.
+    void appendResident(MeshHandle mesh, uint firstVertex, uint vertexCount,
+        uint textureIndex, Mat4 transform, DrawLayer layer = DrawLayer.world,
+        FogSettings fog = FogSettings.disabled())
+    {
+        if (vertexCount == 0)
+            return;
+        if (!mesh.valid || cast(ulong)firstVertex + vertexCount > mesh.vertexCount)
+            throw new Exception("Resident draw references an invalid mesh range");
+        if (vertexCount % 3 != 0)
+            throw new Exception("Resident mesh range is not a complete triangle list");
+        draws ~= DrawCall(mesh.id, firstVertex, vertexCount, textureIndex,
+            transform, layer, fog);
+    }
+
+    /// Extends the most recent draw with another contiguous vertex range.
+    /// Callers use this when several independently cached chunk meshes share
+    /// identical render state. Keeping the CPU-side cache split per chunk
+    /// preserves cheap invalidation while avoiding one GPU draw per chunk.
+    void appendContinuation(Vertex[] source)
+    {
+        if(source.length==0)return;
+        if(source.length%3!=0)
+            throw new Exception("Mesh source is not a complete triangle list");
+        if(draws.length==0)
+            throw new Exception("Cannot continue a frame without a draw call");
+        vertices~=source;
+        draws[$-1].vertexCount+=cast(uint)source.length;
+    }
+}
+
+unittest
+{
+    FrameMesh frame;
+    const handle=MeshHandle(42,12);
+    frame.appendResident(handle,3,6,7,Mat4.identity());
+    assert(frame.vertices.length==0);
+    assert(frame.draws.length==1);
+    assert(frame.draws[0].meshId==42);
+    assert(frame.draws[0].firstVertex==3);
+    assert(frame.draws[0].vertexCount==6);
 }
 
 void appendQuad(

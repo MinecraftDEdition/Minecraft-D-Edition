@@ -38,11 +38,15 @@ client. Secrets are neither required nor safe to ship inside a game client.
 
 ## Planned presence contract
 
-Discord supplies the first line from the Developer Portal application name:
+The Social SDK activity supplies the public first line independently from the
+filename-safe Developer Portal/application identity:
 
 ```text
 Playing Minecraft: D Edition
 ```
+
+`native/discord_abi_bridge.cpp` sets this with `Activity::SetName`, while the
+internal application and executable remain `Minecraft D Edition`.
 
 Minecraft: D Edition will update the Activity details when the client changes
 state:

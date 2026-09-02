@@ -7,6 +7,7 @@ import minecraftd.common.math3d : Vec2, Vec3;
 import minecraftd.world.block : BlockId, isOpaque, isWater, waterHeight;
 import minecraftd.world.chunk : Chunk, ChunkCoordinate;
 import minecraftd.world.world : World;
+import std.conv : to;
 
 struct BlockTextureSet
 {
@@ -92,6 +93,31 @@ unittest
     assert(vertices<450_000);
 }
 
+unittest
+{
+    // Adjacent flat faces with identical texture and baked lighting collapse
+    // into a repeating quad. The surrounding sides may retain individual AO,
+    // but the 2x2 top must no longer cost four separate quads.
+    auto flatWorld=new World();
+    scope(exit)destroy(flatWorld);
+    foreach(y;1..3)foreach(z;0..Chunk.depth)foreach(x;0..Chunk.width)
+        flatWorld.setBlock(x,y,z,BlockId.air);
+    foreach(z;2..4)foreach(x;12..14)
+        flatWorld.setBlock(x,1,z,BlockId.stone);
+    auto renderer=new BlockRenderer(flatWorld);
+    scope(exit)destroy(renderer);
+    BlockTextureSet textures;
+    textures.stone=42;
+    const geometry=renderer.buildChunkRange(textures,ChunkCoordinate(0,0),1,1);
+    auto stone=42 in geometry;
+    assert(stone !is null,"missing stone geometry");
+    assert(stone.length<72,"stone vertices: "~to!string(stone.length));
+    bool repeats;
+    foreach(vertex;*stone)
+        if(vertex.uv[0]>1.5f||vertex.uv[1]>1.5f)repeats=true;
+    assert(repeats);
+}
+
 enum Face : int { down, up, north, south, west, east }
 
 final class BlockRenderer
@@ -153,38 +179,28 @@ final class BlockRenderer
         if(loaded is null||loaded.empty)return byTexture;
         if(minimumY<loaded.minimumOccupiedY())minimumY=loaded.minimumOccupiedY();
         if(maximumY>loaded.maximumOccupiedY())maximumY=loaded.maximumOccupiedY();
-        foreach (y; minimumY .. maximumY+1)
-        foreach (localZ; 0 .. Chunk.depth)
-        foreach (localX; 0 .. Chunk.width)
+        foreach(faceValue;0..6)
         {
-            const x=coordinate.x*Chunk.width+localX;
-            const z=coordinate.z*Chunk.depth+localZ;
-            const block = world.getBlock(x, y, z);
-            if (block == BlockId.air || isWater(block))
-                continue;
-            if (block == BlockId.netherPortalX
-                || block == BlockId.netherPortalZ)
-                continue;
-            foreach (faceValue; 0 .. 6)
+            const face=cast(Face)faceValue;
+            final switch(face)
             {
-                const face = cast(Face) faceValue;
-                const normal = faceNormal(face);
-                const neighbor = world.getBlock(x + cast(int) normal.x,
-                    y + cast(int) normal.y, z + cast(int) normal.z);
-                if (isOpaque(neighbor)
-                    || (block == BlockId.glass && neighbor == BlockId.glass))
-                    continue;
-                const texture = textureFor(block, face, textures);
-                auto geometry = texture in byTexture;
-                if (geometry is null)
-                {
-                    byTexture[texture] = [];
-                    geometry = texture in byTexture;
-                }
-                const tint = block == BlockId.grass && face == Face.up
-                    ? Color(0.55f, 0.82f, 0.35f, 1.0f)
-                    : Color(1, 1, 1, 1);
-                appendBlockFace(*geometry, x, y, z, face, tint);
+                case Face.down,Face.up:
+                    foreach(y;minimumY..maximumY+1)
+                        buildGreedyPlane(byTexture,textures,coordinate,
+                            face,y,Chunk.width,Chunk.depth,minimumY);
+                    break;
+                case Face.north,Face.south:
+                    foreach(localZ;0..Chunk.depth)
+                        buildGreedyPlane(byTexture,textures,coordinate,
+                            face,localZ,Chunk.width,
+                            maximumY-minimumY+1,minimumY);
+                    break;
+                case Face.west,Face.east:
+                    foreach(localX;0..Chunk.width)
+                        buildGreedyPlane(byTexture,textures,coordinate,
+                            face,localX,Chunk.depth,
+                            maximumY-minimumY+1,minimumY);
+                    break;
             }
         }
         return byTexture;
@@ -424,6 +440,196 @@ final class BlockRenderer
     }
 
 private:
+    struct GreedyFaceCell
+    {
+        bool visible;
+        bool flat;
+        uint texture;
+        Color[4] colors;
+    }
+
+    void buildGreedyPlane(ref Vertex[][uint] byTexture,
+        const BlockTextureSet textures,ChunkCoordinate coordinate,Face face,
+        int fixed,int uCount,int vCount,int minimumY)
+    {
+        GreedyFaceCell[] mask;
+        mask.length=cast(size_t)uCount*vCount;
+        const baseX=coordinate.x*Chunk.width;
+        const baseZ=coordinate.z*Chunk.depth;
+        foreach(v;0..vCount)foreach(u;0..uCount)
+        {
+            int x,y,z;
+            final switch(face)
+            {
+                case Face.down,Face.up:
+                    x=baseX+u;y=fixed;z=baseZ+v;break;
+                case Face.north,Face.south:
+                    x=baseX+u;y=minimumY+v;z=baseZ+fixed;break;
+                case Face.west,Face.east:
+                    x=baseX+fixed;y=minimumY+v;z=baseZ+u;break;
+            }
+            const block=world.getBlock(x,y,z);
+            if(block==BlockId.air||isWater(block)
+                ||block==BlockId.netherPortalX||block==BlockId.netherPortalZ)
+                continue;
+            const normal=faceNormal(face);
+            const neighbor=world.getBlock(x+cast(int)normal.x,
+                y+cast(int)normal.y,z+cast(int)normal.z);
+            if(isOpaque(neighbor)
+                ||(block==BlockId.glass&&neighbor==BlockId.glass))continue;
+            ref cell=mask[cast(size_t)v*uCount+u];
+            cell.visible=true;
+            cell.texture=textureFor(block,face,textures);
+            const tint=block==BlockId.grass&&face==Face.up
+                ?Color(0.55f,0.82f,0.35f,1):Color(1,1,1,1);
+            blockFaceColors(cell.colors,x,y,z,face,tint,true);
+            cell.flat=equalColor(cell.colors[0],cell.colors[1])
+                &&equalColor(cell.colors[0],cell.colors[2])
+                &&equalColor(cell.colors[0],cell.colors[3]);
+        }
+
+        foreach(v;0..vCount)for(int u=0;u<uCount;)
+        {
+            ref first=mask[cast(size_t)v*uCount+u];
+            if(!first.visible){++u;continue;}
+            int spanU=1,spanV=1;
+            if(first.flat)
+            {
+                while(u+spanU<uCount&&mergeCompatible(first,
+                    mask[cast(size_t)v*uCount+u+spanU]))++spanU;
+                bool extending=true;
+                while(v+spanV<vCount&&extending)
+                {
+                    foreach(offset;0..spanU)
+                        if(!mergeCompatible(first,mask[
+                            cast(size_t)(v+spanV)*uCount+u+offset]))
+                        {extending=false;break;}
+                    if(extending)++spanV;
+                }
+            }
+            foreach(dv;0..spanV)foreach(du;0..spanU)
+                mask[cast(size_t)(v+dv)*uCount+u+du].visible=false;
+            auto geometry=first.texture in byTexture;
+            if(geometry is null)
+            {
+                byTexture[first.texture]=[];
+                geometry=first.texture in byTexture;
+            }
+            if(spanU==1&&spanV==1&&!first.flat)
+            {
+                int x,y,z;
+                final switch(face)
+                {
+                    case Face.down,Face.up:
+                        x=baseX+u;y=fixed;z=baseZ+v;break;
+                    case Face.north,Face.south:
+                        x=baseX+u;y=minimumY+v;z=baseZ+fixed;break;
+                    case Face.west,Face.east:
+                        x=baseX+fixed;y=minimumY+v;z=baseZ+u;break;
+                }
+                appendFaceWithColors(*geometry,x,y,z,face,first.colors);
+            }
+            else appendMergedFace(*geometry,coordinate,face,fixed,u,v,
+                spanU,spanV,minimumY,first.colors[0]);
+            u+=spanU;
+        }
+    }
+
+    static bool equalColor(Color a,Color b)
+    {
+        return a.r==b.r&&a.g==b.g&&a.b==b.b&&a.a==b.a;
+    }
+
+    static bool mergeCompatible(const GreedyFaceCell a,
+        const GreedyFaceCell b)
+    {
+        return b.visible&&b.flat&&a.texture==b.texture
+            &&equalColor(a.colors[0],b.colors[0]);
+    }
+
+    void appendMergedFace(ref Vertex[] output,ChunkCoordinate coordinate,
+        Face face,int fixed,int u,int v,int spanU,int spanV,int minimumY,
+        Color color)
+    {
+        const baseX=coordinate.x*Chunk.width;
+        const baseZ=coordinate.z*Chunk.depth;
+        Vec3 a,b,c,d;
+        float repeatU,repeatV;
+        final switch(face)
+        {
+            case Face.up:
+            {
+                const x=baseX+u,z=baseZ+v,y=fixed+1;
+                a=Vec3(x,y,z);b=Vec3(x,y,z+spanV);
+                c=Vec3(x+spanU,y,z+spanV);d=Vec3(x+spanU,y,z);
+                repeatU=spanV;repeatV=spanU;break;
+            }
+            case Face.down:
+            {
+                const x=baseX+u,z=baseZ+v,y=fixed;
+                a=Vec3(x,y,z+spanV);b=Vec3(x,y,z);
+                c=Vec3(x+spanU,y,z);d=Vec3(x+spanU,y,z+spanV);
+                repeatU=spanV;repeatV=spanU;break;
+            }
+            case Face.north:
+            {
+                const x=baseX+u,y=minimumY+v,z=baseZ+fixed;
+                a=Vec3(x+spanU,y,z);b=Vec3(x,y,z);
+                c=Vec3(x,y+spanV,z);d=Vec3(x+spanU,y+spanV,z);
+                repeatU=spanU;repeatV=spanV;break;
+            }
+            case Face.south:
+            {
+                const x=baseX+u,y=minimumY+v,z=baseZ+fixed+1;
+                a=Vec3(x,y,z);b=Vec3(x+spanU,y,z);
+                c=Vec3(x+spanU,y+spanV,z);d=Vec3(x,y+spanV,z);
+                repeatU=spanU;repeatV=spanV;break;
+            }
+            case Face.west:
+            {
+                const x=baseX+fixed,y=minimumY+v,z=baseZ+u;
+                a=Vec3(x,y,z);b=Vec3(x,y,z+spanU);
+                c=Vec3(x,y+spanV,z+spanU);d=Vec3(x,y+spanV,z);
+                repeatU=spanU;repeatV=spanV;break;
+            }
+            case Face.east:
+            {
+                const x=baseX+fixed+1,y=minimumY+v,z=baseZ+u;
+                a=Vec3(x,y,z+spanU);b=Vec3(x,y,z);
+                c=Vec3(x,y+spanV,z);d=Vec3(x,y+spanV,z+spanU);
+                repeatU=spanU;repeatV=spanV;break;
+            }
+        }
+        appendQuad(output,a,b,c,d,Vec2(0,repeatV),
+            Vec2(repeatU,repeatV),Vec2(repeatU,0),Vec2(0,0),
+            color,color,color,color);
+    }
+
+    static void appendFaceWithColors(ref Vertex[] output,int x,int y,int z,
+        Face face,Color[4] colors)
+    {
+        const fx=cast(float)x,fy=cast(float)y,fz=cast(float)z;
+        Vec3[4] points;
+        final switch(face)
+        {
+            case Face.up:points=[Vec3(fx,fy+1,fz),Vec3(fx,fy+1,fz+1),
+                Vec3(fx+1,fy+1,fz+1),Vec3(fx+1,fy+1,fz)];break;
+            case Face.down:points=[Vec3(fx,fy,fz+1),Vec3(fx,fy,fz),
+                Vec3(fx+1,fy,fz),Vec3(fx+1,fy,fz+1)];break;
+            case Face.north:points=[Vec3(fx+1,fy,fz),Vec3(fx,fy,fz),
+                Vec3(fx,fy+1,fz),Vec3(fx+1,fy+1,fz)];break;
+            case Face.south:points=[Vec3(fx,fy,fz+1),Vec3(fx+1,fy,fz+1),
+                Vec3(fx+1,fy+1,fz+1),Vec3(fx,fy+1,fz+1)];break;
+            case Face.west:points=[Vec3(fx,fy,fz),Vec3(fx,fy,fz+1),
+                Vec3(fx,fy+1,fz+1),Vec3(fx,fy+1,fz)];break;
+            case Face.east:points=[Vec3(fx+1,fy,fz+1),Vec3(fx+1,fy,fz),
+                Vec3(fx+1,fy+1,fz),Vec3(fx+1,fy+1,fz+1)];break;
+        }
+        appendQuad(output,points[0],points[1],points[2],points[3],
+            Vec2(0,1),Vec2(1,1),Vec2(1,0),Vec2(0,0),
+            colors[0],colors[1],colors[2],colors[3]);
+    }
+
     static void appendLineBox(ref Vertex[] output,Vec3 a,Vec3 b,float radius)
     {
         auto minimum=Vec3(a.x<b.x?a.x:b.x,a.y<b.y?a.y:b.y,a.z<b.z?a.z:b.z);
@@ -644,32 +850,57 @@ private:
         const fy = cast(float) y;
         const fz = cast(float) z;
         Vec3[4] points;
-        int[4] uSigns;
-        int[4] vSigns;
 
         final switch (face)
         {
             case Face.up:
                 points = [Vec3(fx,fy+1,fz), Vec3(fx,fy+1,fz+1), Vec3(fx+1,fy+1,fz+1), Vec3(fx+1,fy+1,fz)];
-                uSigns = [-1,-1,1,1]; vSigns = [-1,1,1,-1]; break;
+                break;
             case Face.down:
                 points = [Vec3(fx,fy,fz+1), Vec3(fx,fy,fz), Vec3(fx+1,fy,fz), Vec3(fx+1,fy,fz+1)];
-                uSigns = [-1,-1,1,1]; vSigns = [1,-1,-1,1]; break;
+                break;
             case Face.north:
                 points = [Vec3(fx+1,fy,fz), Vec3(fx,fy,fz), Vec3(fx,fy+1,fz), Vec3(fx+1,fy+1,fz)];
-                uSigns = [1,-1,-1,1]; vSigns = [-1,-1,1,1]; break;
+                break;
             case Face.south:
                 points = [Vec3(fx,fy,fz+1), Vec3(fx+1,fy,fz+1), Vec3(fx+1,fy+1,fz+1), Vec3(fx,fy+1,fz+1)];
-                uSigns = [-1,1,1,-1]; vSigns = [-1,-1,1,1]; break;
+                break;
             case Face.west:
                 points = [Vec3(fx,fy,fz), Vec3(fx,fy,fz+1), Vec3(fx,fy+1,fz+1), Vec3(fx,fy+1,fz)];
-                uSigns = [-1,1,1,-1]; vSigns = [-1,-1,1,1]; break;
+                break;
             case Face.east:
                 points = [Vec3(fx+1,fy,fz+1), Vec3(fx+1,fy,fz), Vec3(fx+1,fy+1,fz), Vec3(fx+1,fy+1,fz+1)];
-                uSigns = [1,-1,-1,1]; vSigns = [-1,-1,1,1]; break;
+                break;
         }
 
         Color[4] colors;
+        blockFaceColors(colors,x,y,z,face,tint,sampleWorldLight);
+        appendQuad(
+            output,
+            points[0], points[1], points[2], points[3],
+            Vec2(0,1), Vec2(1,1), Vec2(1,0), Vec2(0,0),
+            colors[0], colors[1], colors[2], colors[3],
+        );
+    }
+
+    void blockFaceColors(ref Color[4] colors,int x,int y,int z,Face face,
+        Color tint,bool sampleWorldLight)
+    {
+        int[4] uSigns;
+        int[4] vSigns;
+        final switch(face)
+        {
+            case Face.up:
+                uSigns=[-1,-1,1,1];vSigns=[-1,1,1,-1];break;
+            case Face.down:
+                uSigns=[-1,-1,1,1];vSigns=[1,-1,-1,1];break;
+            case Face.north:
+                uSigns=[1,-1,-1,1];vSigns=[-1,-1,1,1];break;
+            case Face.south,Face.west:
+                uSigns=[-1,1,1,-1];vSigns=[-1,-1,1,1];break;
+            case Face.east:
+                uSigns=[1,-1,-1,1];vSigns=[-1,-1,1,1];break;
+        }
         const normal=faceNormal(face);
         const worldLight=sampleWorldLight ? lighting.brightnessAt(
             x+cast(int)normal.x,y+cast(int)normal.y,z+cast(int)normal.z) : 1.0f;
@@ -679,11 +910,5 @@ private:
                 * vertexAo(x, y, z, face, uSigns[i], vSigns[i]);
             colors[i] = Color(tint.r * amount, tint.g * amount, tint.b * amount, tint.a);
         }
-        appendQuad(
-            output,
-            points[0], points[1], points[2], points[3],
-            Vec2(0,1), Vec2(1,1), Vec2(1,0), Vec2(0,0),
-            colors[0], colors[1], colors[2], colors[3],
-        );
     }
 }

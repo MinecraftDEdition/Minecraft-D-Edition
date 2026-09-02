@@ -512,6 +512,11 @@ void mdPrepareDraw(void* l, void* root, void* heap, float width, float height,
     const D3D12_VERTEX_BUFFER_VIEW view{vertexAddress, size, stride};
     list->IASetVertexBuffers(0, 1, &view);
 }
+void mdBindVertexBuffer(void* l, unsigned long long vertexAddress,
+                        unsigned stride, unsigned size) {
+    const D3D12_VERTEX_BUFFER_VIEW view{vertexAddress, size, stride};
+    static_cast<ID3D12GraphicsCommandList*>(l)->IASetVertexBuffers(0, 1, &view);
+}
 void mdDraw(void* l, const float* transform, const float* fog,
             unsigned long long texture,
             unsigned count, unsigned first) {
