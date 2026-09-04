@@ -21,6 +21,8 @@ import minecraftd.client.render.entity_shadow_renderer : EntityShadowRenderer,
 import minecraftd.client.render.hud_renderer : HudRenderer, HudTextureSet;
 import minecraftd.client.render.mesh : Color, DrawLayer, FogSettings,
     FrameMesh, MeshHandle, Vertex, appendQuad;
+import minecraftd.client.render.occlusion_culler : OcclusionBounds,
+    SoftwareOcclusionCuller;
 import minecraftd.common.math3d : Mat4, Vec2, Vec3, clamp, cross,
     forwardFromYawPitch, lerp;
 import minecraftd.client.render.player_renderer : PlayerRenderer, SkinLayers;
@@ -42,18 +44,19 @@ import minecraftd.client.menu.death_screen : DeathAction, DeathScreenRenderer,
     DeathScreenState, DeathTextureSet;
 import minecraftd.client.menu.options_menu : OptionsAction, OptionsMenuRenderer,
     OptionsMenuState, OptionsTextureSet;
-import minecraftd.client.menu.inventory_menu:InventoryMenuRenderer,
+import minecraftd.client.menu.inventory_menu:CreativeTab,InventoryMenuRenderer,
     InventoryMenuState,InventoryTextureSet;
 import minecraftd.game.resources.resource_manager : ResourceManager;
 import minecraftd.game.item.inventory : ItemId, ItemStack, placedBlock,
-    sameHeldStack;
+    firstCatalogItem, lastCatalogItem, sameHeldStack;
 import minecraftd.game.entity.player : Player;
 version (Windows)
     import minecraftd.platform.windows.dx12.device : Dx12Device;
 import minecraftd.platform.desktop.vulkan.device : VulkanDevice;
 import minecraftd.platform.clock : monotonicSeconds;
 import minecraftd.world.block : BlockId, bareHandDestroyProgress,
-    isFire, isNetherPortal, isWater, isWaterSource;
+    catalogBlockDefinition, firstCatalogBlock, isFire, isNetherPortal,
+    isOpaque, isWater, isWaterSource, lastCatalogBlock;
 import minecraftd.world.world : BlockHit, World;
 import minecraftd.world.chunk : Chunk, ChunkCoordinate, chunkCoordinate;
 import minecraftd.world.world_settings : GameMode;
@@ -79,6 +82,7 @@ private struct RenderChunkSection
     Vertex[] portals;
     WaterGeometry water;
     FireGeometry fire;
+    OcclusionBounds[] occluders;
     ResidentRange[] opaqueRanges;
     ResidentRange glassRange;
     ResidentRange portalRange;
@@ -89,6 +93,19 @@ private struct RenderChunkSection
     ResidentRange fireLayer1Range;
     int minimumY;
     int maximumY;
+}
+
+private struct RenderSectionKey
+{
+    ChunkCoordinate coordinate;
+    int minimumY;
+}
+
+private struct SectionCandidate
+{
+    ChunkCoordinate coordinate;
+    size_t sectionIndex;
+    float distanceSquared;
 }
 
 private struct DirtySection
@@ -142,6 +159,9 @@ final class GameRenderer
     private FrameMesh frame;
     private RenderChunkGeometry[ChunkCoordinate] chunkMeshes;
     private ChunkCoordinate[] admittedRenderChunks;
+    private bool[RenderSectionKey] admittedRenderSections;
+    private ubyte[RenderSectionKey] occlusionGrace;
+    private SoftwareOcclusionCuller occlusion;
     private bool meshJobActive;
     private ChunkCoordinate meshJobCoordinate;
     private int meshJobNextY;
@@ -156,6 +176,7 @@ final class GameRenderer
     private bool[DirtySection] dirtyFluidSections;
     private Vertex[][uint][ItemId] itemMeshes;
     private BlockTextureSet blockTextures;
+    private uint terrainMipmapLevels;
     private bool meshSmoothLighting=true;
     private float meshGamma=0.5f;
 
@@ -198,7 +219,9 @@ final class GameRenderer
     private float lastMeshMilliseconds;
     private float lastAssemblyMilliseconds;
     private float lastGraphicsMilliseconds;
+    private float lastOcclusionMilliseconds;
     private size_t lastResidentVertices;
+    private size_t lastOccludedSections;
 
     this(void* window, uint width, uint height, string projectRoot, World world,
         OptionsMenuState options, GraphicsApi graphicsApi = GraphicsApi.directX12)
@@ -207,6 +230,11 @@ final class GameRenderer
         this.height = height;
         this.world = world;
         this.options = options;
+        int configuredMipmaps=options.integer("mipmapLevels",4);
+        if(configuredMipmaps<0)configuredMipmaps=0;
+        if(configuredMipmaps>4)configuredMipmaps=4;
+        terrainMipmapLevels=cast(uint)configuredMipmaps;
+        occlusion=new SoftwareOcclusionCuller();
         resources = new ResourceManager(projectRoot);
         images = new TextureManager();
         final switch (graphicsApi)
@@ -241,33 +269,52 @@ final class GameRenderer
             "textures/item/flint_and_steel.png"));
         const flintTexture=graphics.uploadTexture(flintImage);
         blockTextures = BlockTextureSet(
-            load("textures/block/grass_block_top.png"),
-            load("textures/block/grass_block_side.png"),
-            load("textures/block/dirt.png"),
-            load("textures/block/stone.png"),
-            load("textures/block/obsidian.png"),
-            load("textures/block/netherrack.png"),
-            load("textures/block/bedrock.png"),
-            load("textures/block/bricks.png"),
-            load("textures/block/oak_planks.png"),
-            load("textures/block/spruce_planks.png"),
-            load("textures/block/birch_planks.png"),
-            load("textures/block/jungle_planks.png"),
-            load("textures/block/acacia_planks.png"),
-            load("textures/block/dark_oak_planks.png"),
-            load("textures/block/mangrove_planks.png"),
-            load("textures/block/cherry_planks.png"),
-            load("textures/block/bamboo_planks.png"),
-            load("textures/block/pale_oak_planks.png"),
-            load("textures/block/crimson_planks.png"),
-            load("textures/block/warped_planks.png"),
-            load("textures/block/cobblestone.png"),
-            load("textures/block/glass.png"),
+            loadTerrain("textures/block/grass_block_top.png"),
+            loadTerrain("textures/block/grass_block_side.png"),
+            loadTerrain("textures/block/dirt.png"),
+            loadTerrain("textures/block/stone.png"),
+            loadTerrain("textures/block/obsidian.png"),
+            loadTerrain("textures/block/netherrack.png"),
+            loadTerrain("textures/block/bedrock.png"),
+            loadTerrain("textures/block/bricks.png"),
+            loadTerrain("textures/block/oak_planks.png"),
+            loadTerrain("textures/block/spruce_planks.png"),
+            loadTerrain("textures/block/birch_planks.png"),
+            loadTerrain("textures/block/jungle_planks.png"),
+            loadTerrain("textures/block/acacia_planks.png"),
+            loadTerrain("textures/block/dark_oak_planks.png"),
+            loadTerrain("textures/block/mangrove_planks.png"),
+            loadTerrain("textures/block/cherry_planks.png"),
+            loadTerrain("textures/block/bamboo_planks.png"),
+            loadTerrain("textures/block/pale_oak_planks.png"),
+            loadTerrain("textures/block/crimson_planks.png"),
+            loadTerrain("textures/block/warped_planks.png"),
+            loadTerrain("textures/block/cobblestone.png"),
+            loadTerrain("textures/block/glass.png"),
             waterStillFrames[0],
             waterFlowFrames[0],
             portalFrames[0],
             flintTexture.descriptorIndex,
         );
+        uint[string] catalogTextureCache;
+        uint loadCatalogTexture(string name)
+        {
+            if (auto cached = name in catalogTextureCache) return *cached;
+            const loaded = loadTerrain("textures/block/" ~ name ~ ".png");
+            catalogTextureCache[name] = loaded;
+            return loaded;
+        }
+        foreach (raw; cast(int)firstCatalogBlock .. cast(int)lastCatalogBlock + 1)
+        {
+            const block = cast(BlockId)raw;
+            const definition = catalogBlockDefinition(block);
+            blockTextures.catalogSide[block] = loadCatalogTexture(
+                definition.sideTexture);
+            blockTextures.catalogTop[block] = loadCatalogTexture(
+                definition.topTexture);
+            blockTextures.catalogBottom[block] = loadCatalogTexture(
+                definition.bottomTexture);
+        }
         steve = loadHandle("textures/entity/player/wide/steve.png");
         accountSkin = steve;
         sun = graphics.uploadTexture(images.loadAdditivePngAsAlpha(
@@ -353,6 +400,48 @@ final class GameRenderer
             load("textures/gui/sprites/container/slot_highlight_back.png"),
             load("textures/gui/sprites/container/slot_highlight_front.png"),
             loadFrom("minecraft_d","textures/gui/sprites/virtual_cursor.png"));
+        inventoryTextures.creativeItemsBackground=load(
+            "textures/gui/container/creative_inventory/tab_items.png");
+        inventoryTextures.creativeSearchBackground=load(
+            "textures/gui/container/creative_inventory/tab_item_search.png");
+        inventoryTextures.creativeInventoryBackground=load(
+            "textures/gui/container/creative_inventory/tab_inventory.png");
+        inventoryTextures.scroller=load(
+            "textures/gui/sprites/container/creative_inventory/scroller.png");
+        inventoryTextures.scrollerDisabled=load(
+            "textures/gui/sprites/container/creative_inventory/scroller_disabled.png");
+        foreach(index;0..7)
+        {
+            import std.conv:to;
+            const suffix=to!string(index+1)~".png";
+            const root="textures/gui/sprites/container/creative_inventory/";
+            inventoryTextures.topSelected[index]=load(root
+                ~"tab_top_selected_"~suffix);
+            inventoryTextures.topUnselected[index]=load(root
+                ~"tab_top_unselected_"~suffix);
+            inventoryTextures.bottomSelected[index]=load(root
+                ~"tab_bottom_selected_"~suffix);
+            inventoryTextures.bottomUnselected[index]=load(root
+                ~"tab_bottom_unselected_"~suffix);
+        }
+        inventoryTextures.creativeTabIcons=[
+            0,
+            load("textures/block/cyan_wool.png"),
+            0,
+            load("textures/item/oak_sign.png"),
+            load("textures/item/redstone.png"),
+            load("textures/block/bookshelf.png"),
+            load("textures/item/compass_16.png"),
+            load("textures/item/diamond_pickaxe.png"),
+            load("textures/item/netherite_sword.png"),
+            load("textures/item/golden_apple.png"),
+            load("textures/item/iron_ingot.png"),
+            load("textures/item/creeper_spawn_egg.png"),
+            load("textures/item/command_block_minecart.png"),
+            load("textures/item/chest_minecart.png"),
+        ];
+        inventoryTextures.creativeTabCubeIcons[1]=true;
+        inventoryTextures.creativeTabCubeIcons[5]=true;
         chatRenderer = new ChatRenderer(asciiImage, asciiTexture.descriptorIndex,
             solidTexture.descriptorIndex);
         itemMeshes[ItemId.grassBlock] = blocks.buildItem(BlockId.grass, blockTextures);
@@ -381,6 +470,11 @@ final class GameRenderer
             blockTextures);
         itemMeshes[ItemId.flintAndSteel] = blocks.buildGeneratedItem(
             blockTextures.flintAndSteel,flintImage);
+        foreach (raw; cast(int)firstCatalogItem .. cast(int)lastCatalogItem + 1)
+        {
+            const item = cast(ItemId)raw;
+            itemMeshes[item] = blocks.buildItem(placedBlock(item), blockTextures);
+        }
         uint[8] poofTextures;
         uint[8] portalTextures;
         foreach (index; 0 .. 8)
@@ -414,7 +508,7 @@ final class GameRenderer
             smokeTextures[index]=load("textures/particle/generic_"
                 ~to!string(7-index)~".png");
         }
-        particles = new ParticleSystem(world, ParticleTextureSet(
+        auto particleTextureSet = ParticleTextureSet(
             blockTextures.grassSide, blockTextures.dirt, blockTextures.stone,
             blockTextures.obsidian, blockTextures.netherrack,
             blockTextures.bedrock,
@@ -428,7 +522,9 @@ final class GameRenderer
             blockTextures.glass,
             load("textures/particle/critical_hit.png"),poofTextures,
             portalTextures,splashTextures,load("textures/particle/bubble.png"),
-            bubblePopTextures,smokeTextures));
+            bubblePopTextures,smokeTextures);
+        particleTextureSet.catalog = blockTextures.catalogSide.dup;
+        particles = new ParticleSystem(world, particleTextureSet);
         sounds = new SoundManager(resources);
         applyOptions();
     }
@@ -458,6 +554,11 @@ final class GameRenderer
         {
             destroy(resources);
             resources = null;
+        }
+        if(occlusion !is null)
+        {
+            destroy(occlusion);
+            occlusion=null;
         }
     }
 
@@ -552,14 +653,36 @@ final class GameRenderer
         return optionsMenu.hitTest(width,height,mouseX,mouseY,options);
     }
 
-    int inventorySlotAt(int mouseX,int mouseY)const
+    int inventorySlotAt(int mouseX,int mouseY,const InventoryMenuState state,
+        bool creative)const
     {
-        return inventoryMenu.hitSlot(width,height,mouseX,mouseY);
+        return creative
+            ?inventoryMenu.hitCreativeSlot(width,height,mouseX,mouseY,state)
+            :inventoryMenu.hitSlot(width,height,mouseX,mouseY);
     }
 
-    bool inventoryOutside(int mouseX,int mouseY)const
+    bool inventoryOutside(int mouseX,int mouseY,bool creative)const
     {
-        return inventoryMenu.outside(width,height,mouseX,mouseY);
+        return creative
+            ?inventoryMenu.outsideCreative(width,height,mouseX,mouseY)
+            :inventoryMenu.outside(width,height,mouseX,mouseY);
+    }
+
+    int creativeInventoryTabAt(int mouseX,int mouseY)const
+    {
+        return inventoryMenu.creativeTabAt(width,height,mouseX,mouseY);
+    }
+
+    bool creativeInventorySearchAt(int mouseX,int mouseY)const
+    {
+        return inventoryMenu.creativeSearchAt(width,height,mouseX,mouseY);
+    }
+
+    size_t creativeInventorySearchCursorAt(int mouseX,
+        const InventoryMenuState state)const
+    {
+        return inventoryMenu.creativeSearchCursorAt(width,height,mouseX,
+            state,hudFont);
     }
 
     void applyOptions()
@@ -1040,33 +1163,81 @@ final class GameRenderer
                 clouds.descriptorIndex, viewProjection, DrawLayer.world, cloudFog);
 
         admittedRenderChunks.length=0;
+        admittedRenderSections.clear();
         lastResidentVertices=0;
+        lastOccludedSections=0;
+        const occlusionStarted=monotonicSeconds();
+        occlusion.beginFrame(viewProjection);
+        SectionCandidate[] sectionCandidates;
         foreach(coordinate;visibleChunkCoordinates(camera))
         {
             auto chunkGeometry=coordinate in chunkMeshes;
             if(chunkGeometry is null||!chunkGeometry.mesh.valid)continue;
-            admittedRenderChunks~=coordinate;
-        }
-        // Terrain vertices remain in device-local buffers after a chunk is
-        // meshed. A frame now records only small section draw ranges instead
-        // of rebuilding and copying close to a million vertices every tick.
-        foreach(coordinate;admittedRenderChunks)
-        {
-            auto chunkGeometry=coordinate in chunkMeshes;
-            if(chunkGeometry is null)continue;
-            foreach(section;chunkGeometry.sections)
+            foreach(sectionIndex,section;chunkGeometry.sections)
             {
                 if(!sectionIntersectsFrustum(camera,coordinate,
                     section.minimumY,section.maximumY))continue;
-                foreach(range;section.opaqueRanges)
-                {
-                    frame.appendResident(chunkGeometry.mesh,range.firstVertex,
-                        range.vertexCount,range.textureIndex,viewProjection,
-                        DrawLayer.world,terrainFog);
-                    lastResidentVertices+=range.vertexCount;
-                }
+                const bounds=sectionBounds(coordinate,section.minimumY,
+                    section.maximumY);
+                sectionCandidates~=SectionCandidate(coordinate,sectionIndex,
+                    distanceSquaredToBounds(camera.position,bounds));
             }
         }
+        sort!((a,b)=>a.distanceSquared<b.distanceSquared)(sectionCandidates);
+
+        // Feed sections to the coarse depth buffer from front to back. Only
+        // boxes proven to be completely opaque can hide later sections, so
+        // caves, glass, water, portals, and uncertain silhouette cells remain
+        // visible. A short grace period avoids flicker at occlusion edges.
+        bool[ChunkCoordinate] admittedChunkSet;
+        foreach(candidate;sectionCandidates)
+        {
+            auto chunkGeometry=candidate.coordinate in chunkMeshes;
+            if(chunkGeometry is null
+                ||candidate.sectionIndex>=chunkGeometry.sections.length)continue;
+            auto section=&chunkGeometry.sections[candidate.sectionIndex];
+            const key=RenderSectionKey(candidate.coordinate,section.minimumY);
+            const bounds=sectionBounds(candidate.coordinate,section.minimumY,
+                section.maximumY);
+            const hidden=occlusion.occluded(bounds);
+            bool admitted=!hidden;
+            if(hidden)
+            {
+                if(auto grace=key in occlusionGrace)
+                {
+                    if(*grace>0)
+                    {
+                        --*grace;
+                        admitted=true;
+                    }
+                }
+            }
+            else
+                occlusionGrace[key]=2;
+            if(!admitted)
+            {
+                ++lastOccludedSections;
+                continue;
+            }
+            admittedRenderSections[key]=true;
+            if(candidate.coordinate !in admittedChunkSet)
+            {
+                admittedChunkSet[candidate.coordinate]=true;
+                admittedRenderChunks~=candidate.coordinate;
+            }
+            foreach(range;section.opaqueRanges)
+            {
+                frame.appendResident(chunkGeometry.mesh,range.firstVertex,
+                    range.vertexCount,range.textureIndex,viewProjection,
+                    DrawLayer.world,terrainFog);
+                lastResidentVertices+=range.vertexCount;
+            }
+            if(!hidden)
+                foreach(occluder;section.occluders)
+                    occlusion.addOccluder(occluder);
+        }
+        lastOcclusionMilliseconds=cast(float)((monotonicSeconds()
+            -occlusionStarted)*1000.0);
         const portalTexture=portalFrames.length
             ?portalFrames[cast(size_t)(elapsedSeconds*20.0f)%portalFrames.length]
             :blockTextures.netherPortal;
@@ -1387,7 +1558,8 @@ final class GameRenderer
                 inventoryMouseY,player.inventory,inventoryTextures,blockTextures,
                 hud,hudFont,fontTexture,partialTick,players,player,
                 accountSkin.descriptorIndex,elapsedSeconds*20.0f,
-                accountSkinModel=="slim",controllerInventoryCursor);
+                accountSkinModel=="slim",controllerInventoryCursor,
+                inventoryState,player.gameMode==GameMode.creative);
         lastAssemblyMilliseconds=cast(float)((monotonicSeconds()
             -meshingFinished)*1000.0);
         if(debugVisible)
@@ -1571,8 +1743,8 @@ private:
             foreach_reverse(sectionIndex;0..geometry.sections.length)
             {
                 const section=geometry.sections[sectionIndex];
-                if(!sectionIntersectsFrustum(camera,coordinate,
-                    section.minimumY,section.maximumY))continue;
+                const key=RenderSectionKey(coordinate,section.minimumY);
+                if(key !in admittedRenderSections)continue;
                 appendResidentRange(geometry.mesh,section.portalRange,
                     portalTexture,viewProjection,DrawLayer.translucent,fog);
                 appendResidentRange(geometry.mesh,section.glassRange,
@@ -1635,6 +1807,74 @@ private:
         if(fabsf(vertical)-depth*verticalTangent
             >verticalRadius+depthRadius*verticalTangent)return false;
         return true;
+    }
+
+    static OcclusionBounds sectionBounds(ChunkCoordinate coordinate,
+        int minimumY,int maximumY)
+    {
+        return OcclusionBounds(
+            Vec3(coordinate.x*Chunk.width,minimumY,
+                coordinate.z*Chunk.depth),
+            Vec3(coordinate.x*Chunk.width+Chunk.width,maximumY+1,
+                coordinate.z*Chunk.depth+Chunk.depth));
+    }
+
+    static float distanceSquaredToBounds(Vec3 point,OcclusionBounds bounds)
+    {
+        // D initializes local floating-point values to NaN. Axes already
+        // inside the box must contribute zero or the sort predicate stops
+        // being a strict weak ordering and std.algorithm asserts at runtime.
+        float dx=0.0f,dy=0.0f,dz=0.0f;
+        if(point.x<bounds.minimum.x)dx=bounds.minimum.x-point.x;
+        else if(point.x>bounds.maximum.x)dx=point.x-bounds.maximum.x;
+        if(point.y<bounds.minimum.y)dy=bounds.minimum.y-point.y;
+        else if(point.y>bounds.maximum.y)dy=point.y-bounds.maximum.y;
+        if(point.z<bounds.minimum.z)dz=bounds.minimum.z-point.z;
+        else if(point.z>bounds.maximum.z)dz=point.z-bounds.maximum.z;
+        return dx*dx+dy*dy+dz*dz;
+    }
+
+    OcclusionBounds[] buildSectionOccluders(ChunkCoordinate coordinate,
+        int minimumY,int maximumY) const
+    {
+        OcclusionBounds[] result;
+        enum int footprint=8;
+        const originX=coordinate.x*Chunk.width;
+        const originZ=coordinate.z*Chunk.depth;
+        // Each 8x8 column is split into maximal solid vertical runs. This
+        // tracks a hill's coarse silhouette while requiring every contained
+        // voxel to be opaque, preventing false occlusion through caves.
+        foreach(localZ;0..Chunk.depth/footprint)
+        foreach(localX;0..Chunk.width/footprint)
+        {
+            int runStart=int.min;
+            foreach(y;minimumY..maximumY+1)
+            {
+                bool layerOpaque=true;
+                foreach(z;0..footprint)
+                foreach(x;0..footprint)
+                    if(!isOpaque(world.getBlock(originX+localX*footprint+x,y,
+                        originZ+localZ*footprint+z)))
+                        layerOpaque=false;
+                if(layerOpaque&&runStart==int.min)runStart=y;
+                if(!layerOpaque&&runStart!=int.min)
+                {
+                    result~=OcclusionBounds(
+                        Vec3(originX+localX*footprint,runStart,
+                            originZ+localZ*footprint),
+                        Vec3(originX+(localX+1)*footprint,y,
+                            originZ+(localZ+1)*footprint));
+                    runStart=int.min;
+                }
+            }
+            if(runStart!=int.min)
+                result~=OcclusionBounds(
+                    Vec3(originX+localX*footprint,runStart,
+                        originZ+localZ*footprint),
+                    Vec3(originX+(localX+1)*footprint,maximumY+1,
+                        originZ+(localZ+1)*footprint));
+        }
+        return result;
     }
 
     ChunkCoordinate[] visibleChunkCoordinates(const Camera camera) const
@@ -1701,6 +1941,10 @@ private:
         const logicalWidth=cast(float)width/scale;
         const logicalHeight=cast(float)height/scale;
         const milliseconds=fps>0.001f?1000.0f/fps:0.0f;
+        const rendererMilliseconds=lastMeshMilliseconds
+            +lastAssemblyMilliseconds+lastGraphicsMilliseconds;
+        const otherMilliseconds=milliseconds>rendererMilliseconds
+            ?milliseconds-rendererMilliseconds:0.0f;
         const loaded=world.loadedChunkCoordinates().length;
         const lines=[
             format("Minecraft: D Edition  %.0f fps (%.1f ms)",fps,milliseconds),
@@ -1708,11 +1952,17 @@ private:
                 player.position.y,player.position.z),
             format("Chunks: %s rendered / %s meshed / %s loaded",
                 admittedRenderChunks.length,chunkMeshes.length,loaded),
+            format("Sections: %s drawn / %s occluded",
+                admittedRenderSections.length,lastOccludedSections),
             format("Vertices: %s resident / %s dynamic  Draw calls: %s",
                 lastResidentVertices,frame.vertices.length,frame.draws.length),
             format("CPU mesh: %.1f ms  frame: %.1f ms  graphics: %.1f ms",
                 lastMeshMilliseconds,lastAssemblyMilliseconds,
                 lastGraphicsMilliseconds),
+            format("Occlusion: %.2f ms",lastOcclusionMilliseconds),
+            format("Other/pacing: %.1f ms  Limit: %s fps  VSync: %s",
+                otherMilliseconds,options.integer("maxFps",260),
+                options.boolean("vsync",true)?"ON":"OFF"),
         ];
         foreach(index,line;lines)
             frame.append(hudFont.buildText(line,4,4+cast(int)index*10,
@@ -1730,6 +1980,7 @@ private:
             auto geometry=coordinate in chunkMeshes;
             if(geometry !is null)graphics.releaseStaticMesh(geometry.mesh);
             chunkMeshes.remove(coordinate);
+            purgeChunkOcclusionState(coordinate);
         }
 
         if(meshJobActive&&(!world.hasChunk(meshJobCoordinate.x,
@@ -1792,6 +2043,8 @@ private:
             section.water=blocks.buildWaterChunkRange(meshJobCoordinate,
                 meshJobNextY,sectionMaximum);
             section.fire=blocks.buildFireChunkRange(meshJobCoordinate,
+                meshJobNextY,sectionMaximum);
+            section.occluders=buildSectionOccluders(meshJobCoordinate,
                 meshJobNextY,sectionMaximum);
             meshJobGeometry.sections~=section;
             meshJobNextY=sectionMaximum+1;
@@ -1868,6 +2121,17 @@ private:
             foreach(coordinate,geometry;chunkMeshes)
                 graphics.releaseStaticMesh(geometry.mesh);
         chunkMeshes.clear();
+        admittedRenderChunks.length=0;
+        admittedRenderSections.clear();
+        occlusionGrace.clear();
+    }
+
+    void purgeChunkOcclusionState(ChunkCoordinate coordinate)
+    {
+        RenderSectionKey[] stale;
+        foreach(key,present;occlusionGrace)
+            if(key.coordinate==coordinate)stale~=key;
+        foreach(key;stale)occlusionGrace.remove(key);
     }
 
     void appendHeldBlock(ItemStack stack,Vec3 position,float bodyYawDegrees,
@@ -1943,6 +2207,8 @@ private:
                     section.minimumY,section.maximumY);
                 section.fire=blocks.buildFireChunkRange(coordinate,
                     section.minimumY,section.maximumY);
+                section.occluders=buildSectionOccluders(coordinate,
+                    section.minimumY,section.maximumY);
                 rebuilt=true;
             }
             if(rebuilt)finalizeChunkGeometry(*cached);
@@ -1984,6 +2250,8 @@ private:
                 section.water=blocks.buildWaterChunkRange(dirty.coordinate,
                     section.minimumY,section.maximumY);
                 section.fire=blocks.buildFireChunkRange(dirty.coordinate,
+                    section.minimumY,section.maximumY);
+                section.occluders=buildSectionOccluders(dirty.coordinate,
                     section.minimumY,section.maximumY);
                 changedChunks[dirty.coordinate]=true;
             }
@@ -2097,7 +2365,8 @@ private:
                 frameImage.rgba[destinationStart .. destinationStart + side*4]
                     = source.rgba[sourceStart .. sourceStart + side*4];
             }
-            result ~= graphics.uploadTexture(frameImage).descriptorIndex;
+            result~=graphics.uploadTexture(frameImage,
+                terrainMipmapLevels).descriptorIndex;
         }
         return result;
     }
@@ -2105,6 +2374,13 @@ private:
     uint load(string relativePath)
     {
         return loadHandle(relativePath).descriptorIndex;
+    }
+
+    uint loadTerrain(string relativePath)
+    {
+        return graphics.uploadTexture(images.loadPng(
+            resources.resolveAsset("minecraft",relativePath)),
+            terrainMipmapLevels).descriptorIndex;
     }
 
     uint loadFrom(string namespaceName, string relativePath)
@@ -2116,6 +2392,10 @@ private:
 
 unittest
 {
+    const bounds=OcclusionBounds(Vec3(0,0,0),Vec3(16,16,16));
+    assert(GameRenderer.distanceSquaredToBounds(Vec3(8,8,8),bounds)==0.0f);
+    assert(GameRenderer.distanceSquaredToBounds(Vec3(20,8,8),bounds)==16.0f);
+
     Vertex[] geometry;
     const white=Color(1,1,1,1);
     appendQuad(geometry,

@@ -149,7 +149,8 @@ void setMouseButton(WindowContext* context, uint8_t button, bool down) {
 extern "C" {
 
 void* mcdPlatformCreateWindow(const char* title, int width, int height,
-    int localTestIndex, char* error, uint32_t errorCapacity) {
+    int localTestIndex,int highPixelDensity,char* error,
+    uint32_t errorCapacity) {
     if (!SDL_Init(SDL_INIT_VIDEO | SDL_INIT_EVENTS | SDL_INIT_AUDIO)) {
         copyError(error, errorCapacity, SDL_GetError());
         return nullptr;
@@ -163,8 +164,8 @@ void* mcdPlatformCreateWindow(const char* title, int width, int height,
         return nullptr;
     }
     auto context = std::make_unique<WindowContext>();
-    SDL_WindowFlags flags = static_cast<SDL_WindowFlags>(SDL_WINDOW_VULKAN
-        | SDL_WINDOW_RESIZABLE | SDL_WINDOW_HIGH_PIXEL_DENSITY);
+    SDL_WindowFlags flags=static_cast<SDL_WindowFlags>(SDL_WINDOW_VULKAN
+        |SDL_WINDOW_RESIZABLE|(highPixelDensity?SDL_WINDOW_HIGH_PIXEL_DENSITY:0));
     context->window = SDL_CreateWindow(title && *title ? title
         : "Minecraft: D Edition", width, height, flags);
     if (!context->window) {

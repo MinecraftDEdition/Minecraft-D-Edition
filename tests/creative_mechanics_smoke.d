@@ -31,7 +31,7 @@ void main()
     scope (exit) destroy(client);
 
     uint playerId;
-    bool hasCreativeStarterInventory;
+    bool creativeStartsEmpty;
     foreach (_; 0 .. 150)
     {
         foreach (packet; client.poll())
@@ -49,22 +49,54 @@ void main()
                 {
                     const state = reader.readPlayer();
                     if (state.id != playerId) continue;
-                    hasCreativeStarterInventory = true;
+                    creativeStartsEmpty = true;
                     foreach (stack; state.inventory.hotbar)
-                        if (!stack.empty()) hasCreativeStarterInventory=false;
-                    hasCreativeStarterInventory = hasCreativeStarterInventory
-                        && state.inventory.storage[0].item
-                            == ItemId.flintAndSteel
-                        && state.inventory.storage[0].count == 1
-                        && state.inventory.storage[1].item == ItemId.bricks
-                        && state.inventory.storage[15].item == ItemId.glass;
+                        if (!stack.empty()) creativeStartsEmpty=false;
+                    foreach (stack; state.inventory.storage)
+                        if (!stack.empty()) creativeStartsEmpty=false;
                 }
             }
         }
-        if (playerId != 0 && hasCreativeStarterInventory) break;
+        if (playerId != 0 && creativeStartsEmpty) break;
         Thread.sleep(20.msecs);
     }
-    assert(playerId != 0 && hasCreativeStarterInventory);
+    assert(playerId != 0 && creativeStartsEmpty);
+
+    // Catalog selections are authoritative infinite sources, not preloaded
+    // inventory stacks. Exercise carried-stack, number-key/hotbar, and trash.
+    PacketWriter catalogPick;
+    catalogPick.putU8(cast(ubyte)PlayerActionType.creativeSetCarried);
+    catalogPick.putU8(cast(ubyte)ItemId.stone);catalogPick.putU8(64);
+    client.send(GamePacketType.playerAction,catalogPick.data);
+    PacketWriter catalogHotbar;
+    catalogHotbar.putU8(cast(ubyte)PlayerActionType.creativeSetHotbar);
+    catalogHotbar.putU8(cast(ubyte)ItemId.bricks);catalogHotbar.putU8(4);
+    client.send(GamePacketType.playerAction,catalogHotbar.data);
+    bool catalogActionsApplied;
+    foreach(_;0..100)
+    {
+        foreach(packet;client.poll())if(packet.type==GamePacketType.snapshot)
+        {
+            PacketReader reader=PacketReader(packet.payload);
+            reader.readU32();reader.readU32();reader.readBool();
+            foreach(_player;0..reader.readU16())
+            {
+                const state=reader.readPlayer();
+                if(state.id==playerId&&state.inventory.carried.item==ItemId.stone
+                    &&state.inventory.carried.count==64
+                    &&state.inventory.hotbar[4].item==ItemId.bricks
+                    &&state.inventory.hotbar[4].count==64)
+                    catalogActionsApplied=true;
+            }
+        }
+        if(catalogActionsApplied)break;
+        Thread.sleep(20.msecs);
+    }
+    assert(catalogActionsApplied);
+    PacketWriter clearCatalog;
+    clearCatalog.putU8(cast(ubyte)PlayerActionType.creativeClearInventory);
+    clearCatalog.putU8(0);clearCatalog.putU8(0);
+    client.send(GamePacketType.playerAction,clearCatalog.data);
 
     // Aim at the grass ahead, then obtain it through middle-click's
     // authoritative Pick Block action.

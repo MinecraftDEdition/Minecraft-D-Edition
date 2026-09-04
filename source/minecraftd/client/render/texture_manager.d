@@ -28,6 +28,54 @@ struct ImageData
     ubyte[] rgba;
 }
 
+/// Builds tightly packed, alpha-aware mip levels after the original image.
+/// `additionalLevels` follows the video setting: zero keeps level 0 only,
+/// while four permits the complete 16 -> 8 -> 4 -> 2 -> 1 block chain.
+ImageData[] buildMipChain(const ImageData source,uint additionalLevels)
+{
+    ImageData[] result;
+    result~=ImageData(source.width,source.height,source.rgba.dup);
+    foreach(unused;0..additionalLevels)
+    {
+        const previous=result[$-1];
+        if(previous.width==1&&previous.height==1)break;
+        ImageData next;
+        next.width=previous.width>1?previous.width/2:1;
+        next.height=previous.height>1?previous.height/2:1;
+        next.rgba.length=cast(size_t)next.width*next.height*4;
+        foreach(y;0..next.height)foreach(x;0..next.width)
+        {
+            uint alphaTotal,redPremultiplied,greenPremultiplied,
+                bluePremultiplied,samples;
+            foreach(sampleY;0..2)foreach(sampleX;0..2)
+            {
+                const sourceX=x*2+sampleX<previous.width
+                    ?x*2+sampleX:previous.width-1;
+                const sourceY=y*2+sampleY<previous.height
+                    ?y*2+sampleY:previous.height-1;
+                const sourceOffset=(cast(size_t)sourceY*previous.width
+                    +sourceX)*4;
+                const alpha=previous.rgba[sourceOffset+3];
+                alphaTotal+=alpha;
+                redPremultiplied+=previous.rgba[sourceOffset]*alpha;
+                greenPremultiplied+=previous.rgba[sourceOffset+1]*alpha;
+                bluePremultiplied+=previous.rgba[sourceOffset+2]*alpha;
+                ++samples;
+            }
+            const destination=(cast(size_t)y*next.width+x)*4;
+            if(alphaTotal)
+            {
+                next.rgba[destination]=cast(ubyte)(redPremultiplied/alphaTotal);
+                next.rgba[destination+1]=cast(ubyte)(greenPremultiplied/alphaTotal);
+                next.rgba[destination+2]=cast(ubyte)(bluePremultiplied/alphaTotal);
+            }
+            next.rgba[destination+3]=cast(ubyte)(alphaTotal/samples);
+        }
+        result~=next;
+    }
+    return result;
+}
+
 final class TextureManager
 {
     version (Windows) private IWICImagingFactory factory;
@@ -149,4 +197,18 @@ final class TextureManager
         }
         return image;
     }
+}
+
+unittest
+{
+    ImageData image;
+    image.width=image.height=4;
+    image.rgba.length=4*4*4;
+    foreach(offset;0..image.rgba.length/4)
+        image.rgba[offset*4..offset*4+4]=[cast(ubyte)200,100,50,255];
+    const levels=buildMipChain(image,4);
+    assert(levels.length==3);
+    assert(levels[1].width==2&&levels[1].height==2);
+    assert(levels[2].width==1&&levels[2].height==1);
+    assert(levels[2].rgba==[cast(ubyte)200,100,50,255]);
 }

@@ -10,7 +10,7 @@ import directx.d3d12sdklayers;
 import directx.dxgi1_4;
 
 import minecraftd.client.render.mesh : DrawLayer, FrameMesh, MeshHandle, Vertex;
-import minecraftd.client.render.texture_manager : ImageData;
+import minecraftd.client.render.texture_manager : ImageData, buildMipChain;
 import minecraftd.client.render.graphics_device : GraphicsDevice, TextureHandle;
 import minecraftd.platform.windows.dx12.command_context : requireSuccess;
 import minecraftd.platform.windows.dx12.abi_bridge;
@@ -146,16 +146,21 @@ final class Dx12Device : GraphicsDevice
         if (factory !is null) factory.Release();
     }
 
-    override TextureHandle uploadTexture(const ImageData image)
+    override TextureHandle uploadTexture(const ImageData image,
+        uint additionalMipLevels)
     {
         if (nextTexture >= maxTextures)
             throw new Exception("D3D12 texture descriptor heap is full");
+
+        const mipChain=buildMipChain(image,additionalMipLevels);
+        const mipCount=cast(uint)mipChain.length;
 
         auto defaultHeap = D3D12_HEAP_PROPERTIES(
             D3D12_HEAP_TYPE_DEFAULT, D3D12_CPU_PAGE_PROPERTY_UNKNOWN,
             D3D12_MEMORY_POOL_UNKNOWN, 1, 1);
         auto textureDesc = D3D12_RESOURCE_DESC(
-            D3D12_RESOURCE_DIMENSION_TEXTURE2D, 0, image.width, image.height, 1, 1,
+            D3D12_RESOURCE_DIMENSION_TEXTURE2D, 0, image.width, image.height, 1,
+            cast(ushort)mipCount,
             DXGI_FORMAT_R8G8B8A8_UNORM, DXGI_SAMPLE_DESC(1, 0),
             D3D12_TEXTURE_LAYOUT_UNKNOWN, D3D12_RESOURCE_FLAG_NONE);
 
@@ -165,9 +170,15 @@ final class Dx12Device : GraphicsDevice
             D3D12_RESOURCE_STATE_COPY_DEST, null, &IID_ID3D12Resource,
             &texture), "Create texture");
 
-        D3D12_PLACED_SUBRESOURCE_FOOTPRINT footprint;
+        D3D12_PLACED_SUBRESOURCE_FOOTPRINT[] footprints;
+        footprints.length=mipCount;
+        uint[] rowCounts;
+        rowCounts.length=mipCount;
+        ulong[] rowSizes;
+        rowSizes.length=mipCount;
         ulong uploadBytes;
-        device.GetCopyableFootprints(&textureDesc, 0, 1, 0, &footprint, null, null, &uploadBytes);
+        device.GetCopyableFootprints(&textureDesc,0,mipCount,0,
+            footprints.ptr,rowCounts.ptr,rowSizes.ptr,&uploadBytes);
         auto uploadHeap = D3D12_HEAP_PROPERTIES(
             D3D12_HEAP_TYPE_UPLOAD, D3D12_CPU_PAGE_PROPERTY_UNKNOWN,
             D3D12_MEMORY_POOL_UNKNOWN, 1, 1);
@@ -185,22 +196,29 @@ final class Dx12Device : GraphicsDevice
         ubyte* mapped;
         auto noRead = D3D12_RANGE(0, 0);
         requireSuccess(upload.Map(0, &noRead, cast(void**) &mapped), "Map texture upload buffer");
-        const sourcePitch = image.width * 4;
-        foreach (row; 0 .. image.height)
-            memcpy(mapped + footprint.Offset + row * footprint.Footprint.RowPitch,
-                image.rgba.ptr + row * sourcePitch, sourcePitch);
+        foreach(level,mip; mipChain)
+        {
+            const sourcePitch=mip.width*4;
+            foreach(row;0..mip.height)
+                memcpy(mapped+footprints[level].Offset
+                        +row*footprints[level].Footprint.RowPitch,
+                    mip.rgba.ptr+row*sourcePitch,sourcePitch);
+        }
         upload.Unmap(0, null);
 
         beginCommands();
-        D3D12_TEXTURE_COPY_LOCATION destination;
-        destination.pResource = texture;
-        destination.Type = D3D12_TEXTURE_COPY_TYPE_SUBRESOURCE_INDEX;
-        destination.SubresourceIndex = 0;
-        D3D12_TEXTURE_COPY_LOCATION source;
-        source.pResource = upload;
-        source.Type = D3D12_TEXTURE_COPY_TYPE_PLACED_FOOTPRINT;
-        source.PlacedFootprint = footprint;
-        list.CopyTextureRegion(&destination, 0, 0, 0, &source, null);
+        foreach(level;0..mipCount)
+        {
+            D3D12_TEXTURE_COPY_LOCATION destination;
+            destination.pResource=texture;
+            destination.Type=D3D12_TEXTURE_COPY_TYPE_SUBRESOURCE_INDEX;
+            destination.SubresourceIndex=level;
+            D3D12_TEXTURE_COPY_LOCATION source;
+            source.pResource=upload;
+            source.Type=D3D12_TEXTURE_COPY_TYPE_PLACED_FOOTPRINT;
+            source.PlacedFootprint=footprints[level];
+            list.CopyTextureRegion(&destination,0,0,0,&source,null);
+        }
         transition(texture, D3D12_RESOURCE_STATE_COPY_DEST, D3D12_RESOURCE_STATE_PIXEL_SHADER_RESOURCE);
         executeCommands();
         waitForGpu();
@@ -210,7 +228,7 @@ final class Dx12Device : GraphicsDevice
         srv.ViewDimension = D3D12_SRV_DIMENSION_TEXTURE2D;
         srv.Shader4ComponentMapping = D3D12_DEFAULT_SHADER_4_COMPONENT_MAPPING;
         srv.Texture2D.MostDetailedMip = 0;
-        srv.Texture2D.MipLevels = 1;
+        srv.Texture2D.MipLevels = mipCount;
         srv.Texture2D.PlaneSlice = 0;
         srv.Texture2D.ResourceMinLODClamp = 0;
         auto srvDestination = cpuHandle(srvHeap, nextTexture, srvStride);

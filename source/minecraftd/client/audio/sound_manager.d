@@ -214,6 +214,14 @@ private:
             const choices = family == "nether_wood" ? 4 : 5;
             return "block/" ~ family ~ "/break" ~ randomChoice(choices) ~ ".ogg";
         }
+        if (family == "resin")
+            return "block/resin/resin_break" ~ randomChoice(5) ~ ".ogg";
+        if (family == "resin_bricks")
+            return "block/resin_bricks/resin_brick_break.ogg";
+        const blockChoices = blockSoundChoices(family, false);
+        if (blockChoices > 0)
+            return "block/" ~ family ~ "/break"
+                ~ randomChoice(blockChoices) ~ ".ogg";
         return "dig/" ~ family ~ randomChoice(4) ~ ".ogg";
     }
 
@@ -223,6 +231,15 @@ private:
         // break event uses the distinctive glass shatter samples.
         if (family == "glass")
             return "dig/stone" ~ randomChoice(4) ~ ".ogg";
+        if (family == "resin")
+            return "block/resin/resin_place" ~ randomChoice(4) ~ ".ogg";
+        if (family == "resin_bricks")
+            return "block/resin_bricks/resin_brick_place"
+                ~ randomChoice(5) ~ ".ogg";
+        const placeChoices = blockPlaceChoices(family);
+        if (placeChoices > 0)
+            return "block/" ~ family ~ "/place"
+                ~ randomChoice(placeChoices) ~ ".ogg";
         return blockBreakPath(family);
     }
 
@@ -238,9 +255,56 @@ private:
             const choices = family == "nether_wood" ? 5 : 6;
             return "block/" ~ family ~ "/step" ~ randomChoice(choices) ~ ".ogg";
         }
+        if (family == "resin")
+            return "block/resin/resin_step" ~ randomChoice(5) ~ ".ogg";
+        if (family == "resin_bricks")
+            return "block/resin_bricks/resin_brick_step"
+                ~ randomChoice(5) ~ ".ogg";
+        const blockChoices = blockSoundChoices(family, true);
+        if (blockChoices > 0)
+            return "block/" ~ family ~ "/step"
+                ~ randomChoice(blockChoices) ~ ".ogg";
         const choices = family == "grass" || family == "stone"
             || family == "wood" ? 6 : 4;
         return "step/" ~ family ~ randomChoice(choices) ~ ".ogg";
+    }
+
+    static int blockSoundChoices(string family, bool step)
+    {
+        switch (family)
+        {
+            case "rooted_dirt": return step ? 6 : 4;
+            case "mud", "packed_mud", "mud_bricks": return 6;
+            case "moss": return step ? 6 : 5;
+            case "deepslate": return step ? 6 : 4;
+            case "calcite": return step ? 6 : 4;
+            case "tuff": return step ? 6 : 5;
+            case "dripstone": return step ? 6 : 5;
+            case "copper": return step ? 6 : 4;
+            case "netherite": return step ? 6 : 4;
+            case "amethyst": return step ? 14 : 4;
+            case "soul_soil": return step ? 5 : 6;
+            case "basalt": return step ? 6 : 5;
+            case "nether_bricks": return 6;
+            case "nylium": return 6;
+            case "netherwart": return step ? 5 : 6;
+            case "nether_ore": return step ? 5 : 4;
+            case "cinnabar", "sulfur": return 7;
+            default: return 0;
+        }
+    }
+
+    static int blockPlaceChoices(string family)
+    {
+        switch (family)
+        {
+            case "deepslate": return 6;
+            case "calcite": return 4;
+            case "amethyst": return 4;
+            case "cinnabar": return 7;
+            case "sulfur": return 8;
+            default: return 0;
+        }
     }
 
 public:

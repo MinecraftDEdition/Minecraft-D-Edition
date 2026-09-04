@@ -37,6 +37,18 @@ private final class LightChunk
     int yOf(size_t i) const{return originY+cast(int)(i/(width*depth));}
 }
 
+private struct LightEmitter
+{
+    int x,y,z;
+    ubyte level;
+}
+
+private struct EmitterChunk
+{
+    uint revision;
+    LightEmitter[] emitters;
+}
+
 /// Chunk-local Java-style light storage. Streamed chunks invalidate only
 /// themselves and their edge neighbours instead of reallocating and filling
 /// one ever-growing world rectangle.
@@ -44,15 +56,23 @@ final class WorldLighting
 {
     private World world;
     private LightChunk[ChunkCoordinate] cached;
+    private EmitterChunk[ChunkCoordinate] emitterCache;
     private LightChunk active;
     private float gamma=0.5f;
 
     this(World world){this.world=world;}
-    ~this(){foreach(entry;cached)destroy(entry);cached.clear();}
+    ~this()
+    {
+        foreach(entry;cached)destroy(entry);
+        cached.clear();
+        emitterCache.clear();
+    }
     void configure(float value){gamma=clamp(value,0.0f,1.0f);}
 
     void refresh()
     {
+        if(active !is null&&active.signature!=revisionSignature(
+            active.coordinate))active=null;
         ChunkCoordinate[] stale;
         foreach(coordinate,entry;cached)
             if(!world.hasChunk(coordinate.x,coordinate.z))stale~=coordinate;
@@ -62,6 +82,10 @@ final class WorldLighting
             destroy(cached[coordinate]);
             cached.remove(coordinate);
         }
+        stale.length=0;
+        foreach(coordinate,entry;emitterCache)
+            if(!world.hasChunk(coordinate.x,coordinate.z))stale~=coordinate;
+        foreach(coordinate;stale)emitterCache.remove(coordinate);
     }
 
     void prepare(ChunkCoordinate coordinate)
@@ -109,8 +133,10 @@ private:
     LightChunk lightFor(int x,int z)
     {
         const coordinate=ChunkCoordinate(chunkCoordinate(x),chunkCoordinate(z));
-        if(active !is null&&active.containsColumn(x,z)
-            &&active.signature==revisionSignature(active.coordinate))
+        // prepare()/refresh() validates the active cache once per section.
+        // Re-hashing nine neighboring chunks for every one of the millions of
+        // vertex-light samples made smooth lighting needlessly CPU-bound.
+        if(active !is null&&active.containsColumn(x,z))
             return active;
         return lightForCoordinate(coordinate);
     }
@@ -188,18 +214,98 @@ private:
             }
             spread(result,result.sky,queue);
         }
-        size_t[] blockQueue;
+        buildBlockLight(result);
+        return result;
+    }
+
+    void buildBlockLight(LightChunk result)
+    {
+        // Block light reaches fifteen cells. The former one-cell-local flood
+        // made every mesh calculate a different answer near chunk borders,
+        // producing the conspicuous razor-edged bands around fire and portals.
+        enum int reach=15;
+        const minX=result.originX-(reach-1);
+        const minZ=result.originZ-(reach-1);
+        const maxX=result.originX+LightChunk.width+(reach-1);
+        const maxZ=result.originZ+LightChunk.depth+(reach-1);
+        int minY=result.originY-(reach-1);
+        int maxY=result.originY+result.height+(reach-1);
+        if(minY<world.minimumBuildY())minY=world.minimumBuildY();
+        if(maxY>world.maximumBuildY()+1)maxY=world.maximumBuildY()+1;
+
+        LightEmitter[] sources;
+        foreach(chunkZ;chunkCoordinate(minZ)..chunkCoordinate(maxZ-1)+1)
+        foreach(chunkX;chunkCoordinate(minX)..chunkCoordinate(maxX-1)+1)
+            sources~=emittersFor(ChunkCoordinate(chunkX,chunkZ));
+        if(!sources.length)return;
+
+        const width=maxX-minX,depth=maxZ-minZ,height=maxY-minY;
+        ubyte[] levels;
+        levels.length=cast(size_t)width*depth*height;
+        size_t[] queue;
+        size_t indexOf(int x,int y,int z)
+        {return (cast(size_t)(y-minY)*depth+(z-minZ))*width+(x-minX);}
+        foreach(source;sources)
+        {
+            if(source.x<minX||source.x>=maxX||source.y<minY
+                ||source.y>=maxY||source.z<minZ||source.z>=maxZ)continue;
+            const index=indexOf(source.x,source.y,source.z);
+            if(source.level<=levels[index])continue;
+            levels[index]=source.level;
+            queue~=index;
+        }
+
+        static immutable int[6] dx=[1,-1,0,0,0,0];
+        static immutable int[6] dy=[0,0,1,-1,0,0];
+        static immutable int[6] dz=[0,0,0,0,1,-1];
+        size_t head;
+        while(head<queue.length)
+        {
+            const currentIndex=queue[head++];
+            const current=levels[currentIndex];
+            if(current<=1)continue;
+            const localX=cast(int)(currentIndex%width);
+            const localZ=cast(int)((currentIndex/width)%depth);
+            const localY=cast(int)(currentIndex/(width*depth));
+            const x=minX+localX,y=minY+localY,z=minZ+localZ;
+            foreach(side;0..6)
+            {
+                const nx=x+dx[side],ny=y+dy[side],nz=z+dz[side];
+                if(nx<minX||nx>=maxX||ny<minY||ny>=maxY
+                    ||nz<minZ||nz>=maxZ
+                    ||isOpaque(world.getBlock(nx,ny,nz)))continue;
+                const neighbor=indexOf(nx,ny,nz);
+                const next=cast(ubyte)(current-1);
+                if(next<=levels[neighbor])continue;
+                levels[neighbor]=next;
+                queue~=neighbor;
+            }
+        }
         foreach(y;result.originY..result.originY+result.height)
         foreach(z;result.originZ..result.originZ+LightChunk.depth)
         foreach(x;result.originX..result.originX+LightChunk.width)
+            result.block[result.indexOf(x,y,z)]=levels[indexOf(x,y,z)];
+    }
+
+    const(LightEmitter)[] emittersFor(ChunkCoordinate coordinate)
+    {
+        const revision=world.chunkRevision(coordinate.x,coordinate.z);
+        if(auto found=coordinate in emitterCache)
+            if(found.revision==revision)return found.emitters;
+        EmitterChunk replacement;
+        replacement.revision=revision;
+        const loaded=world.chunkAt(coordinate.x,coordinate.z);
+        if(loaded !is null&&!loaded.empty)
+        foreach(y;loaded.minimumOccupiedY()..loaded.maximumOccupiedY()+1)
+        foreach(localZ;0..Chunk.depth)foreach(localX;0..Chunk.width)
         {
-            const emission=blockEmission(world.getBlock(x,y,z));
-            if(!emission)continue;
-            const index=result.indexOf(x,y,z);
-            result.block[index]=emission;blockQueue~=index;
+            const level=blockEmission(loaded.get(localX,y,localZ));
+            if(level)replacement.emitters~=LightEmitter(
+                coordinate.x*Chunk.width+localX,y,
+                coordinate.z*Chunk.depth+localZ,level);
         }
-        spread(result,result.block,blockQueue);
-        return result;
+        emitterCache[coordinate]=replacement;
+        return emitterCache[coordinate].emitters;
     }
     void spread(LightChunk grid,ref ubyte[] levels,size_t[] queue)
     {

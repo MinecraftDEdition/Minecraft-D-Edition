@@ -142,7 +142,7 @@ enum OptionsAction : ushort
     hostileVolume, neutralVolume, playerVolume, ambientVolume, voiceVolume,
     uiVolume, audioDevice, subtitles, directionalAudio, musicFrequency, musicToast,
     fullscreenResolution, maxFramerate, vsync, inactivityFpsLimit, guiScale,
-    fullscreen, exclusiveFullscreen, brightness, graphicsApi, graphicsPreset,
+    fullscreen, exclusiveFullscreen, highDpiRendering, brightness, graphicsApi, graphicsPreset,
     biomeBlend, renderDistance, chunkBuilder, simulationDistance, smoothLighting,
     clouds, particles, mipmapLevels, entityShadows, entityDistance,
     menuBackgroundBlur, cloudDistance, cutoutLeaves, improvedTransparency,
@@ -566,11 +566,11 @@ private WidgetSpec[] widgetsFor(const OptionsMenuState state)
             add(OptionsAction.done,100,0,true); break;
         case OptionsScreen.sounds:
             add(OptionsAction.masterVolume,0,0,true,WidgetKind.slider);
-            add(OptionsAction.musicVolume,1,0,false,WidgetKind.slider,false); add(OptionsAction.recordVolume,1,1,false,WidgetKind.slider,false);
-            add(OptionsAction.weatherVolume,2,0,false,WidgetKind.slider,false); add(OptionsAction.soundVolume,2,1,false,WidgetKind.slider);
-            add(OptionsAction.hostileVolume,3,0,false,WidgetKind.slider,false); add(OptionsAction.neutralVolume,3,1,false,WidgetKind.slider,false);
-            add(OptionsAction.playerVolume,4,0,false,WidgetKind.slider); add(OptionsAction.ambientVolume,4,1,false,WidgetKind.slider,false);
-            add(OptionsAction.voiceVolume,5,0,false,WidgetKind.slider,false); add(OptionsAction.uiVolume,5,1,false,WidgetKind.slider);
+            add(OptionsAction.musicVolume,1,0,false,WidgetKind.slider); add(OptionsAction.recordVolume,1,1,false,WidgetKind.slider);
+            add(OptionsAction.weatherVolume,2,0,false,WidgetKind.slider); add(OptionsAction.soundVolume,2,1,false,WidgetKind.slider);
+            add(OptionsAction.hostileVolume,3,0,false,WidgetKind.slider); add(OptionsAction.neutralVolume,3,1,false,WidgetKind.slider);
+            add(OptionsAction.playerVolume,4,0,false,WidgetKind.slider); add(OptionsAction.ambientVolume,4,1,false,WidgetKind.slider);
+            add(OptionsAction.voiceVolume,5,0,false,WidgetKind.slider); add(OptionsAction.uiVolume,5,1,false,WidgetKind.slider);
             add(OptionsAction.audioDevice,6,0,true,WidgetKind.button,false);
             add(OptionsAction.subtitles,7,0,false,WidgetKind.button,false); add(OptionsAction.directionalAudio,7,1);
             add(OptionsAction.musicFrequency,8,0,false,WidgetKind.button,false); add(OptionsAction.musicToast,8,1,false,WidgetKind.button,false);
@@ -581,26 +581,27 @@ private WidgetSpec[] widgetsFor(const OptionsMenuState state)
             add(OptionsAction.inactivityFpsLimit,3,0,false,WidgetKind.button,false); add(OptionsAction.guiScale,3,1,false,WidgetKind.button,false);
             add(OptionsAction.fullscreen,4,0); add(OptionsAction.exclusiveFullscreen,4,1,false,WidgetKind.button,false);
             add(OptionsAction.brightness,5,0,false,WidgetKind.slider); add(OptionsAction.graphicsApi,5,1);
-            heading("Quality & Performance",6); add(OptionsAction.graphicsPreset,7,0); add(OptionsAction.biomeBlend,7,1,false,WidgetKind.slider,false);
-            add(OptionsAction.renderDistance,8,0,false,WidgetKind.slider,false); add(OptionsAction.chunkBuilder,8,1,false,WidgetKind.button,false);
-            add(OptionsAction.simulationDistance,9,0,false,WidgetKind.slider,false); add(OptionsAction.smoothLighting,9,1);
-            add(OptionsAction.clouds,10,0); add(OptionsAction.particles,10,1);
-            add(OptionsAction.mipmapLevels,11,0,false,WidgetKind.slider,false); add(OptionsAction.entityShadows,11,1);
-            add(OptionsAction.entityDistance,12,0,false,WidgetKind.slider,false); add(OptionsAction.menuBackgroundBlur,12,1,false,WidgetKind.slider,false);
-            add(OptionsAction.cloudDistance,13,0,false,WidgetKind.slider,false); add(OptionsAction.cutoutLeaves,13,1,false,WidgetKind.button,false);
-            add(OptionsAction.improvedTransparency,14,0,false,WidgetKind.button,false); add(OptionsAction.textureFiltering,14,1,false,WidgetKind.button,false);
-            add(OptionsAction.anisotropicFiltering,15,0,false,WidgetKind.slider,false); add(OptionsAction.weatherRadius,15,1,false,WidgetKind.slider,false);
-            heading("Preferences",16); add(OptionsAction.autosaveIndicator,17,0,false,WidgetKind.button,false); add(OptionsAction.vignette,17,1,false,WidgetKind.button,false);
-            add(OptionsAction.attackIndicator,18,0,false,WidgetKind.button,false); add(OptionsAction.chunkFade,18,1,false,WidgetKind.slider,false);
+            version (OSX) add(OptionsAction.highDpiRendering,6,0,true);
+            heading("Quality & Performance",7); add(OptionsAction.graphicsPreset,8,0); add(OptionsAction.biomeBlend,8,1,false,WidgetKind.slider);
+            add(OptionsAction.renderDistance,9,0,false,WidgetKind.slider); add(OptionsAction.chunkBuilder,9,1,false,WidgetKind.button,false);
+            add(OptionsAction.simulationDistance,10,0,false,WidgetKind.slider); add(OptionsAction.smoothLighting,10,1);
+            add(OptionsAction.clouds,11,0); add(OptionsAction.particles,11,1);
+            add(OptionsAction.mipmapLevels,12,0,false,WidgetKind.slider); add(OptionsAction.entityShadows,12,1);
+            add(OptionsAction.entityDistance,13,0,false,WidgetKind.slider); add(OptionsAction.menuBackgroundBlur,13,1,false,WidgetKind.slider);
+            add(OptionsAction.cloudDistance,14,0,false,WidgetKind.slider); add(OptionsAction.cutoutLeaves,14,1,false,WidgetKind.button,false);
+            add(OptionsAction.improvedTransparency,15,0,false,WidgetKind.button,false); add(OptionsAction.textureFiltering,15,1,false,WidgetKind.button,false);
+            add(OptionsAction.anisotropicFiltering,16,0,false,WidgetKind.slider); add(OptionsAction.weatherRadius,16,1,false,WidgetKind.slider);
+            heading("Preferences",17); add(OptionsAction.autosaveIndicator,18,0,false,WidgetKind.button,false); add(OptionsAction.vignette,18,1,false,WidgetKind.button,false);
+            add(OptionsAction.attackIndicator,19,0,false,WidgetKind.button,false); add(OptionsAction.chunkFade,19,1,false,WidgetKind.slider);
             add(OptionsAction.done,100,0,true); break;
         case OptionsScreen.controls:
             add(OptionsAction.mouseMenu,0,0); add(OptionsAction.keyBindsMenu,0,1);
             add(OptionsAction.sneakMode,1,0); add(OptionsAction.sprintMode,1,1);
             add(OptionsAction.attackMode,2,0); add(OptionsAction.useMode,2,1);
-            add(OptionsAction.autoJump,3,0); add(OptionsAction.sprintWindow,3,1,false,WidgetKind.slider,false);
+            add(OptionsAction.autoJump,3,0); add(OptionsAction.sprintWindow,3,1,false,WidgetKind.slider);
             add(OptionsAction.operatorItemsTab,4,0,false,WidgetKind.button,false); add(OptionsAction.done,100,0,true); break;
         case OptionsScreen.mouse:
-            add(OptionsAction.sensitivity,0,0,false,WidgetKind.slider); add(OptionsAction.scrollSensitivity,0,1,false,WidgetKind.slider,false);
+            add(OptionsAction.sensitivity,0,0,false,WidgetKind.slider); add(OptionsAction.scrollSensitivity,0,1,false,WidgetKind.slider);
             add(OptionsAction.discreteScrolling,1,0,false,WidgetKind.button,false); add(OptionsAction.rawInput,1,1,false,WidgetKind.button,false);
             add(OptionsAction.invertMouseX,2,0); add(OptionsAction.invertMouseY,2,1);
             add(OptionsAction.allowCursorChanges,3,0,true); add(OptionsAction.done,100,0,true); break;
@@ -646,8 +647,8 @@ private WidgetSpec[] widgetsFor(const OptionsMenuState state)
             add(OptionsAction.chatVisibility,0,0); add(OptionsAction.chatColors,0,1);
             add(OptionsAction.webLinks,1,0,false,WidgetKind.button,false); add(OptionsAction.promptLinks,1,1,false,WidgetKind.button,false);
             add(OptionsAction.chatOpacity,2,0,false,WidgetKind.slider); add(OptionsAction.textBackgroundOpacity,2,1,false,WidgetKind.slider);
-            add(OptionsAction.chatScale,3,0,false,WidgetKind.slider,false); add(OptionsAction.lineSpacing,3,1,false,WidgetKind.slider);
-            add(OptionsAction.chatDelay,4,0,false,WidgetKind.slider,false); add(OptionsAction.chatWidth,4,1,false,WidgetKind.slider);
+            add(OptionsAction.chatScale,3,0,false,WidgetKind.slider); add(OptionsAction.lineSpacing,3,1,false,WidgetKind.slider);
+            add(OptionsAction.chatDelay,4,0,false,WidgetKind.slider); add(OptionsAction.chatWidth,4,1,false,WidgetKind.slider);
             add(OptionsAction.focusedHeight,5,0,false,WidgetKind.slider); add(OptionsAction.unfocusedHeight,5,1,false,WidgetKind.slider);
             add(OptionsAction.narrator,6,0,false,WidgetKind.button,false); add(OptionsAction.commandSuggestions,6,1,false,WidgetKind.button,false);
             add(OptionsAction.hideMatchedNames,7,0,false,WidgetKind.button,false); add(OptionsAction.reducedDebugInfo,7,1,false,WidgetKind.button,false);
@@ -661,15 +662,15 @@ private WidgetSpec[] widgetsFor(const OptionsMenuState state)
         case OptionsScreen.accessibility:
             add(OptionsAction.narrator,0,0,false,WidgetKind.button,false); add(OptionsAction.controlsMenu,0,1);
             add(OptionsAction.subtitles,1,0,false,WidgetKind.button,false); add(OptionsAction.highContrast,1,1,false,WidgetKind.button,false);
-            add(OptionsAction.menuBackgroundBlur,2,0,false,WidgetKind.slider,false); add(OptionsAction.textBackgroundOpacity,2,1,false,WidgetKind.slider);
+            add(OptionsAction.menuBackgroundBlur,2,0,false,WidgetKind.slider); add(OptionsAction.textBackgroundOpacity,2,1,false,WidgetKind.slider);
             add(OptionsAction.textBackgroundMode,3,0,false,WidgetKind.button,false); add(OptionsAction.chatOpacity,3,1,false,WidgetKind.slider);
-            add(OptionsAction.lineSpacing,4,0,false,WidgetKind.slider); add(OptionsAction.chatDelay,4,1,false,WidgetKind.slider,false);
-            add(OptionsAction.notificationTime,5,0,false,WidgetKind.slider,false); add(OptionsAction.viewBobbing,5,1);
-            add(OptionsAction.distortionEffects,6,0,false,WidgetKind.slider,false); add(OptionsAction.fovEffects,6,1,false,WidgetKind.slider,false);
-            add(OptionsAction.darknessPulsing,7,0,false,WidgetKind.slider,false); add(OptionsAction.damageTilt,7,1,false,WidgetKind.slider,false);
-            add(OptionsAction.glintSpeed,8,0,false,WidgetKind.slider,false); add(OptionsAction.glintStrength,8,1,false,WidgetKind.slider,false);
+            add(OptionsAction.lineSpacing,4,0,false,WidgetKind.slider); add(OptionsAction.chatDelay,4,1,false,WidgetKind.slider);
+            add(OptionsAction.notificationTime,5,0,false,WidgetKind.slider); add(OptionsAction.viewBobbing,5,1);
+            add(OptionsAction.distortionEffects,6,0,false,WidgetKind.slider); add(OptionsAction.fovEffects,6,1,false,WidgetKind.slider);
+            add(OptionsAction.darknessPulsing,7,0,false,WidgetKind.slider); add(OptionsAction.damageTilt,7,1,false,WidgetKind.slider);
+            add(OptionsAction.glintSpeed,8,0,false,WidgetKind.slider); add(OptionsAction.glintStrength,8,1,false,WidgetKind.slider);
             add(OptionsAction.hideSkyFlashes,9,0,false,WidgetKind.button,false); add(OptionsAction.monochromeLogo,9,1,false,WidgetKind.button,false);
-            add(OptionsAction.panoramaSpeed,10,0,false,WidgetKind.slider,false); add(OptionsAction.hideSplashTexts,10,1,false,WidgetKind.button,false);
+            add(OptionsAction.panoramaSpeed,10,0,false,WidgetKind.slider); add(OptionsAction.hideSplashTexts,10,1,false,WidgetKind.button,false);
             add(OptionsAction.narratorHotkey,11,0,false,WidgetKind.button,false); add(OptionsAction.rotateWithMinecarts,11,1,false,WidgetKind.button,false);
             add(OptionsAction.highContrastBlockOutlines,12,0,true,WidgetKind.button,false);
             add(OptionsAction.done,100,0,true); break;
@@ -786,9 +787,11 @@ private string label(OptionsAction a,const OptionsMenuState s)
         case OptionsAction.audioDevice:return "Device: System Default";
         case OptionsAction.fullscreenResolution:return "Fullscreen Resolution: Current";
         case OptionsAction.exclusiveFullscreen:return "Exclusive Fullscreen: OFF";
+        case OptionsAction.highDpiRendering:
+            return toggle("Retina Rendering",s.boolean("highDpiRendering",false))~" (restart)";
         case OptionsAction.graphicsApi:return s.integer("graphicsApi",0)==1
             ? "Graphics API: Vulkan (restart)" : "Graphics API: DirectX 12 (restart)";
-        case OptionsAction.maxFramerate:return "Max Framerate: "~to!string(s.integer("maxFps",120))~" fps";
+        case OptionsAction.maxFramerate:return "Max Framerate: "~to!string(s.integer("maxFps",260))~" fps";
         case OptionsAction.brightness:return percent("Brightness",s.number("gamma",.5f));
         case OptionsAction.biomeBlend:
             const blend=s.integer("biomeBlendRadius",5); return format("Biome Blend: %sx%s",blend,blend);
@@ -869,7 +872,7 @@ private float sliderAmount(OptionsAction a,const OptionsMenuState s)
         case OptionsAction.weatherVolume:return s.number("soundCategory_weather",1); case OptionsAction.hostileVolume:return s.number("soundCategory_hostile",1);
         case OptionsAction.neutralVolume:return s.number("soundCategory_neutral",1); case OptionsAction.playerVolume:return s.number("soundCategory_player",1);
         case OptionsAction.ambientVolume:return s.number("soundCategory_ambient",1); case OptionsAction.voiceVolume:return s.number("soundCategory_voice",1);
-        case OptionsAction.uiVolume:return s.number("soundCategory_ui",1); case OptionsAction.maxFramerate:return(s.integer("maxFps",120)-10)/250f;
+        case OptionsAction.uiVolume:return s.number("soundCategory_ui",1); case OptionsAction.maxFramerate:return(s.integer("maxFps",260)-10)/250f;
         case OptionsAction.brightness:return s.number("gamma",.5f); case OptionsAction.biomeBlend:return(s.integer("biomeBlendRadius",5)-1)/14f;
         case OptionsAction.renderDistance:return(s.integer("renderDistance",6)-2)/10f; case OptionsAction.simulationDistance:return(s.integer("simulationDistance",5)-5)/7f;
         case OptionsAction.mipmapLevels:return s.integer("mipmapLevels",4)/4f; case OptionsAction.entityDistance:return(s.number("entityDistanceScaling",1)-.5f)/4.5f;
@@ -983,7 +986,8 @@ private string booleanKey(OptionsAction a)
         case OptionsAction.rightSleeve:return"modelPart_rightSleeve"; case OptionsAction.leftPantLeg:return"modelPart_leftPantLeg";
         case OptionsAction.rightPantLeg:return"modelPart_rightPantLeg"; case OptionsAction.hat:return"modelPart_hat";
         case OptionsAction.subtitles:return"showSubtitles"; case OptionsAction.directionalAudio:return"directionalAudio";
-        case OptionsAction.vsync:return"vsync"; case OptionsAction.cutoutLeaves:return"cutoutLeaves";
+        case OptionsAction.vsync:return"vsync"; case OptionsAction.highDpiRendering:return"highDpiRendering";
+        case OptionsAction.cutoutLeaves:return"cutoutLeaves";
         case OptionsAction.improvedTransparency:return"improvedTransparency"; case OptionsAction.autosaveIndicator:return"autosaveIndicator";
         case OptionsAction.vignette:return"vignette"; case OptionsAction.autoJump:return"autoJump";
         case OptionsAction.operatorItemsTab:return"operatorItemsTab"; case OptionsAction.discreteScrolling:return"discreteScrolling";
@@ -1012,7 +1016,8 @@ private string booleanName(OptionsAction a)
         case OptionsAction.rightSleeve:return"Right Sleeve"; case OptionsAction.leftPantLeg:return"Left Pant Leg";
         case OptionsAction.rightPantLeg:return"Right Pant Leg"; case OptionsAction.hat:return"Hat";
         case OptionsAction.subtitles:return"Closed Captions"; case OptionsAction.directionalAudio:return"Directional Audio";
-        case OptionsAction.vsync:return"VSync"; case OptionsAction.cutoutLeaves:return"See-Through Leaves";
+        case OptionsAction.vsync:return"VSync"; case OptionsAction.highDpiRendering:return"Retina Rendering";
+        case OptionsAction.cutoutLeaves:return"See-Through Leaves";
         case OptionsAction.improvedTransparency:return"Improved Transparency"; case OptionsAction.autosaveIndicator:return"Autosave Indicator";
         case OptionsAction.vignette:return"Show Vignette"; case OptionsAction.autoJump:return"Auto-Jump";
         case OptionsAction.operatorItemsTab:return"Operator Items Tab"; case OptionsAction.discreteScrolling:return"Discrete Scrolling";
@@ -1035,7 +1040,7 @@ private bool defaultBoolean(OptionsAction a)
     switch(a)
     {
         case OptionsAction.allowFriendRequests,OptionsAction.inGameNotification,
-             OptionsAction.subtitles,OptionsAction.directionalAudio,
+             OptionsAction.subtitles,OptionsAction.directionalAudio,OptionsAction.highDpiRendering,
              OptionsAction.improvedTransparency,OptionsAction.autoJump,
               OptionsAction.operatorItemsTab,OptionsAction.discreteScrolling,
               OptionsAction.invertControllerY,
@@ -1118,5 +1123,18 @@ unittest
     loaded.activate(OptionsAction.resetKeys);
     assert(loaded.key(OptionsAction.bindForward)=='W');
     loaded.open(false);loaded.activate(OptionsAction.videoMenu);
-    assert(loaded.screen==OptionsScreen.video);loaded.back();assert(loaded.screen==OptionsScreen.main&&loaded.active);
+    assert(loaded.screen==OptionsScreen.video);
+    assert(loaded.integer("maxFps",260)==260);
+    loaded.adjustSlider(OptionsAction.maxFramerate,int.max,1920,1080);
+    assert(loaded.integer("maxFps",0)==260);
+    foreach(screen;cast(int)OptionsScreen.min..cast(int)OptionsScreen.max+1)
+    {
+        loaded.screen=cast(OptionsScreen)screen;
+        foreach(widget;widgetsFor(loaded))
+            if(widget.kind==WidgetKind.slider
+                &&widget.action!=OptionsAction.fullscreenResolution)
+                assert(widget.enabled);
+    }
+    loaded.screen=OptionsScreen.video;
+    loaded.back();assert(loaded.screen==OptionsScreen.main&&loaded.active);
 }

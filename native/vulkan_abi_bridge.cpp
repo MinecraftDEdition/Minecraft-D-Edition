@@ -206,7 +206,8 @@ struct Context {
         require(vkQueueWaitIdle(queue), "vkQueueWaitIdle");
     }
 
-    void transition(VkImage image, VkImageLayout before, VkImageLayout after) {
+    void transition(VkImage image, VkImageLayout before, VkImageLayout after,
+        uint32_t mipLevels = 1) {
         VkImageMemoryBarrier barrier{VK_STRUCTURE_TYPE_IMAGE_MEMORY_BARRIER};
         barrier.oldLayout = before;
         barrier.newLayout = after;
@@ -214,7 +215,7 @@ struct Context {
         barrier.dstQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED;
         barrier.image = image;
         barrier.subresourceRange.aspectMask = VK_IMAGE_ASPECT_COLOR_BIT;
-        barrier.subresourceRange.levelCount = 1;
+        barrier.subresourceRange.levelCount = mipLevels;
         barrier.subresourceRange.layerCount = 1;
         VkPipelineStageFlags sourceStage = VK_PIPELINE_STAGE_TOP_OF_PIPE_BIT;
         VkPipelineStageFlags destinationStage = VK_PIPELINE_STAGE_TRANSFER_BIT;
@@ -252,13 +253,20 @@ struct Context {
     }
 
     uint32_t uploadTexture(const uint8_t* rgba, uint32_t textureWidth,
-        uint32_t textureHeight) {
-        if (!rgba || textureWidth == 0 || textureHeight == 0)
+        uint32_t textureHeight,uint32_t mipLevels) {
+        if (!rgba || textureWidth == 0 || textureHeight == 0 || mipLevels == 0)
             throw std::runtime_error("Vulkan texture has no pixels");
         if (textures.size() >= MaxTextures)
             throw std::runtime_error("Vulkan texture descriptor pool is full");
 
-        const VkDeviceSize bytes = VkDeviceSize(textureWidth) * textureHeight * 4;
+        VkDeviceSize bytes = 0;
+        uint32_t mipWidth = textureWidth;
+        uint32_t mipHeight = textureHeight;
+        for (uint32_t level = 0; level < mipLevels; ++level) {
+            bytes += VkDeviceSize(mipWidth) * mipHeight * 4;
+            mipWidth = std::max(1u, mipWidth / 2);
+            mipHeight = std::max(1u, mipHeight / 2);
+        }
         VkBuffer staging = VK_NULL_HANDLE;
         VkDeviceMemory stagingMemory = VK_NULL_HANDLE;
         createBuffer(bytes, VK_BUFFER_USAGE_TRANSFER_SRC_BIT,
@@ -274,7 +282,7 @@ struct Context {
         image.imageType = VK_IMAGE_TYPE_2D;
         image.format = VK_FORMAT_R8G8B8A8_UNORM;
         image.extent = {textureWidth, textureHeight, 1};
-        image.mipLevels = 1;
+        image.mipLevels = mipLevels;
         image.arrayLayers = 1;
         image.samples = VK_SAMPLE_COUNT_1_BIT;
         image.tiling = VK_IMAGE_TILING_OPTIMAL;
@@ -293,16 +301,28 @@ struct Context {
             "vkBindImageMemory");
 
         beginCommands();
-        transition(texture.image, VK_IMAGE_LAYOUT_UNDEFINED,
-            VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL);
-        VkBufferImageCopy copy{};
-        copy.imageSubresource.aspectMask = VK_IMAGE_ASPECT_COLOR_BIT;
-        copy.imageSubresource.layerCount = 1;
-        copy.imageExtent = {textureWidth, textureHeight, 1};
+        transition(texture.image,VK_IMAGE_LAYOUT_UNDEFINED,
+            VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL,mipLevels);
+        std::vector<VkBufferImageCopy> copies(mipLevels);
+        VkDeviceSize offset = 0;
+        mipWidth = textureWidth;
+        mipHeight = textureHeight;
+        for (uint32_t level = 0; level < mipLevels; ++level) {
+            auto& copy = copies[level];
+            copy.bufferOffset = offset;
+            copy.imageSubresource.aspectMask = VK_IMAGE_ASPECT_COLOR_BIT;
+            copy.imageSubresource.mipLevel = level;
+            copy.imageSubresource.layerCount = 1;
+            copy.imageExtent = {mipWidth, mipHeight, 1};
+            offset += VkDeviceSize(mipWidth) * mipHeight * 4;
+            mipWidth = std::max(1u, mipWidth / 2);
+            mipHeight = std::max(1u, mipHeight / 2);
+        }
         vkCmdCopyBufferToImage(command, staging, texture.image,
-            VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL, 1, &copy);
-        transition(texture.image, VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL,
-            VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL);
+            VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL,
+            static_cast<uint32_t>(copies.size()),copies.data());
+        transition(texture.image,VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL,
+            VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL,mipLevels);
         submitAndWait();
         vkDestroyBuffer(device, staging, nullptr);
         vkFreeMemory(device, stagingMemory, nullptr);
@@ -312,7 +332,7 @@ struct Context {
         view.viewType = VK_IMAGE_VIEW_TYPE_2D;
         view.format = image.format;
         view.subresourceRange.aspectMask = VK_IMAGE_ASPECT_COLOR_BIT;
-        view.subresourceRange.levelCount = 1;
+        view.subresourceRange.levelCount = mipLevels;
         view.subresourceRange.layerCount = 1;
         require(vkCreateImageView(device, &view, nullptr, &texture.view),
             "vkCreateImageView(texture)");
@@ -1165,7 +1185,7 @@ struct Context {
         samplerInfo.addressModeU = VK_SAMPLER_ADDRESS_MODE_REPEAT;
         samplerInfo.addressModeV = VK_SAMPLER_ADDRESS_MODE_REPEAT;
         samplerInfo.addressModeW = VK_SAMPLER_ADDRESS_MODE_REPEAT;
-        samplerInfo.maxLod = 0.0f;
+        samplerInfo.maxLod = 16.0f;
         require(vkCreateSampler(device, &samplerInfo, nullptr, &sampler),
             "vkCreateSampler");
         VkPushConstantRange push{};
@@ -1257,11 +1277,12 @@ MCD_EXPORT void mdVkDestroy(void* context) {
     delete static_cast<Context*>(context);
 }
 
-MCD_EXPORT int mdVkUploadTexture(void* context, const uint8_t* rgba,
-    uint32_t width, uint32_t height, uint32_t* index, char* error,
-    uint32_t errorCapacity) {
+MCD_EXPORT int mdVkUploadTexture(void* context,const uint8_t* rgba,
+    uint32_t width,uint32_t height,uint32_t mipLevels,uint32_t* index,
+    char* error,uint32_t errorCapacity) {
     try {
-        *index = static_cast<Context*>(context)->uploadTexture(rgba, width, height);
+        *index=static_cast<Context*>(context)->uploadTexture(rgba,width,height,
+            mipLevels);
         return 1;
     } catch (const std::exception& failure) {
         copyError(error, errorCapacity, failure.what());

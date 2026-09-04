@@ -4,7 +4,7 @@ import std.string : fromStringz, toStringz;
 
 import minecraftd.client.render.graphics_device : GraphicsDevice, TextureHandle;
 import minecraftd.client.render.mesh : FrameMesh, MeshHandle, Vertex;
-import minecraftd.client.render.texture_manager : ImageData;
+import minecraftd.client.render.texture_manager : ImageData, buildMipChain;
 
 private extern(C) nothrow
 {
@@ -13,8 +13,9 @@ private extern(C) nothrow
         const(char)* blurPixelShader,
         char* error, uint errorCapacity);
     void mdVkDestroy(void* context);
-    int mdVkUploadTexture(void* context, const(ubyte)* rgba, uint width,
-        uint height, uint* index, char* error, uint errorCapacity);
+    int mdVkUploadTexture(void* context,const(ubyte)* rgba,uint width,
+        uint height,uint mipLevels,uint* index,char* error,
+        uint errorCapacity);
     int mdVkUploadStaticMesh(void* context, const(Vertex)* vertices,
         uint vertexCount, ulong* id, char* error, uint errorCapacity);
     int mdVkReleaseStaticMesh(void* context, ulong id, char* error,
@@ -70,12 +71,24 @@ final class VulkanDevice : GraphicsDevice
         }
     }
 
-    override TextureHandle uploadTexture(const ImageData image)
+    override TextureHandle uploadTexture(const ImageData image,
+        uint additionalMipLevels)
     {
+        const mipChain=buildMipChain(image,additionalMipLevels);
+        size_t byteCount;
+        foreach(mip;mipChain)byteCount+=mip.rgba.length;
+        ubyte[] packed;
+        packed.length=byteCount;
+        size_t destination;
+        foreach(mip;mipChain)
+        {
+            packed[destination..destination+mip.rgba.length]=mip.rgba;
+            destination+=mip.rgba.length;
+        }
         char[1024] error = 0;
         uint index;
-        if (!mdVkUploadTexture(context, image.rgba.ptr, image.width,
-            image.height, &index, error.ptr, cast(uint) error.length))
+        if(!mdVkUploadTexture(context,packed.ptr,image.width,image.height,
+            cast(uint)mipChain.length,&index,error.ptr,cast(uint)error.length))
             throw new Exception(message(error, "Unable to upload Vulkan texture"));
         return TextureHandle(index);
     }

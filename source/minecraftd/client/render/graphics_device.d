@@ -16,7 +16,8 @@ struct TextureHandle
 
 abstract class GraphicsDevice
 {
-    abstract TextureHandle uploadTexture(const ImageData image);
+    abstract TextureHandle uploadTexture(const ImageData image,
+        uint additionalMipLevels=0);
     abstract MeshHandle uploadStaticMesh(const Vertex[] vertices);
     abstract void releaseStaticMesh(MeshHandle mesh);
     abstract TextureHandle menuBlurTexture() const;

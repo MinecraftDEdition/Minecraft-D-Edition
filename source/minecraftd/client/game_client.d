@@ -30,13 +30,15 @@ import minecraftd.client.menu.pause_menu : PauseAction, PauseMenuState,
     PauseScreen;
 import minecraftd.client.menu.death_screen : DeathAction, DeathScreenState;
 import minecraftd.client.menu.options_menu : OptionsAction, OptionsMenuState;
-import minecraftd.client.menu.inventory_menu:InventoryMenuState;
+import minecraftd.client.menu.inventory_menu:CreativeTab,InventoryMenuRenderer,
+    InventoryMenuState;
+import minecraftd.game.item.inventory:Inventory;
 import minecraftd.client.account.account_service : AccountService,
     AccountSnapshot;
 import minecraftd.client.menu.account_menu_state : AccountDialog,
     AccountMenuState;
 import minecraftd.platform.clock : monotonicMilliseconds, monotonicSeconds,
-    sleepMilliseconds;
+    sleepUntilSeconds;
 import minecraftd.platform.desktop.discord_presence : DiscordPresence;
 import minecraftd.platform.input;
 import minecraftd.platform.paths : platformPaths;
@@ -68,7 +70,8 @@ final class GameClient
         auto options = new OptionsMenuState(paths.userData);
         scope (exit) destroy(options);
         auto window = new GameWindow("Minecraft: D Edition",
-            GameWindow.defaultWidth, GameWindow.defaultHeight);
+            GameWindow.defaultWidth,GameWindow.defaultHeight,0,
+            options.boolean("highDpiRendering",false));
         scope (exit) destroy(window);
         UiNavigation uiNavigation;
         startUpdater();
@@ -130,6 +133,7 @@ final class GameClient
         bool worldScreen;
         bool worldTextMouseSelecting;
         bool serverTextMouseSelecting;
+        OptionsAction menuDraggedSlider;
         string lastAccountMessage;
         string activeWorldName;
 
@@ -266,6 +270,8 @@ final class GameClient
                 || gamepad.pressed(GamepadButton.a);
             const uiPrimaryDown = window.down(VK_LBUTTON)
                 || gamepad.down(GamepadButton.a);
+            const mousePrimaryPressed=window.pressed(VK_LBUTTON);
+            const mousePrimaryDown=window.down(VK_LBUTTON);
             const uiCancelPressed = window.pressed(VK_ESCAPE)
                 || gamepad.pressed(GamepadButton.b);
             const menuTime = cast(float) monotonicMilliseconds() / 1000.0f;
@@ -273,6 +279,9 @@ final class GameClient
             if (options.active && !options.fromGame)
             {
                 const hovered = renderer.optionsActionAt(cursor.x,cursor.y);
+                if(!mousePrimaryDown)menuDraggedSlider=OptionsAction.none;
+                if(mousePrimaryPressed&&options.slider(hovered))
+                    menuDraggedSlider=hovered;
                 window.setCursorShape(hovered == OptionsAction.none
                     || !options.allowCursorChanges ? CursorShape.arrow
                     : (options.slider(hovered) ? CursorShape.horizontalResize
@@ -286,11 +295,11 @@ final class GameClient
                 }
                 else if (uiCancelPressed)
                     options.back();
-                else if (hovered != OptionsAction.none
-                    && options.slider(hovered) && uiPrimaryDown)
+                else if(menuDraggedSlider!=OptionsAction.none&&mousePrimaryDown)
                 {
-                    if (uiAcceptPressed) renderer.playUiButtonClick();
-                    options.adjustSlider(hovered,cursor.x,window.width,window.height);
+                    if(mousePrimaryPressed)renderer.playUiButtonClick();
+                    options.adjustSlider(menuDraggedSlider,cursor.x,
+                        window.width,window.height);
                     renderer.applyOptions();
                 }
                 else if (uiAcceptPressed
@@ -853,6 +862,7 @@ final class GameClient
         auto announcedAccount=accounts.snapshot;
         string announcedSkinVersion=sharedSkinVersion(announcedAccount);
         string announcedSkinModel=announcedAccount.skinModel.idup;
+        OptionsAction gameDraggedSlider;
 
         void setPauseMenu(bool active)
         {
@@ -896,6 +906,7 @@ final class GameClient
 
         while (window.running)
         {
+            const frameStarted=monotonicSeconds();
             window.pumpMessages();
             tickEos();
             if (eosHostBridge !is null)
@@ -991,6 +1002,8 @@ final class GameClient
                 || gamepad.pressed(GamepadButton.a);
             const uiPrimaryDown = window.down(VK_LBUTTON)
                 || gamepad.down(GamepadButton.a);
+            const mousePrimaryPressed=window.pressed(VK_LBUTTON);
+            const mousePrimaryDown=window.down(VK_LBUTTON);
             int resizedWidth;
             int resizedHeight;
             if (window.consumeResize(resizedWidth, resizedHeight))
@@ -1131,6 +1144,9 @@ final class GameClient
                 window.clearTextInput();
                 const cursor = uiCursor;
                 const hovered = renderer.optionsActionAt(cursor.x,cursor.y);
+                if(!mousePrimaryDown)gameDraggedSlider=OptionsAction.none;
+                if(mousePrimaryPressed&&options.slider(hovered))
+                    gameDraggedSlider=hovered;
                 window.setCursorShape(hovered == OptionsAction.none
                     || !options.allowCursorChanges ? CursorShape.arrow
                     : (options.slider(hovered) ? CursorShape.horizontalResize
@@ -1144,11 +1160,11 @@ final class GameClient
                 }
                 else if (escapePressed)
                     options.back();
-                else if (hovered != OptionsAction.none
-                    && options.slider(hovered) && uiPrimaryDown)
+                else if(gameDraggedSlider!=OptionsAction.none&&mousePrimaryDown)
                 {
-                    if (uiAcceptPressed) renderer.playUiButtonClick();
-                    options.adjustSlider(hovered,cursor.x,window.width,window.height);
+                    if(mousePrimaryPressed)renderer.playUiButtonClick();
+                    options.adjustSlider(gameDraggedSlider,cursor.x,
+                        window.width,window.height);
                     renderer.applyOptions();
                 }
                 else if (uiAcceptPressed
@@ -1193,32 +1209,117 @@ final class GameClient
             }
             else if(inventoryMenu.active)
             {
-                window.clearTextInput();
                 const cursor=uiCursor;
-                const hovered=renderer.inventorySlotAt(cursor.x,cursor.y);
+                const creative=player.gameMode==player.gameMode.creative;
+                const hovered=renderer.inventorySlotAt(cursor.x,cursor.y,
+                    inventoryMenu,creative);
+                const hoveredTab=creative?renderer.creativeInventoryTabAt(
+                    cursor.x,cursor.y):-1;
+                const overSearch=creative&&inventoryMenu.searchActive
+                    &&renderer.creativeInventorySearchAt(cursor.x,cursor.y);
+                const editingSearch=creative&&inventoryMenu.searchActive;
                 window.setCursorShape(CursorShape.arrow);
-                if(escapePressed||window.pressed(
-                    options.key(OptionsAction.bindInventory)))
+                wstring inventoryText;
+                if(creative&&inventoryMenu.searchActive)
+                    inventoryText=window.consumeTextInput();
+                else window.clearTextInput();
+                if(creative&&inventoryMenu.searchActive)
+                {
+                    const shortcut=window.shortcutDown();
+                    if(shortcut&&window.pressed('A'))
+                    {window.clearTextInput();inventoryMenu.selectAllSearch();}
+                    else if(shortcut&&window.pressed('C'))
+                    {
+                        window.clearTextInput();
+                        if(inventoryMenu.searchHasSelection)
+                            window.setClipboardText(
+                                inventoryMenu.selectedSearchText);
+                    }
+                    else if(shortcut&&window.pressed('X'))
+                    {
+                        window.clearTextInput();
+                        if(inventoryMenu.searchHasSelection
+                            &&window.setClipboardText(
+                                inventoryMenu.selectedSearchText))
+                            inventoryMenu.cutSearch();
+                    }
+                    else if(shortcut&&window.pressed('V'))
+                    {
+                        window.clearTextInput();
+                        inventoryMenu.pasteSearch(window.clipboardText());
+                    }
+                    else
+                    {
+                        inventoryMenu.typeSearch(inventoryText);
+                        const selecting=window.down(VK_SHIFT);
+                        if(backspacePressed||containsCharacter(inventoryText,8))
+                            inventoryMenu.backspaceSearch();
+                        if(deletePressed)inventoryMenu.deleteSearch();
+                        if(leftPressed)inventoryMenu.moveSearchCursor(-1,selecting);
+                        if(rightPressed)inventoryMenu.moveSearchCursor(1,selecting);
+                        if(homePressed)inventoryMenu.moveSearchStart(selecting);
+                        if(endPressed)inventoryMenu.moveSearchEnd(selecting);
+                    }
+                }
+                if(escapePressed||(!inventoryMenu.searchActive&&window.pressed(
+                    options.key(OptionsAction.bindInventory))))
                     setInventoryMenu(false);
                 else
                 {
+                    if(creative)inventoryMenu.scrollCreative(
+                        window.consumeWheelSteps());
+                    bool clickHandled;
+                    if(creative&&uiAcceptPressed&&hoveredTab>=0)
+                    {
+                        inventoryMenu.selectCreativeTab(
+                            cast(CreativeTab)hoveredTab);
+                        renderer.playUiButtonClick();
+                        clickHandled=true;
+                    }
+                    else if(overSearch&&uiAcceptPressed)
+                    {
+                        inventoryMenu.setSearchCursor(
+                            renderer.creativeInventorySearchCursorAt(
+                                cursor.x,inventoryMenu),window.down(VK_SHIFT));
+                        clickHandled=true;
+                    }
                     const dropKey=window.pressed(
                         options.key(OptionsAction.bindDrop));
-                    if(dropKey&&hovered>=0)
+                    if(!editingSearch&&dropKey&&hovered>=0
+                        &&hovered<InventoryMenuRenderer.creativeCatalogBase)
                         multiplayer.requestInventoryAction(
                             PlayerActionType.inventoryDrop,cast(ubyte)hovered,
                             window.down(VK_CONTROL)?1:0);
                     if(gamepad.pressed(GamepadButton.y)&&hovered>=0)
-                        multiplayer.requestInventoryAction(
-                            PlayerActionType.inventoryQuickMove,
-                            cast(ubyte)hovered);
+                    {
+                        if(!creative||hovered<
+                            InventoryMenuRenderer.creativeCatalogBase)
+                            multiplayer.requestInventoryAction(
+                                PlayerActionType.inventoryQuickMove,
+                                cast(ubyte)hovered);
+                    }
                     foreach(slot;0..9)
-                        if(window.pressed(options.key(cast(OptionsAction)
+                        if(!editingSearch&&window.pressed(options.key(cast(OptionsAction)
                             (cast(int)OptionsAction.bindHotbar1+slot)))
                             &&hovered>=0)
-                            multiplayer.requestInventoryAction(
-                                PlayerActionType.inventoryHotbarSwap,
-                                cast(ubyte)hovered,cast(ubyte)slot);
+                        {
+                            if(creative&&hovered>=
+                                InventoryMenuRenderer.creativeCatalogBase
+                                &&hovered<InventoryMenuRenderer.creativeTrashSlot)
+                            {
+                                const items=inventoryMenu.visibleCreativeItems;
+                                const index=hovered-
+                                    InventoryMenuRenderer.creativeCatalogBase;
+                                if(index<items.length)
+                                    multiplayer.requestInventoryAction(
+                                        PlayerActionType.creativeSetHotbar,
+                                        cast(ubyte)items[index],cast(ubyte)slot);
+                            }
+                            else if(hovered<Inventory.slotCount)
+                                multiplayer.requestInventoryAction(
+                                    PlayerActionType.inventoryHotbarSwap,
+                                    cast(ubyte)hovered,cast(ubyte)slot);
+                        }
                     foreach(button;0..2)
                     {
                         const pressed=button==0
@@ -1226,10 +1327,28 @@ final class GameClient
                             :(window.pressed(VK_RBUTTON)
                                 ||gamepad.pressed(GamepadButton.x)
                                 ||gamepad.leftTriggerPressed);
-                        if(!pressed)continue;
+                        if(!pressed||clickHandled)continue;
                         if(hovered>=0)
                         {
-                            if(button==0&&window.down(VK_SHIFT))
+                            if(creative&&hovered>=
+                                InventoryMenuRenderer.creativeCatalogBase
+                                &&hovered<InventoryMenuRenderer.creativeTrashSlot)
+                            {
+                                const items=inventoryMenu.visibleCreativeItems;
+                                const index=hovered-
+                                    InventoryMenuRenderer.creativeCatalogBase;
+                                if(index<items.length)
+                                    multiplayer.requestInventoryAction(
+                                        PlayerActionType.creativeSetCarried,
+                                        cast(ubyte)items[index],button==0?1:64);
+                            }
+                            else if(creative&&hovered==
+                                InventoryMenuRenderer.creativeTrashSlot)
+                                multiplayer.requestInventoryAction(
+                                    window.down(VK_SHIFT)
+                                        ?PlayerActionType.creativeClearInventory
+                                        :PlayerActionType.creativeSetCarried);
+                            else if(button==0&&window.down(VK_SHIFT))
                                 multiplayer.requestInventoryAction(
                                     PlayerActionType.inventoryQuickMove,
                                     cast(ubyte)hovered);
@@ -1243,7 +1362,8 @@ final class GameClient
                                     PlayerActionType.inventoryClick,
                                     cast(ubyte)hovered,cast(ubyte)button);
                         }
-                        else if(renderer.inventoryOutside(cursor.x,cursor.y)
+                        else if(renderer.inventoryOutside(cursor.x,cursor.y,
+                            creative)
                             &&!player.inventory.carried.empty())
                             multiplayer.requestInventoryAction(
                                 PlayerActionType.inventoryDrop,ubyte.max,
@@ -1707,15 +1827,9 @@ final class GameClient
                 inventoryCursor.x,inventoryCursor.y,
                 inventoryMenu.active&&uiNavigation.usingController,
                 debugVisible,debugFps);
-            const frameFinished = monotonicSeconds();
-            const maximumFps=options.integer("maxFps",120);
+            const maximumFps=options.integer("maxFps",260);
             if(maximumFps>0)
-            {
-                const spent=frameFinished-current;
-                const remaining=1.0/maximumFps-spent;
-                if(remaining>=0.001)
-                    sleepMilliseconds(cast(uint)(remaining*1000.0));
-            }
+                sleepUntilSeconds(frameStarted+1.0/maximumFps);
         }
         window.setMouseCapture(false);
         window.setCursorShape(CursorShape.arrow);

@@ -16,8 +16,8 @@ import minecraftd.client.network.game_connection : GameConnection;
 import minecraftd.client.player.local_player : LocalPlayer;
 import minecraftd.common.aabb : Aabb;
 import minecraftd.common.math3d : DEG_TO_RAD, PI, Vec3, forwardFromYawPitch;
-import minecraftd.game.item.inventory : ItemId, ItemStack, bareHandDrop,
-    blockItem, placedBlock;
+import minecraftd.game.item.inventory : Inventory, ItemId, ItemStack, bareHandDrop,
+    blockItem, lastBlockItem, maximumStackSize, placedBlock;
 import minecraftd.game.entity.player : Player;
 import minecraftd.network.chat_protocol : sanitizeChat;
 import minecraftd.network.game_protocol : DroppedItemState, GamePacketType,
@@ -88,6 +88,23 @@ private struct InboundPacket
     ubyte[] payload;
 }
 
+private struct GenerationKey
+{
+    DimensionId dimension;
+    ChunkCoordinate coordinate;
+}
+
+private struct GenerationJob
+{
+    GenerationKey key;
+}
+
+private struct GenerationResult
+{
+    GenerationKey key;
+    Chunk chunk;
+}
+
 private final class ServerPlayer
 {
     uint id;
@@ -130,20 +147,6 @@ private final class ServerPlayer
         player.hardcore = hardcore;
         player.flying = gameMode == GameMode.spectator;
         player.dimension = DimensionId.overworld;
-        if (gameMode == GameMode.creative)
-        {
-            const starterItems = [
-                ItemId.flintAndSteel, ItemId.bricks, ItemId.oakPlanks,
-                ItemId.sprucePlanks, ItemId.birchPlanks, ItemId.junglePlanks,
-                ItemId.acaciaPlanks, ItemId.darkOakPlanks,
-                ItemId.mangrovePlanks, ItemId.cherryPlanks,
-                ItemId.bambooPlanks, ItemId.paleOakPlanks,
-                ItemId.crimsonPlanks, ItemId.warpedPlanks,
-                ItemId.cobblestone, ItemId.glass,
-            ];
-            foreach (index, item; starterItems)
-                player.inventory.storage[index] = ItemStack(item, 1);
-        }
     }
 }
 
@@ -156,11 +159,16 @@ final class IntegratedGameServer
     private TcpSocket listener;
     private Thread acceptThread;
     private Thread tickThread;
+    private Thread[] generationThreads;
     private Thread[] workers;
     private ServerPeer[] peers;
     private Mutex peersMutex;
     private InboundPacket[] inbound;
     private Mutex inboundMutex;
+    private Mutex generationMutex;
+    private GenerationJob[] generationJobs;
+    private GenerationResult[] generationResults;
+    private bool[GenerationKey] generationQueued;
     private shared bool running;
     private shared bool pauseRequested;
     private shared bool paused;
@@ -198,6 +206,7 @@ private:
     {
         peersMutex = new Mutex();
         inboundMutex = new Mutex();
+        generationMutex = new Mutex();
         world = ownedWorld;
         const worldBanPath = world.saveDirectory.length
             ? buildPath(world.saveDirectory, "bans.tsv") : "";
@@ -236,7 +245,13 @@ private:
         atomicStore(running, true);
         acceptThread = new Thread({ acceptLoop(); });
         tickThread = new Thread({ tickLoop(); });
+        // Terrain is pure CPU work until its completed Chunk is installed.
+        // Two workers keep generation moving without ever stalling input,
+        // inventory, snapshots, water, or fire on the authoritative thread.
+        foreach(_;0..2)
+            generationThreads~=new Thread({ generationLoop(); });
         acceptThread.start();
+        foreach(worker;generationThreads)worker.start();
         tickThread.start();
     }
 
@@ -281,7 +296,15 @@ public:
                 peer.close();
         if (acceptThread !is null) acceptThread.join();
         if (tickThread !is null) tickThread.join();
+        foreach (worker; generationThreads) worker.join();
         foreach (worker; workers) worker.join();
+        synchronized(generationMutex)
+        {
+            foreach(result;generationResults)destroy(result.chunk);
+            generationResults.length=0;
+            generationJobs.length=0;
+            generationQueued.clear();
+        }
         foreach (player; players) destroy(player);
         world.save();
         netherWorld.save();
@@ -355,6 +378,7 @@ private:
     void tick()
     {
         ++serverTick;
+        installGeneratedChunks();
         processInbound();
 
         // The integrated world only freezes while its owner is genuinely the
@@ -557,6 +581,31 @@ private:
                         else if (reader.valid
                             && action == PlayerActionType.pickBlock)
                             pickSelectedBlock(*serverPlayer);
+                        else if (reader.valid
+                            && action == PlayerActionType.creativeSetCarried
+                            && (*serverPlayer).player.gameMode == GameMode.creative)
+                        {
+                            const item = cast(ItemId) target;
+                            (*serverPlayer).player.inventory.creativeCatalogClick(
+                                item > ItemId.none && item <= lastBlockItem
+                                    ?item:ItemId.none,
+                                auxiliary>1);
+                        }
+                        else if (reader.valid
+                            && action == PlayerActionType.creativeSetHotbar
+                            && (*serverPlayer).player.gameMode == GameMode.creative
+                            && auxiliary < Inventory.hotbarSize)
+                        {
+                            const item = cast(ItemId) target;
+                            (*serverPlayer).player.inventory.hotbar[auxiliary] =
+                                item > ItemId.none && item <= lastBlockItem
+                                ? ItemStack(item,maximumStackSize(item),5)
+                                : ItemStack.init;
+                        }
+                        else if (reader.valid
+                            && action == PlayerActionType.creativeClearInventory
+                            && (*serverPlayer).player.gameMode == GameMode.creative)
+                            (*serverPlayer).player.inventory = Inventory.init;
                     }
                     break;
                 case GamePacketType.profileUpdate:
@@ -1647,7 +1696,8 @@ private:
             peer.sentDimension=serverPlayer.dimension;
         }
         const radius=cast(int)serverPlayer.viewDistance;
-        source.ensureChunksAround(serverPlayer.player.position,radius,2);
+        queueChunksAround(source,serverPlayer.dimension,
+            serverPlayer.player.position,radius,4);
         const centerX=chunkCoordinate(cast(int)floorf(
             serverPlayer.player.position.x));
         const centerZ=chunkCoordinate(cast(int)floorf(
@@ -1684,6 +1734,93 @@ private:
             if(!found)break;
             sendChunkData(peer,source,best);
             peer.sentChunks[best]=true;
+        }
+    }
+
+    void generationLoop()
+    {
+        while(atomicLoad(running))
+        {
+            GenerationJob job;
+            bool available;
+            synchronized(generationMutex)
+            {
+                if(generationJobs.length)
+                {
+                    job=generationJobs[0];
+                    generationJobs= generationJobs.length==1 ? null
+                        : generationJobs[1..$].dup;
+                    available=true;
+                }
+            }
+            if(!available)
+            {
+                Thread.sleep(2.msecs);
+                continue;
+            }
+            auto source=worldFor(job.key.dimension);
+            auto generated=source.buildDetachedChunk(job.key.coordinate.x,
+                job.key.coordinate.z);
+            synchronized(generationMutex)
+                generationResults~=GenerationResult(job.key,generated);
+        }
+    }
+
+    void installGeneratedChunks()
+    {
+        GenerationResult[] ready;
+        synchronized(generationMutex)
+        {
+            const amount=generationResults.length<8
+                ?generationResults.length:8;
+            if(amount)
+            {
+                ready=generationResults[0..amount].dup;
+                generationResults=amount==generationResults.length?null
+                    :generationResults[amount..$].dup;
+            }
+        }
+        foreach(result;ready)
+        {
+            const installed=worldFor(result.key.dimension)
+                .installDetachedChunk(result.chunk);
+            if(!installed)destroy(result.chunk);
+            synchronized(generationMutex)
+                generationQueued.remove(result.key);
+        }
+    }
+
+    void queueChunksAround(World source,DimensionId dimension,Vec3 position,
+        int radius,int maximumNewJobs)
+    {
+        const centerX=chunkCoordinate(cast(int)floorf(position.x));
+        const centerZ=chunkCoordinate(cast(int)floorf(position.z));
+        int added;
+        foreach(ring;0..radius+1)
+        foreach(chunkZ;centerZ-ring..centerZ+ring+1)
+        foreach(chunkX;centerX-ring..centerX+ring+1)
+        {
+            int dx=chunkX-centerX;if(dx<0)dx=-dx;
+            int dz=chunkZ-centerZ;if(dz<0)dz=-dz;
+            if((dx>dz?dx:dz)!=ring)continue;
+            const blockX=chunkX*Chunk.width;
+            const blockZ=chunkZ*Chunk.depth;
+            if(!source.withinHorizontalBorder(blockX,blockZ)
+                ||!source.withinHorizontalBorder(blockX+Chunk.width-1,
+                    blockZ+Chunk.depth-1))continue;
+            if(source.hasChunk(chunkX,chunkZ))continue;
+            const key=GenerationKey(dimension,
+                ChunkCoordinate(chunkX,chunkZ));
+            synchronized(generationMutex)
+            {
+                if(key in generationQueued)continue;
+                // Keep the queue short so flying players do not leave workers
+                // generating obsolete terrain far behind them.
+                if(generationJobs.length>=32)return;
+                generationQueued[key]=true;
+                generationJobs~=GenerationJob(key);
+            }
+            if(++added>=maximumNewJobs)return;
         }
     }
 

@@ -18,8 +18,9 @@ enum CursorShape : ubyte
 
 private extern(C) nothrow
 {
-    void* mcdPlatformCreateWindow(const(char)* title, int width, int height,
-        int localTestIndex, char* error, uint errorCapacity);
+    void* mcdPlatformCreateWindow(const(char)* title,int width,int height,
+        int localTestIndex,int highPixelDensity,char* error,
+        uint errorCapacity);
     void mcdPlatformDestroyWindow(void* context);
     void* mcdPlatformRendererWindow(void* context);
     void mcdPlatformPump(void* context);
@@ -63,11 +64,12 @@ final class GameWindow
     private GamepadState gamepad;
 
     this(string title, int requestedWidth = defaultWidth,
-        int requestedHeight = defaultHeight, int localTestIndex = 0)
+        int requestedHeight = defaultHeight,int localTestIndex = 0,
+        bool highPixelDensity=false)
     {
         char[1024] error = 0;
         context = mcdPlatformCreateWindow(title.toStringz(), requestedWidth,
-            requestedHeight, localTestIndex, error.ptr,
+            requestedHeight,localTestIndex,highPixelDensity?1:0,error.ptr,
             cast(uint) error.length);
         if (context is null)
             throw new Exception(error[0] ? fromStringz(error.ptr).idup

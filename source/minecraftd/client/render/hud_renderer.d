@@ -2,12 +2,13 @@ module minecraftd.client.render.hud_renderer;
 
 import core.stdc.math : ceilf;
 import std.conv : to;
-import minecraftd.client.render.block_renderer : BlockTextureSet;
+import minecraftd.client.render.block_renderer : BlockTextureSet, Face,
+    blockTexture;
 import minecraftd.client.render.font_renderer : FontRenderer;
 import minecraftd.client.render.mesh : Color, DrawLayer, FrameMesh, Vertex, appendQuad;
 import minecraftd.common.math3d : Mat4, Vec2, Vec3;
 import minecraftd.game.entity.player : Player;
-import minecraftd.game.item.inventory : ItemId, ItemStack, itemName;
+import minecraftd.game.item.inventory : ItemId, ItemStack, itemName, placedBlock;
 
 struct HudTextureSet
 {
@@ -279,7 +280,7 @@ private:
     {
         uint top;
         uint side;
-        final switch (item)
+        switch (item)
         {
             case ItemId.none: return;
             case ItemId.grassBlock:
@@ -329,6 +330,11 @@ private:
                     DrawLayer.overlay);
                 return;
             }
+            default:
+                const block = placedBlock(item);
+                top = blockTexture(textures, block, Face.up);
+                side = blockTexture(textures, block, Face.north);
+                break;
         }
         const centerX = x + 8.0f;
         const centerY = y + 8.0f;
@@ -339,7 +345,8 @@ private:
             return Vec3(pixelX / logicalWidth * 2.0f - 1.0f,
                 1.0f - pixelY / logicalHeight * 2.0f, 0);
         }
-        void face(uint texture, Vec2[4] points, Color shade)
+        void face(uint texture,const(Vec2)[] points,const(Vec2)[] uvs,
+            Color shade)
         {
             Vertex[] output;
             appendQuad(output,
@@ -347,17 +354,34 @@ private:
                 ndc(px(points[1].x),py(points[1].y)),
                 ndc(px(points[2].x),py(points[2].y)),
                 ndc(px(points[3].x),py(points[3].y)),
-                Vec2(0,1),Vec2(1,1),Vec2(1,0),Vec2(0,0),
+                uvs[0],uvs[1],uvs[2],uvs[3],
                 shade,shade,shade,shade);
             frame.append(output, texture, Mat4.identity(), DrawLayer.overlay);
         }
-        // A full 16x16 symmetric projection: eight pixels on either side of
-        // the slot center and equal four-pixel slopes on the top diamond.
-        face(top, [Vec2(x+8,y),Vec2(x+16,y+4),Vec2(x+8,y+8),Vec2(x,y+4)],
-            Color(1,1,1,1));
-        face(side, [Vec2(x,y+4),Vec2(x+8,y+8),Vec2(x+8,y+16),Vec2(x,y+12)],
-            Color(0.65f,0.65f,0.65f,1));
-        face(side, [Vec2(x+8,y+8),Vec2(x+16,y+4),Vec2(x+16,y+12),Vec2(x+8,y+16)],
-            Color(0.8f,0.8f,0.8f,1));
+        // Java's item/block GUI transform uses X=30, Y=225 and .625 scale.
+        // Its orthographic footprint is about 14.14x15.73 pixels, rather than
+        // a flattened full-slot 16x16 diamond.
+        enum float leftInset=0.93f;
+        enum float rightInset=15.07f;
+        enum float topY=0.14f;
+        enum float shoulderY=3.68f;
+        enum float middleY=7.21f;
+        enum float outerBottomY=12.34f;
+        enum float bottomY=15.87f;
+        const topShade=item==ItemId.grassBlock
+            ?Color(0.55f,0.82f,0.35f,1):Color(1,1,1,1);
+        const topUvs=[Vec2(0,1),Vec2(1,1),Vec2(1,0),Vec2(0,0)];
+        const sideUvs=[Vec2(0,0),Vec2(1,0),Vec2(1,1),Vec2(0,1)];
+        face(top,[Vec2(x+8,y+topY),Vec2(x+rightInset,y+shoulderY),
+                Vec2(x+8,y+middleY),Vec2(x+leftInset,y+shoulderY)],
+            topUvs,topShade);
+        face(side,[Vec2(x+leftInset,y+shoulderY),
+                Vec2(x+8,y+middleY),Vec2(x+8,y+bottomY),
+                Vec2(x+leftInset,y+outerBottomY)],
+            sideUvs,Color(0.65f,0.65f,0.65f,1));
+        face(side,[Vec2(x+8,y+middleY),
+                Vec2(x+rightInset,y+shoulderY),
+                Vec2(x+rightInset,y+outerBottomY),Vec2(x+8,y+bottomY)],
+            sideUvs,Color(0.8f,0.8f,0.8f,1));
     }
 }

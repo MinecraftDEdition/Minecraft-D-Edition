@@ -5,6 +5,8 @@ import minecraftd.client.network.game_connection : GameConnection;
 import minecraftd.client.player.local_player : LocalPlayer;
 import minecraftd.common.math3d : Vec3, clamp;
 import minecraftd.game.entity.player : Player;
+import minecraftd.game.item.inventory : Inventory, ItemId, ItemStack,
+    lastBlockItem, maximumStackSize;
 import minecraftd.network.game_protocol : DroppedItemState, GamePacketType,
     CombatEventType, DamageCause, NetworkPlayerState, PacketReader, PacketWriter,
     PlayerActionType,
@@ -39,6 +41,12 @@ struct CriticalHitEvent
     uint attackerId;
     uint targetId;
     Vec3 targetPosition;
+}
+
+private struct PredictedInventoryChange
+{
+    Inventory before;
+    Inventory after;
 }
 
 struct ClientDroppedItem
@@ -323,6 +331,8 @@ final class MultiplayerClient
     private World world;
     private LocalPlayer localPlayer;
     private PlayerInputCommand[] pendingInputs;
+    private PredictedInventoryChange[] pendingInventoryChanges;
+    private ubyte[][] pendingChunkPackets;
     private RemotePlayer[uint] remoteById;
     private BlockChangeEvent[] blockEvents;
     private PickupEvent[] pickupEvents;
@@ -366,6 +376,8 @@ final class MultiplayerClient
         disconnectReason = "";
         localPlayerId = 0;
         pendingInputs.length = 0;
+        pendingInventoryChanges.length=0;
+        pendingChunkPackets.length=0;
         localDamageEventId = 0;
         droppedItemById.clear();
         foreach (remote; remoteById) destroy(remote);
@@ -414,6 +426,51 @@ final class MultiplayerClient
         ubyte auxiliary = 0)
     {
         if (!connected() || !loginComplete) return;
+        const before=localPlayer.inventory;
+        final switch(action)
+        {
+            case PlayerActionType.inventoryClick:
+                localPlayer.inventory.click(target,auxiliary!=0);break;
+            case PlayerActionType.inventoryQuickMove:
+                localPlayer.inventory.quickMove(target);break;
+            case PlayerActionType.inventoryHotbarSwap:
+                localPlayer.inventory.swapHotbar(target,auxiliary);break;
+            case PlayerActionType.inventoryDrop:
+                if(target==ubyte.max)
+                    localPlayer.inventory.takeCarried(auxiliary!=0);
+                else localPlayer.inventory.takeFromSlot(target,auxiliary!=0);
+                break;
+            case PlayerActionType.inventoryCollect:
+                localPlayer.inventory.collectMatching(target);break;
+            case PlayerActionType.inventoryClose:
+                localPlayer.inventory.returnCarried();break;
+            case PlayerActionType.creativeSetCarried:
+            {
+                const item=cast(ItemId)target;
+                localPlayer.inventory.creativeCatalogClick(
+                    item>ItemId.none&&item<=lastBlockItem?item:ItemId.none,
+                    auxiliary>1);
+                break;
+            }
+            case PlayerActionType.creativeSetHotbar:
+            {
+                const item=cast(ItemId)target;
+                if(auxiliary<Inventory.hotbarSize)
+                    localPlayer.inventory.hotbar[auxiliary]=
+                        item>ItemId.none&&item<=lastBlockItem
+                        ?ItemStack(item,maximumStackSize(item),5)
+                        :ItemStack.init;
+                break;
+            }
+            case PlayerActionType.creativeClearInventory:
+                localPlayer.inventory=Inventory.init;break;
+            case PlayerActionType.dropItem,PlayerActionType.dropStack,
+                 PlayerActionType.respawn,PlayerActionType.pickBlock:
+                break;
+        }
+        const after=localPlayer.inventory;
+        if(!inventoriesEqual(before,after))
+            pendingInventoryChanges~=PredictedInventoryChange(before,after);
         PacketWriter writer;
         writer.putU8(cast(ubyte)action);
         writer.putU8(target);
@@ -490,7 +547,9 @@ final class MultiplayerClient
                     handleDimensionChange(packet.payload);
                     break;
                 case GamePacketType.chunkData:
-                    handleChunkData(packet.payload);
+                    // Decoding/restoring several 100 KiB chunks in one poll
+                    // used to stall input and UI for an entire rendered frame.
+                    pendingChunkPackets~=packet.payload.dup;
                     break;
                 case GamePacketType.chunkUnload:
                     handleChunkUnload(packet.payload);
@@ -512,6 +571,14 @@ final class MultiplayerClient
                      GamePacketType.keepAliveReply:
                     break;
             }
+        }
+        // Admit at most one terrain packet per presented frame. Time-sensitive
+        // packets above are always handled first and remain immediately visible.
+        if(pendingChunkPackets.length)
+        {
+            handleChunkData(pendingChunkPackets[0]);
+            pendingChunkPackets=pendingChunkPackets.length==1?null
+                :pendingChunkPackets[1..$].dup;
         }
     }
 
@@ -724,6 +791,7 @@ private:
         localPlayer.deathTime = state.deathTime;
         localDeathMessage = state.deathMessage;
         localPlayer.inventory = state.inventory;
+        reconcilePredictedInventory();
         localPlayer.gameMode = state.gameMode;
         localPlayer.hardcore = state.hardcore;
         localPlayer.flying = state.flying;
@@ -870,6 +938,8 @@ private:
         localPlayer.previousVisualCorrection = Vec3.init;
         localPlayer.portalProgress = 1.0f;
         pendingInputs.length = 0;
+        pendingInventoryChanges.length=0;
+        pendingChunkPackets.length=0;
         droppedItemById.clear();
         foreach (remote; remoteById) destroy(remote);
         remoteById.clear();
@@ -902,6 +972,45 @@ private:
         const chunkX=reader.readI32();
         const chunkZ=reader.readI32();
         if(reader.valid)world.unloadChunk(chunkX,chunkZ);
+    }
+
+    void reconcilePredictedInventory()
+    {
+        while(pendingInventoryChanges.length)
+        {
+            const change=pendingInventoryChanges[0];
+            if(inventoriesEqual(localPlayer.inventory,change.after))
+            {
+                pendingInventoryChanges=pendingInventoryChanges.length==1
+                    ?null:pendingInventoryChanges[1..$].dup;
+                continue;
+            }
+            if(inventoriesEqual(localPlayer.inventory,change.before))
+            {
+                localPlayer.inventory=change.after;
+                foreach(next;pendingInventoryChanges[1..$])
+                {
+                    if(!inventoriesEqual(localPlayer.inventory,next.before))
+                        break;
+                    localPlayer.inventory=next.after;
+                }
+                return;
+            }
+            // A truly different authoritative state (pickup, death, rejected
+            // action, etc.) wins rather than leaving a stale cursor overlay.
+            pendingInventoryChanges.length=0;
+        }
+    }
+
+    static bool inventoriesEqual(const Inventory left,const Inventory right)
+    {
+        bool same(ItemStack a,ItemStack b)
+        {return a.item==b.item&&a.count==b.count;}
+        foreach(index;0..Inventory.hotbarSize)
+            if(!same(left.hotbar[index],right.hotbar[index]))return false;
+        foreach(index;0..Inventory.storageSize)
+            if(!same(left.storage[index],right.storage[index]))return false;
+        return same(left.carried,right.carried);
     }
 }
 

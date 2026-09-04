@@ -115,7 +115,7 @@ final class GameWindow
     private GamepadState gamepad;
 
     this(string title, int width = defaultWidth, int height = defaultHeight,
-        int localTestIndex = 0)
+        int localTestIndex = 0,bool highPixelDensity=false)
     {
         statePath = buildPath(getcwd(), "data", "window_state.txt");
         auto saved = loadState();

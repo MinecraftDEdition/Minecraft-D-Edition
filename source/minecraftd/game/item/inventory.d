@@ -1,6 +1,7 @@
 module minecraftd.game.item.inventory;
 
-import minecraftd.world.block : BlockId;
+import minecraftd.world.block : BlockId, catalogBlockDefinition,
+    firstCatalogBlock, isCatalogBlock, lastCatalogBlock;
 
 enum ItemId : ubyte
 {
@@ -27,6 +28,147 @@ enum ItemId : ubyte
     cobblestone,
     glass,
     bedrock,
+    coarseDirt, rootedDirt, podzol, mycelium, mud, clay, sand, redSand, gravel,
+    mossBlock, paleMossBlock, packedMud, mudBricks,
+    granite, polishedGranite, diorite, polishedDiorite, andesite,
+    polishedAndesite, deepslate, cobbledDeepslate, polishedDeepslate,
+    deepslateBricks, crackedDeepslateBricks, deepslateTiles,
+    crackedDeepslateTiles, chiseledDeepslate, calcite, tuff, polishedTuff,
+    tuffBricks, chiseledTuff, chiseledTuffBricks, dripstoneBlock,
+    sandstone, chiseledSandstone, cutSandstone, smoothSandstone,
+    redSandstone, chiseledRedSandstone, cutRedSandstone, smoothRedSandstone,
+    stoneBricks, crackedStoneBricks, mossyStoneBricks, chiseledStoneBricks,
+    mossyCobblestone,
+    coalOre, ironOre, copperOre, goldOre, redstoneOre, emeraldOre, lapisOre,
+    diamondOre, deepslateCoalOre, deepslateIronOre, deepslateCopperOre,
+    deepslateGoldOre, deepslateRedstoneOre, deepslateEmeraldOre,
+    deepslateLapisOre, deepslateDiamondOre,
+    coalBlock, ironBlock, rawIronBlock, copperBlock, rawCopperBlock,
+    goldBlock, rawGoldBlock, emeraldBlock, lapisBlock, diamondBlock,
+    netheriteBlock, amethystBlock,
+    soulSoil, basalt, polishedBasalt, smoothBasalt, blackstone,
+    polishedBlackstone, polishedBlackstoneBricks,
+    crackedPolishedBlackstoneBricks, chiseledPolishedBlackstone,
+    gildedBlackstone, netherBricks, crackedNetherBricks, chiseledNetherBricks,
+    redNetherBricks, crimsonNylium, warpedNylium, netherWartBlock,
+    warpedWartBlock, netherGoldOre, netherQuartzOre, ancientDebris,
+    endStone, endStoneBricks, purpurBlock, quartzBlock, chiseledQuartzBlock,
+    smoothQuartzBlock, quartzBricks, prismarineBricks,
+    darkPrismarine, snowBlock, resinBlock, resinBricks,
+    chiseledResinBricks, cinnabar, polishedCinnabar, cinnabarBricks,
+    chiseledCinnabar, sulfur, polishedSulfur, sulfurBricks, chiseledSulfur,
+    whiteWool, lightGrayWool, grayWool, blackWool, brownWool, redWool,
+    orangeWool, yellowWool, limeWool, greenWool, cyanWool, lightBlueWool,
+    blueWool, purpleWool, magentaWool, pinkWool,
+    whiteConcrete, lightGrayConcrete, grayConcrete, blackConcrete,
+    brownConcrete, redConcrete, orangeConcrete, yellowConcrete, limeConcrete,
+    greenConcrete, cyanConcrete, lightBlueConcrete, blueConcrete,
+    purpleConcrete, magentaConcrete, pinkConcrete,
+    whiteTerracotta, lightGrayTerracotta, grayTerracotta, blackTerracotta,
+    brownTerracotta, redTerracotta, orangeTerracotta, yellowTerracotta,
+    limeTerracotta, greenTerracotta, cyanTerracotta, lightBlueTerracotta,
+    blueTerracotta, purpleTerracotta, magentaTerracotta, pinkTerracotta,
+}
+
+enum ItemId firstCatalogItem = ItemId.coarseDirt;
+enum ItemId lastCatalogItem = ItemId.pinkTerracotta;
+enum ItemId lastBlockItem = lastCatalogItem;
+static assert(cast(int)lastCatalogItem <= ubyte.max,
+    "Item registry exceeds the current inventory/network ID width");
+
+/// Java 1.19.3+ creative-inventory groups. An item may intentionally belong
+/// to more than one group; the ordered catalog below remains the single source
+/// of truth for Search Items and future experimental entries.
+enum CreativeItemGroup : ubyte
+{
+    buildingBlocks,
+    coloredBlocks,
+    naturalBlocks,
+    functionalBlocks,
+    redstoneBlocks,
+    toolsAndUtilities,
+    combat,
+    foodAndDrinks,
+    ingredients,
+    spawnEggs,
+    operatorUtilities,
+}
+
+@property ItemId[] creativeCatalog()
+{
+    ItemId[] result = [
+        ItemId.stone, ItemId.cobblestone,
+        ItemId.oakPlanks, ItemId.sprucePlanks, ItemId.birchPlanks,
+        ItemId.junglePlanks, ItemId.acaciaPlanks, ItemId.darkOakPlanks,
+        ItemId.mangrovePlanks, ItemId.cherryPlanks, ItemId.bambooPlanks,
+        ItemId.paleOakPlanks, ItemId.crimsonPlanks, ItemId.warpedPlanks,
+        ItemId.bricks, ItemId.glass,
+        ItemId.grassBlock, ItemId.dirt, ItemId.obsidian, ItemId.netherrack,
+        ItemId.bedrock,
+    ];
+    foreach (raw; cast(int)firstCatalogItem .. cast(int)lastCatalogItem + 1)
+        result ~= cast(ItemId)raw;
+    result ~= ItemId.flintAndSteel;
+    return result;
+}
+
+bool creativeItemInGroup(ItemId item, CreativeItemGroup group)
+{
+    const catalog = item >= firstCatalogItem && item <= lastCatalogItem;
+    final switch (group)
+    {
+        case CreativeItemGroup.buildingBlocks:
+            switch (item)
+            {
+                case ItemId.stone, ItemId.cobblestone, ItemId.oakPlanks,
+                     ItemId.sprucePlanks, ItemId.birchPlanks,
+                     ItemId.junglePlanks, ItemId.acaciaPlanks,
+                     ItemId.darkOakPlanks, ItemId.mangrovePlanks,
+                     ItemId.cherryPlanks, ItemId.bambooPlanks,
+                     ItemId.paleOakPlanks, ItemId.crimsonPlanks,
+                     ItemId.warpedPlanks, ItemId.bricks, ItemId.glass:
+                    return true;
+                default:
+                    return catalog && !(item >= ItemId.whiteWool
+                        && item <= ItemId.pinkTerracotta);
+            }
+        case CreativeItemGroup.coloredBlocks:
+            return item >= ItemId.whiteWool && item <= ItemId.pinkTerracotta;
+        case CreativeItemGroup.naturalBlocks:
+            switch (item)
+            {
+                case ItemId.grassBlock, ItemId.dirt, ItemId.stone,
+                     ItemId.obsidian, ItemId.netherrack, ItemId.bedrock:
+                    return true;
+                default:
+                    return catalog && (item <= ItemId.dripstoneBlock
+                        || (item >= ItemId.coalOre
+                            && item <= ItemId.deepslateDiamondOre)
+                        || (item >= ItemId.soulSoil
+                            && item <= ItemId.ancientDebris)
+                        || item == ItemId.endStone || item == ItemId.snowBlock
+                        || (item >= ItemId.cinnabar
+                            && item <= ItemId.chiseledSulfur));
+            }
+        case CreativeItemGroup.toolsAndUtilities:
+            return item == ItemId.flintAndSteel;
+        case CreativeItemGroup.functionalBlocks,
+             CreativeItemGroup.redstoneBlocks,
+             CreativeItemGroup.combat,
+             CreativeItemGroup.foodAndDrinks,
+             CreativeItemGroup.ingredients,
+             CreativeItemGroup.spawnEggs,
+             CreativeItemGroup.operatorUtilities:
+            return false;
+    }
+}
+
+ItemId[] creativeItems(CreativeItemGroup group)
+{
+    ItemId[] result;
+    foreach (item; creativeCatalog)
+        if (creativeItemInGroup(item, group)) result ~= item;
+    return result;
 }
 
 struct ItemStack
@@ -36,6 +178,11 @@ struct ItemStack
     ubyte popTicks;
 
     bool empty() const { return item == ItemId.none || count == 0; }
+}
+
+ubyte maximumStackSize(ItemId item)
+{
+    return item==ItemId.flintAndSteel?cast(ubyte)1:cast(ubyte)64;
 }
 
 struct Inventory
@@ -73,12 +220,13 @@ struct Inventory
     {
         if (item == ItemId.none || amount == 0)
             return 0;
+        const limit=maximumStackSize(item);
         uint remaining = amount;
         foreach (ref stack; hotbar)
         {
-            if (stack.item != item || stack.count >= maximumStack)
+            if (stack.item != item || stack.count >= limit)
                 continue;
-            const room = maximumStack - stack.count;
+            const room = limit - stack.count;
             const moved = remaining < room ? remaining : room;
             stack.count += cast(ubyte) moved;
             stack.popTicks = 5;
@@ -88,9 +236,9 @@ struct Inventory
         }
         foreach (ref stack; storage)
         {
-            if (stack.item != item || stack.count >= maximumStack)
+            if (stack.item != item || stack.count >= limit)
                 continue;
-            const room = maximumStack - stack.count;
+            const room = limit - stack.count;
             const moved = remaining < room ? remaining : room;
             stack.count += cast(ubyte) moved;
             stack.popTicks = 5;
@@ -102,7 +250,7 @@ struct Inventory
         {
             if (!stack.empty())
                 continue;
-            const moved = remaining < maximumStack ? remaining : maximumStack;
+            const moved = remaining < limit ? remaining : limit;
             stack = ItemStack(item, cast(ubyte) moved, 5);
             remaining -= moved;
             if (remaining == 0)
@@ -112,7 +260,7 @@ struct Inventory
         {
             if (!stack.empty())
                 continue;
-            const moved = remaining < maximumStack ? remaining : maximumStack;
+            const moved = remaining < limit ? remaining : limit;
             stack = ItemStack(item, cast(ubyte) moved, 5);
             remaining -= moved;
             if (remaining == 0)
@@ -174,6 +322,8 @@ struct Inventory
         foreach (ref stack; storage)
             if (stack.popTicks > 0)
                 --stack.popTicks;
+        // Cursor-held stacks do not use Java's slot-pop animation.
+        carried.popTicks=0;
     }
 
     void click(int index, bool rightButton)
@@ -186,6 +336,7 @@ struct Inventory
             if (carried.empty())
             {
                 carried = target;
+                carried.popTicks=0;
                 target = ItemStack.init;
             }
             else if (target.empty())
@@ -194,9 +345,9 @@ struct Inventory
                 carried = ItemStack.init;
             }
             else if (target.item == carried.item
-                && target.count < maximumStack)
+                && target.count < maximumStackSize(target.item))
             {
-                const room = maximumStack - target.count;
+                const room = maximumStackSize(target.item) - target.count;
                 const moved = carried.count < room ? carried.count : room;
                 target.count += cast(ubyte) moved;
                 carried.count -= cast(ubyte) moved;
@@ -207,6 +358,7 @@ struct Inventory
                 const swap = target;
                 target = carried;
                 carried = swap;
+                carried.popTicks=0;
             }
         }
         else if (carried.empty())
@@ -214,7 +366,7 @@ struct Inventory
             if (!target.empty())
             {
                 const taken = cast(ubyte) ((target.count + 1) / 2);
-                carried = ItemStack(target.item, taken, 5);
+                carried = ItemStack(target.item, taken, 0);
                 target.count -= taken;
                 normalize(target);
             }
@@ -225,7 +377,8 @@ struct Inventory
             --carried.count;
             normalize(carried);
         }
-        else if (target.item == carried.item && target.count < maximumStack)
+        else if (target.item == carried.item
+            && target.count < maximumStackSize(target.item))
         {
             ++target.count;
             --carried.count;
@@ -237,6 +390,7 @@ struct Inventory
             const swap = target;
             target = carried;
             carried = swap;
+            carried.popTicks=0;
         }
         target.popTicks = target.empty() ? 0 : 5;
         setSlot(index, target);
@@ -275,17 +429,42 @@ struct Inventory
         }
         foreach (slotIndex; 0 .. slotCount)
         {
-            if (carried.count >= maximumStack) break;
+            const limit=maximumStackSize(wanted);
+            if (carried.count >= limit) break;
             auto stack = slot(slotIndex);
             if (stack.item != wanted || stack.empty()) continue;
-            const room = maximumStack - carried.count;
+            const room = limit - carried.count;
             const moved = stack.count < room ? stack.count : room;
             carried.count += cast(ubyte) moved;
             stack.count -= cast(ubyte) moved;
             normalize(stack);
             setSlot(slotIndex, stack);
         }
-        carried.popTicks = 5;
+        carried.popTicks = 0;
+    }
+
+    /// Infinite Creative catalog source. A primary click takes one item and
+    /// repeated primary clicks grow a matching cursor stack. A primary click
+    /// on a different catalog item clears the cursor; a secondary click always
+    /// takes that item's full legal stack.
+    void creativeCatalogClick(ItemId item,bool fullStack)
+    {
+        if(item==ItemId.none)
+        {
+            carried=ItemStack.init;
+            return;
+        }
+        const limit=maximumStackSize(item);
+        if(fullStack)
+            carried=ItemStack(item,limit,0);
+        else if(carried.empty())
+            carried=ItemStack(item,1,0);
+        else if(carried.item==item)
+        {
+            if(carried.count<limit)++carried.count;
+            carried.popTicks=0;
+        }
+        else carried=ItemStack.init;
     }
 
     ItemStack takeFromSlot(int index, bool wholeStack)
@@ -324,17 +503,18 @@ private:
     {
         if (stack.item == ItemId.none || stack.count == 0)
             stack = ItemStack.init;
-        else if (stack.count > maximumStack)
-            stack.count = maximumStack;
+        else if (stack.count > maximumStackSize(stack.item))
+            stack.count = maximumStackSize(stack.item);
     }
 
     void moveInto(ref ItemStack source, bool toHotbar)
     {
         void merge(ref ItemStack destination)
         {
+            const limit=maximumStackSize(source.item);
             if (source.empty() || destination.item != source.item
-                || destination.count >= maximumStack) return;
-            const room = maximumStack - destination.count;
+                || destination.count >= limit) return;
+            const room = limit - destination.count;
             const moved = source.count < room ? source.count : room;
             destination.count += cast(ubyte) moved;
             source.count -= cast(ubyte) moved;
@@ -363,7 +543,7 @@ private:
 
 string itemName(ItemId item)
 {
-    final switch (item)
+    switch (item)
     {
         case ItemId.none: return "";
         case ItemId.grassBlock: return "Grass Block";
@@ -388,14 +568,20 @@ string itemName(ItemId item)
         case ItemId.cobblestone: return "Cobblestone";
         case ItemId.glass: return "Glass";
         case ItemId.bedrock: return "Bedrock";
+        default: return catalogBlockDefinition(placedBlock(item)).name;
     }
 }
 
 string itemCategory(ItemId item)
 {
     if (item == ItemId.none) return "";
-    return item == ItemId.flintAndSteel ? "Tools & Utilities"
-        : "Natural Blocks";
+    if (creativeItemInGroup(item,CreativeItemGroup.toolsAndUtilities))
+        return "Tools & Utilities";
+    if (creativeItemInGroup(item,CreativeItemGroup.buildingBlocks))
+        return "Building Blocks";
+    if (creativeItemInGroup(item,CreativeItemGroup.naturalBlocks))
+        return "Natural Blocks";
+    return "";
 }
 
 bool sameHeldStack(const ItemStack left, const ItemStack right)
@@ -408,7 +594,7 @@ bool sameHeldStack(const ItemStack left, const ItemStack right)
 
 ItemId blockItem(BlockId block)
 {
-    final switch (block)
+    switch (block)
     {
         case BlockId.air: return ItemId.none;
         case BlockId.fire: return ItemId.none;
@@ -438,12 +624,16 @@ ItemId blockItem(BlockId block)
              BlockId.waterFlow3, BlockId.waterFlow4, BlockId.waterFlow5,
              BlockId.waterFlow6, BlockId.waterFlow7, BlockId.waterFalling:
             return ItemId.none;
+        default:
+            if (!isCatalogBlock(block)) return ItemId.none;
+            return cast(ItemId)(cast(int)firstCatalogItem
+                + cast(int)block - cast(int)firstCatalogBlock);
     }
 }
 
 BlockId placedBlock(ItemId item)
 {
-    final switch (item)
+    switch (item)
     {
         case ItemId.none: return BlockId.air;
         case ItemId.grassBlock: return BlockId.grass;
@@ -468,6 +658,11 @@ BlockId placedBlock(ItemId item)
         case ItemId.cobblestone: return BlockId.cobblestone;
         case ItemId.glass: return BlockId.glass;
         case ItemId.bedrock: return BlockId.bedrock;
+        default:
+            if (item < firstCatalogItem || item > lastCatalogItem)
+                return BlockId.air;
+            return cast(BlockId)(cast(int)firstCatalogBlock
+                + cast(int)item - cast(int)firstCatalogItem);
     }
 }
 
@@ -475,7 +670,7 @@ BlockId placedBlock(ItemId item)
 /// vanilla block loot tables. Stone requires the correct tool and drops none.
 ItemId bareHandDrop(BlockId block)
 {
-    final switch (block)
+    switch (block)
     {
         case BlockId.grass, BlockId.dirt: return ItemId.dirt;
         case BlockId.netherrack: return ItemId.netherrack;
@@ -499,6 +694,10 @@ ItemId bareHandDrop(BlockId block)
              BlockId.waterFlow3, BlockId.waterFlow4, BlockId.waterFlow5,
              BlockId.waterFlow6, BlockId.waterFlow7, BlockId.waterFalling:
             return ItemId.none;
+        default:
+            if (!isCatalogBlock(block)) return ItemId.none;
+            return catalogBlockDefinition(block).handHarvestable
+                ? blockItem(block) : ItemId.none;
     }
 }
 
@@ -551,4 +750,31 @@ unittest
     assert(placedBlock(ItemId.warpedPlanks) == BlockId.warpedPlanks);
     assert(bareHandDrop(BlockId.oakPlanks) == ItemId.oakPlanks);
     assert(bareHandDrop(BlockId.glass) == ItemId.none);
+    assert(blockItem(BlockId.cinnabar) == ItemId.cinnabar);
+    assert(placedBlock(ItemId.pinkTerracotta) == BlockId.pinkTerracotta);
+    assert(itemName(ItemId.deepslateDiamondOre) == "Deepslate Diamond Ore");
+    assert(creativeItemInGroup(ItemId.blueWool,
+        CreativeItemGroup.coloredBlocks));
+
+    Inventory tools;
+    assert(maximumStackSize(ItemId.flintAndSteel)==1);
+    assert(tools.add(ItemId.flintAndSteel,2)==0);
+    assert(tools.hotbar[0].item==ItemId.flintAndSteel
+        &&tools.hotbar[0].count==1);
+    assert(tools.hotbar[1].item==ItemId.flintAndSteel
+        &&tools.hotbar[1].count==1);
+
+    Inventory catalog;
+    catalog.creativeCatalogClick(ItemId.dirt,false);
+    assert(catalog.carried==ItemStack(ItemId.dirt,1,0));
+    catalog.creativeCatalogClick(ItemId.dirt,false);
+    assert(catalog.carried==ItemStack(ItemId.dirt,2,0));
+    catalog.creativeCatalogClick(ItemId.stone,false);
+    assert(catalog.carried.empty());
+    catalog.creativeCatalogClick(ItemId.stone,true);
+    assert(catalog.carried==ItemStack(ItemId.stone,64,0));
+    catalog.creativeCatalogClick(ItemId.flintAndSteel,true);
+    assert(catalog.carried==ItemStack(ItemId.flintAndSteel,1,0));
+    catalog.creativeCatalogClick(ItemId.none,false);
+    assert(catalog.carried.empty());
 }

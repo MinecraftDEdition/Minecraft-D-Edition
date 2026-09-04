@@ -39,6 +39,7 @@ struct ParticleTextureSet
     uint bubble;
     uint[5] bubblePop;
     uint[8] smoke;
+    uint[BlockId] catalog;
 }
 
 private struct TerrainParticle
@@ -626,7 +627,7 @@ private:
 
     uint textureFor(BlockId block) const
     {
-        final switch (block)
+        switch (block)
         {
             // Java's grass-block model declares dirt as its particle sprite.
             case BlockId.grass: return textures.dirt;
@@ -657,6 +658,9 @@ private:
                  BlockId.waterFlow6, BlockId.waterFlow7, BlockId.waterFalling:
                 return textures.dirt;
             case BlockId.fire: return textures.dirt;
+            default:
+                const found = block in textures.catalog;
+                return found is null ? textures.dirt : *found;
         }
     }
 

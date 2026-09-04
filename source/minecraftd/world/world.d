@@ -123,6 +123,18 @@ private struct BlockPosition
     int x, y, z;
 }
 
+private struct WaterChunkCache
+{
+    uint revision;
+    BlockPosition[] cells;
+}
+
+private struct FireChunkCache
+{
+    uint revision;
+    BlockPosition[] cells;
+}
+
 final class World
 {
     enum int overworldMinimumY = -64;
@@ -138,6 +150,8 @@ final class World
     private Chunk[ChunkCoordinate] chunks;
     private uint[ChunkCoordinate] chunkRevisions;
     private bool[ChunkCoordinate] dirtyChunks;
+    private WaterChunkCache[ChunkCoordinate] waterCache;
+    private FireChunkCache[ChunkCoordinate] fireCache;
     uint revision;
     uint contentRevision;
     WorldSettings settings;
@@ -335,6 +349,33 @@ public:
         return (ChunkCoordinate(chunkX, chunkZ) in chunks) !is null;
     }
 
+    /// Builds or restores a chunk without publishing it into the live world.
+    /// Integrated servers use this on terrain workers so expensive noise and
+    /// disk reads never hold up the authoritative 20 Hz simulation loop.
+    Chunk buildDetachedChunk(int chunkX,int chunkZ)
+    {
+        auto generated=new Chunk(chunkX,chunkZ);
+        const path=chunkPath(chunkX,chunkZ);
+        if(path.length&&exists(path)
+            &&generated.restore(cast(const(ubyte)[])read(path)))
+            return generated;
+        if(dimension==DimensionId.nether)generateNetherChunk(generated);
+        else generateOverworldChunk(generated);
+        return generated;
+    }
+
+    /// Publishes a worker-built chunk on the world's owning thread. Returns
+    /// false when another request installed the same coordinate first.
+    bool installDetachedChunk(Chunk generated)
+    {
+        if(generated is null)return false;
+        const coordinate=ChunkCoordinate(generated.chunkX,generated.chunkZ);
+        if(coordinate in chunks)return false;
+        addChunk(generated);
+        ++revision;
+        return true;
+    }
+
     const(Chunk) chunkAt(int chunkX, int chunkZ) const
     {
         auto found = ChunkCoordinate(chunkX, chunkZ) in chunks;
@@ -347,6 +388,8 @@ public:
         chunks.clear();
         chunkRevisions.clear();
         dirtyChunks.clear();
+        waterCache.clear();
+        fireCache.clear();
         chunk = null;
         ++revision;
     }
@@ -384,6 +427,8 @@ public:
         chunks.remove(coordinate);
         chunkRevisions.remove(coordinate);
         dirtyChunks.remove(coordinate);
+        waterCache.remove(coordinate);
+        fireCache.remove(coordinate);
         if (chunkX == 0 && chunkZ == 0) chunk = null;
         markChunkAndNeighborsDirty(coordinate);
         ++revision;
@@ -683,12 +728,25 @@ private:
     {
         WaterUpdate[] changes;
         if(dimension==DimensionId.nether)return changes;
+        bool[ChunkCoordinate] selected;
+        bool[BlockPosition] candidates;
+        foreach(coordinate;coordinates)selected[coordinate]=true;
         foreach(coordinate;coordinates)
-        foreach(y;minimumBuildY()..65)
-        foreach(localZ;0..Chunk.depth)foreach(localX;0..Chunk.width)
+        foreach(cell;waterCellsFor(coordinate))
         {
-            const x=coordinate.x*Chunk.width+localX;
-            const z=coordinate.z*Chunk.depth+localZ;
+            candidates[cell]=true;
+            candidates[BlockPosition(cell.x,cell.y-1,cell.z)]=true;
+            candidates[BlockPosition(cell.x-1,cell.y,cell.z)]=true;
+            candidates[BlockPosition(cell.x+1,cell.y,cell.z)]=true;
+            candidates[BlockPosition(cell.x,cell.y,cell.z-1)]=true;
+            candidates[BlockPosition(cell.x,cell.y,cell.z+1)]=true;
+        }
+        foreach(position,present;candidates)
+        {
+            const x=position.x,y=position.y,z=position.z;
+            if(y<minimumBuildY()||y>64
+                ||ChunkCoordinate(chunkCoordinate(x),chunkCoordinate(z))
+                    !in selected)continue;
             const current=getBlock(x,y,z);
             if(current!=BlockId.air && !isWater(current)&&!isFire(current))continue;
             BlockId next=BlockId.air;
@@ -733,6 +791,29 @@ private:
         return changes;
     }
 
+    const(BlockPosition)[] waterCellsFor(ChunkCoordinate coordinate)
+    {
+        const currentRevision=chunkRevision(coordinate.x,coordinate.z);
+        if(auto found=coordinate in waterCache)
+            if(found.revision==currentRevision)return found.cells;
+        WaterChunkCache replacement;
+        replacement.revision=currentRevision;
+        const loaded=chunkAt(coordinate.x,coordinate.z);
+        if(loaded !is null&&!loaded.empty)
+        {
+            int maximum=loaded.maximumOccupiedY();
+            if(maximum>64)maximum=64;
+            foreach(y;loaded.minimumOccupiedY()..maximum+1)
+            foreach(localZ;0..Chunk.depth)foreach(localX;0..Chunk.width)
+                if(isWater(loaded.get(localX,y,localZ)))
+                    replacement.cells~=BlockPosition(
+                        coordinate.x*Chunk.width+localX,y,
+                        coordinate.z*Chunk.depth+localZ);
+        }
+        waterCache[coordinate]=replacement;
+        return waterCache[coordinate].cells;
+    }
+
 public:
     /// Scheduled fire updates use the same authoritative block-change stream
     /// as water. Netherrack supports eternal fire, ordinary planks burn and
@@ -763,14 +844,9 @@ public:
         }
         foreach(coordinate,present;selected)
         {
-            const loaded=chunkAt(coordinate.x,coordinate.z);
-            if(loaded is null||loaded.empty)continue;
-            foreach(y;loaded.minimumOccupiedY()..loaded.maximumOccupiedY()+1)
-            foreach(localZ;0..Chunk.depth)foreach(localX;0..Chunk.width)
+            foreach(position;fireCellsFor(coordinate))
             {
-                const x=coordinate.x*Chunk.width+localX;
-                const z=coordinate.z*Chunk.depth+localZ;
-                if(!isFire(getBlock(x,y,z)))continue;
+                const x=position.x,y=position.y,z=position.z;
                 bool wet;
                 foreach(offset;[[-1,0,0],[1,0,0],[0,-1,0],[0,1,0],
                     [0,0,-1],[0,0,1]])
@@ -804,6 +880,25 @@ public:
         }
         foreach(change;changes)setBlock(change.x,change.y,change.z,change.newBlock);
         return changes;
+    }
+
+    const(BlockPosition)[] fireCellsFor(ChunkCoordinate coordinate)
+    {
+        const currentRevision=chunkRevision(coordinate.x,coordinate.z);
+        if(auto found=coordinate in fireCache)
+            if(found.revision==currentRevision)return found.cells;
+        FireChunkCache replacement;
+        replacement.revision=currentRevision;
+        const loaded=chunkAt(coordinate.x,coordinate.z);
+        if(loaded !is null&&!loaded.empty)
+        foreach(y;loaded.minimumOccupiedY()..loaded.maximumOccupiedY()+1)
+        foreach(localZ;0..Chunk.depth)foreach(localX;0..Chunk.width)
+            if(isFire(loaded.get(localX,y,localZ)))
+                replacement.cells~=BlockPosition(
+                    coordinate.x*Chunk.width+localX,y,
+                    coordinate.z*Chunk.depth+localZ);
+        fireCache[coordinate]=replacement;
+        return fireCache[coordinate].cells;
     }
 
     bool isUnobstructed(Aabb bounds) const
@@ -948,20 +1043,8 @@ private:
     {
         const coordinate = ChunkCoordinate(chunkX, chunkZ);
         if (coordinate in chunks) return;
-        auto generated = new Chunk(chunkX, chunkZ);
-        const path=chunkPath(chunkX,chunkZ);
-        if(path.length&&exists(path)
-            &&generated.restore(cast(const(ubyte)[])read(path)))
-        {
-            addChunk(generated);
-            ++revision;
-            return;
-        }
+        auto generated=buildDetachedChunk(chunkX,chunkZ);
         addChunk(generated);
-        if (dimension == DimensionId.nether)
-            generateNetherChunk(generated);
-        else
-            generateOverworldChunk(generated);
         ++revision;
     }
 

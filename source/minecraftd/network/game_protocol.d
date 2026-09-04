@@ -27,7 +27,9 @@ enum GamePacketType : ubyte
 }
 
 enum uint maximumGamePacketBytes = 1024 * 1024;
-enum ushort gameProtocolVersion = 21;
+// 22 adds the expanded shared block/item registry. The wire width remains one
+// byte, but older clients must not interpret the appended IDs as unknown enums.
+enum ushort gameProtocolVersion = 22;
 
 enum ubyte chunkEncodingRaw = 0;
 enum ubyte chunkEncodingRle = 1;
@@ -59,6 +61,9 @@ enum PlayerActionType : ubyte
     inventoryCollect,
     inventoryClose,
     pickBlock,
+    creativeSetCarried,
+    creativeSetHotbar,
+    creativeClearInventory,
 }
 
 enum ubyte inputForward = 1 << 0;

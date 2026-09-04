@@ -37,6 +37,9 @@ struct BlockTextureSet
     uint waterFlow;
     uint netherPortal;
     uint flintAndSteel;
+    uint[BlockId] catalogSide;
+    uint[BlockId] catalogTop;
+    uint[BlockId] catalogBottom;
 }
 
 /// Water is split by face role so the horizontal sheet has a deterministic
@@ -125,6 +128,15 @@ unittest
 }
 
 enum Face : int { down, up, north, south, west, east }
+
+uint blockTexture(const BlockTextureSet textures, BlockId block, Face face)
+{
+    const(uint)* selected;
+    if (face == Face.up) selected = block in textures.catalogTop;
+    else if (face == Face.down) selected = block in textures.catalogBottom;
+    else selected = block in textures.catalogSide;
+    return selected is null ? textures.stone : *selected;
+}
 
 final class BlockRenderer
 {
@@ -685,7 +697,7 @@ private:
 
     uint textureFor(BlockId block, Face face, const BlockTextureSet textures) const
     {
-        final switch (block)
+        switch (block)
         {
             case BlockId.air: return textures.stone;
             case BlockId.grass:
@@ -719,6 +731,7 @@ private:
                  BlockId.waterFlow6, BlockId.waterFlow7, BlockId.waterFalling:
                 return textures.waterStill;
             case BlockId.fire: return textures.stone;
+            default: return blockTexture(textures, block, face);
         }
     }
 
@@ -981,13 +994,40 @@ private:
                 uSigns=[1,-1,-1,1];vSigns=[-1,-1,1,1];break;
         }
         const normal=faceNormal(face);
-        const worldLight=sampleWorldLight ? lighting.brightnessAt(
-            x+cast(int)normal.x,y+cast(int)normal.y,z+cast(int)normal.z) : 1.0f;
         foreach (i; 0 .. 4)
         {
+            const worldLight=sampleWorldLight
+                ?vertexWorldLight(x,y,z,face,normal,uSigns[i],vSigns[i])
+                :1.0f;
             const amount = faceShade(face) * worldLight
                 * vertexAo(x, y, z, face, uSigns[i], vSigns[i]);
             colors[i] = Color(tint.r * amount, tint.g * amount, tint.b * amount, tint.a);
         }
+    }
+
+    float vertexWorldLight(int x,int y,int z,Face face,Vec3 normal,
+        int uSign,int vSign)
+    {
+        const baseX=x+cast(int)normal.x;
+        const baseY=y+cast(int)normal.y;
+        const baseZ=z+cast(int)normal.z;
+        if(!smoothLighting)return lighting.brightnessAt(baseX,baseY,baseZ);
+        int ux,uy,uz,vx,vy,vz;
+        final switch(face)
+        {
+            case Face.up,Face.down:
+                ux=uSign;vz=vSign;break;
+            case Face.north,Face.south:
+                ux=uSign;vy=vSign;break;
+            case Face.west,Face.east:
+                uz=uSign;vy=vSign;break;
+        }
+        // Average the four light cells touching this face vertex. This is the
+        // smooth-light contribution; AO remains a separate corner multiplier.
+        return (lighting.brightnessAt(baseX,baseY,baseZ)
+            +lighting.brightnessAt(baseX+ux,baseY+uy,baseZ+uz)
+            +lighting.brightnessAt(baseX+vx,baseY+vy,baseZ+vz)
+            +lighting.brightnessAt(baseX+ux+vx,baseY+uy+vy,
+                baseZ+uz+vz))*0.25f;
     }
 }
