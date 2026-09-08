@@ -1,5 +1,30 @@
 module minecraftd.client.render.block_renderer;
 
+unittest
+{
+    auto world=new World();
+    scope(exit)destroy(world);
+    world.clearChunks();
+    auto column=new Chunk(0,0);
+    scope(exit)destroy(column);
+    column.set(0,70,0,BlockId.stone);
+    column.set(0,81,0,BlockId.stone);
+    assert(world.installChunk(0,0,column.snapshot()));
+    auto renderer=new BlockRenderer(world);
+    scope(exit)destroy(renderer);
+    assert(renderer.buildChunkRange(BlockTextureSet.init,
+        ChunkCoordinate(0,0),80,95).length>0);
+    world.setBlock(0,81,0,BlockId.air);
+    // The old section now lies above every occupied block. Previously this
+    // attempted an unsigned allocation for a negative nine-row mask.
+    assert(renderer.buildChunkRange(BlockTextureSet.init,
+        ChunkCoordinate(0,0),80,95).length==0);
+    assert(renderer.buildChunkRange(BlockTextureSet.init,
+        ChunkCoordinate(0,0),-64,-40).length==0);
+    assert(renderer.buildChunkRange(BlockTextureSet.init,
+        ChunkCoordinate(0,0),70,70).length>0);
+}
+
 import minecraftd.client.render.mesh : Vertex, Color, appendQuad;
 import minecraftd.client.render.texture_manager : ImageData;
 import minecraftd.client.render.world_lighting : WorldLighting;
@@ -37,9 +62,13 @@ struct BlockTextureSet
     uint waterFlow;
     uint netherPortal;
     uint flintAndSteel;
+    uint[ubyte] itemSprites;
     uint[BlockId] catalogSide;
     uint[BlockId] catalogTop;
     uint[BlockId] catalogBottom;
+    uint white;
+    uint craftingFront;
+    uint furnaceFront;
 }
 
 /// Water is split by face role so the horizontal sheet has a deterministic
@@ -131,6 +160,8 @@ enum Face : int { down, up, north, south, west, east }
 
 uint blockTexture(const BlockTextureSet textures, BlockId block, Face face)
 {
+    if(block==BlockId.furnace&&face==Face.north)return textures.furnaceFront;
+    if(block==BlockId.craftingTable&&(face==Face.north||face==Face.west))return textures.craftingFront;
     const(uint)* selected;
     if (face == Face.up) selected = block in textures.catalogTop;
     else if (face == Face.down) selected = block in textures.catalogBottom;
@@ -197,6 +228,10 @@ final class BlockRenderer
         if(loaded is null||loaded.empty)return byTexture;
         if(minimumY<loaded.minimumOccupiedY())minimumY=loaded.minimumOccupiedY();
         if(maximumY>loaded.maximumOccupiedY())maximumY=loaded.maximumOccupiedY();
+        // Cached sections can outlive their last occupied layer after an edit
+        // or a streamed replacement. Never turn an empty intersection into an
+        // unsigned greedy-mask allocation.
+        if(minimumY>maximumY)return byTexture;
         foreach(faceValue;0..6)
         {
             const face=cast(Face)faceValue;
@@ -364,7 +399,8 @@ final class BlockRenderer
             const tint = block == BlockId.grass && face == Face.up
                 ? Color(0.55f, 0.82f, 0.35f, 1.0f)
                 : Color(1, 1, 1, 1);
-            appendBlockFace(*geometry, 0, 0, 0, face, tint, false);
+            appendBlockFace(*geometry, 0, 0, 0, face, tint, false,
+                block==BlockId.enchantingTable?.75f:1.0f);
         }
         return byTexture;
     }
@@ -490,6 +526,7 @@ private:
         int fixed,int uCount,int vCount,int minimumY)
     {
         GreedyFaceCell[] mask;
+        if(uCount<=0||vCount<=0)return;
         mask.length=cast(size_t)uCount*vCount;
         const baseX=coordinate.x*Chunk.width;
         const baseZ=coordinate.z*Chunk.depth;
@@ -512,6 +549,14 @@ private:
             const normal=faceNormal(face);
             const neighbor=world.getBlock(x+cast(int)normal.x,
                 y+cast(int)normal.y,z+cast(int)normal.z);
+            if(block==BlockId.enchantingTable)
+            {
+                if(face!=Face.up&&isOpaque(neighbor))continue;
+                const texture=textureFor(block,face,textures);
+                if(texture !in byTexture)byTexture[texture]=[];
+                appendBlockFace(byTexture[texture],x,y,z,face,Color(1,1,1,1),true,.75f);
+                continue;
+            }
             if(isOpaque(neighbor)
                 ||(block==BlockId.glass&&neighbor==BlockId.glass))continue;
             ref cell=mask[cast(size_t)v*uCount+u];
@@ -936,7 +981,7 @@ private:
     }
 
     void appendBlockFace(ref Vertex[] output, int x, int y, int z, Face face,
-        Color tint, bool sampleWorldLight = true)
+        Color tint, bool sampleWorldLight = true,float height=1.0f)
     {
         const fx = cast(float) x;
         const fy = cast(float) y;
@@ -965,12 +1010,14 @@ private:
                 break;
         }
 
+        foreach(ref point;points)point.y=fy+(point.y-fy)*height;
+        const topV=face==Face.up||face==Face.down?0.0f:1.0f-height;
         Color[4] colors;
         blockFaceColors(colors,x,y,z,face,tint,sampleWorldLight);
         appendQuad(
             output,
             points[0], points[1], points[2], points[3],
-            Vec2(0,1), Vec2(1,1), Vec2(1,0), Vec2(0,0),
+            Vec2(0,1), Vec2(1,1), Vec2(1,topV), Vec2(0,topV),
             colors[0], colors[1], colors[2], colors[3],
         );
     }

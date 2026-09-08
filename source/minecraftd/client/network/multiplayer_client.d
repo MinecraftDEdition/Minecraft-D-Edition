@@ -1,14 +1,68 @@
 module minecraftd.client.network.multiplayer_client;
 
+unittest
+{
+    auto world=new World();
+    scope(exit)destroy(world);
+    world.clearChunks();
+    auto player=new LocalPlayer();
+    scope(exit)destroy(player);
+    auto client=new MultiplayerClient(null,world,player);
+    scope(exit)destroy(client);
+    auto column=new Chunk(0,0);
+    scope(exit)destroy(column);
+    column.set(0,70,0,BlockId.stone);
+    PacketWriter snapshot;
+    snapshot.putI32(0);snapshot.putI32(0);
+    snapshot.putU8(chunkEncodingRaw);
+    snapshot.data~=column.snapshot();
+    PacketWriter change;
+    change.putI32(0);change.putI32(70);change.putI32(0);
+    change.putU8(cast(ubyte)BlockId.stone);
+    change.putU8(cast(ubyte)BlockId.oakPlanks);change.putU32(1);
+    PacketWriter unload;
+    unload.putI32(0);unload.putI32(0);
+    void drain()
+    {
+        foreach(_;0..100)
+        {
+            if(!client.pendingTerrain.length)return;
+            client.drainTerrain();
+        }
+        assert(0,"Terrain queue failed to drain");
+    }
+    // An edit received after a snapshot must survive deferred installation.
+    assert(client.queueTerrain(GamePacket(GamePacketType.chunkData,snapshot.data)));
+    assert(client.queueTerrain(GamePacket(GamePacketType.blockChange,change.data)));
+    drain();
+    assert(world.getBlock(0,70,0)==BlockId.oakPlanks);
+    // An unload cannot be overtaken by a queued snapshot.
+    assert(client.queueTerrain(GamePacket(GamePacketType.chunkData,snapshot.data)));
+    assert(client.queueTerrain(GamePacket(GamePacketType.chunkUnload,unload.data)));
+    drain();
+    assert(!world.hasChunk(0,0));
+    client.handleBlockChange(change.data);
+    assert(world.loadedChunkCoordinates().length==0);
+    // A new subscription at the same coordinate may legitimately load again.
+    assert(client.queueTerrain(GamePacket(GamePacketType.chunkData,snapshot.data)));
+    drain();
+    assert(world.getBlock(0,70,0)==BlockId.stone);
+    assert(client.terrainBytes==0&&client.terrainHead==0);
+    foreach(_;0..MultiplayerClient.maximumTerrainPackets)
+        assert(client.queueTerrain(GamePacket(GamePacketType.chunkUnload,unload.data)));
+    assert(!client.queueTerrain(GamePacket(GamePacketType.chunkUnload,unload.data)));
+    assert(client.pendingTerrain.length==0&&client.disconnectReason.length>0);
+}
+
 import minecraftd.client.chat.chat_state : ChatMessageKind, ChatState;
 import minecraftd.client.network.game_connection : GameConnection;
 import minecraftd.client.player.local_player : LocalPlayer;
 import minecraftd.common.math3d : Vec3, clamp;
 import minecraftd.game.entity.player : Player;
 import minecraftd.game.item.inventory : Inventory, ItemId, ItemStack,
-    lastBlockItem, maximumStackSize;
+    lastBlockItem = lastItem, maximumStackSize;
 import minecraftd.network.game_protocol : DroppedItemState, GamePacketType,
-    CombatEventType, DamageCause, NetworkPlayerState, PacketReader, PacketWriter,
+    CombatEventType, DamageCause, GamePacket, NetworkPlayerState, PacketReader, PacketWriter,
     PlayerActionType,
     PlayerInputCommand,
     chunkEncodingRaw, chunkEncodingRle, decodeChunkRuns,
@@ -16,7 +70,7 @@ import minecraftd.network.game_protocol : DroppedItemState, GamePacketType,
     inputForward, inputJump, inputLeft, inputRight, inputSprint,
     gameProtocolVersion;
 import minecraftd.world.block : BlockId;
-import minecraftd.world.chunk : Chunk;
+import minecraftd.world.chunk : Chunk, chunkCoordinate;
 import minecraftd.world.world : World;
 import minecraftd.world.world_settings : DimensionId;
 
@@ -179,6 +233,7 @@ final class RemotePlayer : Player
         eyeInWater=state.eyeInWater;
         swimming=state.swimming;
         fireTicks=state.fireTicks;
+        eatingTicks=state.eatingTicks;
 
         const sample = RemoteMotionSample(snapshotTick,state.position,
             state.velocity,state.bodyYaw,state.yaw,state.pitch,
@@ -332,7 +387,11 @@ final class MultiplayerClient
     private LocalPlayer localPlayer;
     private PlayerInputCommand[] pendingInputs;
     private PredictedInventoryChange[] pendingInventoryChanges;
-    private ubyte[][] pendingChunkPackets;
+    private GamePacket[] pendingTerrain;
+    private size_t terrainHead;
+    private size_t terrainBytes;
+    private enum maximumTerrainBytes=16*1024*1024;
+    private enum maximumTerrainPackets=65536;
     private RemotePlayer[uint] remoteById;
     private BlockChangeEvent[] blockEvents;
     private PickupEvent[] pickupEvents;
@@ -377,7 +436,7 @@ final class MultiplayerClient
         localPlayerId = 0;
         pendingInputs.length = 0;
         pendingInventoryChanges.length=0;
-        pendingChunkPackets.length=0;
+        clearPendingTerrain();
         localDamageEventId = 0;
         droppedItemById.clear();
         foreach (remote; remoteById) destroy(remote);
@@ -443,7 +502,18 @@ final class MultiplayerClient
             case PlayerActionType.inventoryCollect:
                 localPlayer.inventory.collectMatching(target);break;
             case PlayerActionType.inventoryClose:
-                localPlayer.inventory.returnCarried();break;
+            {
+                auto inv=&localPlayer.inventory;
+                if(inv.station&&inv.station!=2)
+                    foreach(stack;inv.work[0..(inv.station==1?9:2)])inv.addStack(stack);
+                inv.station=0;inv.work=typeof(inv.work).init;
+                inv.returnCarried();break;
+            }
+            case PlayerActionType.stationClick:
+            {
+                import minecraftd.game.item.workstations:clickWorkstation;
+                clickWorkstation(localPlayer.inventory,target,auxiliary!=0);break;
+            }
             case PlayerActionType.creativeSetCarried:
             {
                 const item=cast(ItemId)target;
@@ -465,7 +535,8 @@ final class MultiplayerClient
             case PlayerActionType.creativeClearInventory:
                 localPlayer.inventory=Inventory.init;break;
             case PlayerActionType.dropItem,PlayerActionType.dropStack,
-                 PlayerActionType.respawn,PlayerActionType.pickBlock:
+                 PlayerActionType.respawn,PlayerActionType.pickBlock,
+                 PlayerActionType.enchantItem:
                 break;
         }
         const after=localPlayer.inventory;
@@ -509,7 +580,7 @@ final class MultiplayerClient
                     handleSnapshot(packet.payload);
                     break;
                 case GamePacketType.blockChange:
-                    handleBlockChange(packet.payload);
+                    if(!queueTerrain(packet))return;
                     break;
                 case GamePacketType.chatBroadcast:
                 {
@@ -547,12 +618,8 @@ final class MultiplayerClient
                     handleDimensionChange(packet.payload);
                     break;
                 case GamePacketType.chunkData:
-                    // Decoding/restoring several 100 KiB chunks in one poll
-                    // used to stall input and UI for an entire rendered frame.
-                    pendingChunkPackets~=packet.payload.dup;
-                    break;
                 case GamePacketType.chunkUnload:
-                    handleChunkUnload(packet.payload);
+                    if(!queueTerrain(packet))return;
                     break;
                 case GamePacketType.disconnect:
                 {
@@ -572,14 +639,7 @@ final class MultiplayerClient
                     break;
             }
         }
-        // Admit at most one terrain packet per presented frame. Time-sensitive
-        // packets above are always handled first and remain immediately visible.
-        if(pendingChunkPackets.length)
-        {
-            handleChunkData(pendingChunkPackets[0]);
-            pendingChunkPackets=pendingChunkPackets.length==1?null
-                :pendingChunkPackets[1..$].dup;
-        }
+        drainTerrain();
     }
 
     RemotePlayer[] remotePlayers()
@@ -633,6 +693,61 @@ final class MultiplayerClient
     }
 
 private:
+    void clearPendingTerrain()
+    {
+        pendingTerrain=null;
+        terrainHead=terrainBytes=0;
+    }
+
+    bool queueTerrain(GamePacket packet)
+    {
+        if(packet.payload.length>maximumTerrainBytes-terrainBytes
+            ||pendingTerrain.length-terrainHead>=maximumTerrainPackets)
+        {
+            disconnectReason="Terrain streaming exceeded the client backlog limit. Reconnect to resync.";
+            loginComplete=false;
+            clearPendingTerrain();
+            if(connection !is null)connection.close();
+            return false;
+        }
+        terrainBytes+=packet.payload.length;
+        pendingTerrain~=packet;
+        return true;
+    }
+
+    void drainTerrain()
+    {
+        import core.time:MonoTime,msecs;
+        const started=MonoTime.currTime;
+        uint chunks;
+        uint operations;
+        while(terrainHead<pendingTerrain.length&&operations<256)
+        {
+            const type=pendingTerrain[terrainHead].type;
+            if(type==GamePacketType.chunkData&&chunks==1)break;
+            auto packet=pendingTerrain[terrainHead];
+            pendingTerrain[terrainHead++]=GamePacket.init;
+            terrainBytes-=packet.payload.length;
+            switch(type)
+            {
+                case GamePacketType.chunkData:handleChunkData(packet.payload);++chunks;break;
+                case GamePacketType.chunkUnload:handleChunkUnload(packet.payload);break;
+                case GamePacketType.blockChange:handleBlockChange(packet.payload);break;
+                default:assert(0);
+            }
+            ++operations;
+            if(MonoTime.currTime-started>=3.msecs)break;
+        }
+        if(terrainHead==pendingTerrain.length)clearPendingTerrain();
+        else if(terrainHead>=1024&&terrainHead>=pendingTerrain.length/2)
+        {
+            // Compact occasionally, not once per chunk. Consumed payloads are
+            // released immediately, even while the remaining queue is stalled.
+            pendingTerrain=pendingTerrain[terrainHead..$].dup;
+            terrainHead=0;
+        }
+    }
+
     void handleLogin(const(ubyte)[] payload)
     {
         PacketReader reader = PacketReader(payload);
@@ -643,6 +758,7 @@ private:
         const dimension = cast(DimensionId) reader.readU8();
         if (!reader.valid || versionValue != gameProtocolVersion)
             return;
+        clearPendingTerrain();
         world.clearChunks();
         world.dimension = dimension;
         world.markDirty();
@@ -802,6 +918,7 @@ private:
         localPlayer.eyeInWater=state.eyeInWater;
         localPlayer.swimming=state.swimming;
         localPlayer.fireTicks=state.fireTicks;
+        localPlayer.eatingTicks=state.eatingTicks;
         foreach (slot; 0 .. localPlayer.inventory.hotbar.length)
         {
             const oldStack = oldInventory.hotbar[slot];
@@ -914,6 +1031,9 @@ private:
         event.newBlock = cast(BlockId) reader.readU8();
         event.actorPlayerId = reader.readU32();
         if (!reader.valid) return;
+        // A remote delta must never invoke procedural generation. Deltas for
+        // chunks outside our subscription are covered by their future snapshot.
+        if(!world.hasChunk(chunkCoordinate(event.x),chunkCoordinate(event.z)))return;
         world.setBlock(event.x, event.y, event.z, event.newBlock);
         if (event.actorPlayerId == localPlayerId
             && event.oldBlock == BlockId.air && event.newBlock != BlockId.air)
@@ -939,7 +1059,7 @@ private:
         localPlayer.portalProgress = 1.0f;
         pendingInputs.length = 0;
         pendingInventoryChanges.length=0;
-        pendingChunkPackets.length=0;
+        clearPendingTerrain();
         droppedItemById.clear();
         foreach (remote; remoteById) destroy(remote);
         remoteById.clear();
@@ -1005,7 +1125,11 @@ private:
     static bool inventoriesEqual(const Inventory left,const Inventory right)
     {
         bool same(ItemStack a,ItemStack b)
-        {return a.item==b.item&&a.count==b.count;}
+        {return a.item==b.item&&a.count==b.count&&a.damage==b.damage
+            &&a.enchantment==b.enchantment&&a.enchantmentLevel==b.enchantmentLevel;}
+        if(left.station!=right.station)return false;
+        foreach(index;0..10)
+            if(!same(left.work[index],right.work[index]))return false;
         foreach(index;0..Inventory.hotbarSize)
             if(!same(left.hotbar[index],right.hotbar[index]))return false;
         foreach(index;0..Inventory.storageSize)

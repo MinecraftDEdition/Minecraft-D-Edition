@@ -262,6 +262,7 @@ private final class HostPeer
     Thread receiveThread;
     Mutex outgoingMutex;
     HostOutgoing[] outgoing;
+    size_t outgoingBytes;
     shared bool running;
 
     this(string remoteUserId, ushort localPort)
@@ -297,6 +298,7 @@ private final class HostPeer
         {
             auto result = outgoing;
             outgoing = null;
+            outgoingBytes=0;
             return result;
         }
     }
@@ -342,18 +344,34 @@ private:
                     }
                     const frameLength=cast(size_t)bodyLength+4;
                     if(stream.length<frameLength)break;
-                    const channel=stream[4]==cast(ubyte)GamePacketType.chunkData
-                        ?cast(ubyte)1:cast(ubyte)0;
+                    // Snapshots, deltas, unloads and dimension boundaries must
+                    // share one reliable ordered stream. Independent channels
+                    // allowed stale terrain to overtake newer world state.
+                    enum ubyte channel=0;
                     size_t offset;
                     synchronized(outgoingMutex)
-                    while(offset<frameLength)
                     {
-                        const remaining=frameLength-offset;
-                        const count=remaining<EosService.streamChunkBytes
-                            ?remaining:EosService.streamChunkBytes;
-                        outgoing~=HostOutgoing(channel,
-                            stream[offset..offset+count].dup);
-                        offset+=count;
+                        // A stalled host frame must not retain an unbounded
+                        // copy of every server packet for each remote player.
+                        if(frameLength>32*1024*1024-outgoingBytes
+                            ||(frameLength+EosService.streamChunkBytes-1)
+                                /EosService.streamChunkBytes>65536-outgoing.length)
+                        {
+                            atomicStore(running,false);
+                            try socket.shutdown(SocketShutdown.BOTH);
+                            catch(SocketOSException) {}
+                            return;
+                        }
+                        outgoingBytes+=frameLength;
+                        while(offset<frameLength)
+                        {
+                            const remaining=frameLength-offset;
+                            const count=remaining<EosService.streamChunkBytes
+                                ?remaining:EosService.streamChunkBytes;
+                            outgoing~=HostOutgoing(channel,
+                                stream[offset..offset+count].dup);
+                            offset+=count;
+                        }
                     }
                     stream=stream[frameLength..$];
                 }

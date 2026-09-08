@@ -5,6 +5,10 @@
   "license": "proprietary",
   "targetType": "executable",
   "targetName": "Minecraft D Edition",
+  "configurations": [
+    { "name": "application", "targetType": "executable" },
+    { "name": "local-test", "targetType": "executable", "targetName": "Minecraft D Edition Test" }
+  ],
   "mainSourceFile": "source/app.d",
   "sourcePaths": ["source"],
   "stringImportPaths": ["shaders"],

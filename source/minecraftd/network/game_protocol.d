@@ -29,7 +29,7 @@ enum GamePacketType : ubyte
 enum uint maximumGamePacketBytes = 1024 * 1024;
 // 22 adds the expanded shared block/item registry. The wire width remains one
 // byte, but older clients must not interpret the appended IDs as unknown enums.
-enum ushort gameProtocolVersion = 22;
+enum ushort gameProtocolVersion = 24;
 
 enum ubyte chunkEncodingRaw = 0;
 enum ubyte chunkEncodingRle = 1;
@@ -64,6 +64,8 @@ enum PlayerActionType : ubyte
     creativeSetCarried,
     creativeSetHotbar,
     creativeClearInventory,
+    stationClick,
+    enchantItem,
 }
 
 enum ubyte inputForward = 1 << 0;
@@ -91,6 +93,7 @@ struct PlayerInputCommand
     float moveStrafe = 0.0f;
     ubyte viewDistance = 6;
     ubyte simulationDistance = 5;
+    bool useHeld = false;
 
     bool down(ubyte flag) const { return (flags & flag) != 0; }
 }
@@ -144,6 +147,7 @@ struct NetworkPlayerState
     bool eyeInWater;
     bool swimming;
     ushort fireTicks;
+    ubyte eatingTicks;
 }
 
 struct DroppedItemState
@@ -156,6 +160,9 @@ struct DroppedItemState
     uint age;
     uint pickupDelay;
     DimensionId dimension;
+    ushort damage;
+    ubyte enchantment;
+    ubyte enchantmentLevel;
 }
 
 struct GamePacket
@@ -206,16 +213,27 @@ struct PacketWriter
             putU8(cast(ubyte) stack.item);
             putU8(stack.count);
             putU8(stack.popTicks);
+            putU16(stack.damage);putU8(stack.enchantment);putU8(stack.enchantmentLevel);
         }
         foreach (stack; inventory.storage)
         {
             putU8(cast(ubyte) stack.item);
             putU8(stack.count);
             putU8(stack.popTicks);
+            putU16(stack.damage);putU8(stack.enchantment);putU8(stack.enchantmentLevel);
         }
         putU8(cast(ubyte) inventory.carried.item);
         putU8(inventory.carried.count);
         putU8(inventory.carried.popTicks);
+        putU16(inventory.carried.damage);putU8(inventory.carried.enchantment);putU8(inventory.carried.enchantmentLevel);
+        putU8(inventory.station);
+        foreach(stack;inventory.work)
+        {
+            putU8(cast(ubyte)stack.item);putU8(stack.count);putU8(stack.popTicks);
+            putU16(stack.damage);putU8(stack.enchantment);putU8(stack.enchantmentLevel);
+        }
+        putI32(inventory.stationX);putI32(inventory.stationY);putI32(inventory.stationZ);
+        putU16(inventory.burnTicks);putU16(inventory.cookTicks);
     }
     void putPlayer(const NetworkPlayerState player)
     {
@@ -244,6 +262,7 @@ struct PacketWriter
         putU16(cast(ushort)player.airSupply);
         putBool(player.inWater); putBool(player.eyeInWater); putBool(player.swimming);
         putU16(player.fireTicks);
+        putU8(player.eatingTicks);
     }
     void putDroppedItem(const DroppedItemState item)
     {
@@ -251,6 +270,7 @@ struct PacketWriter
         putVec3(item.position); putVec3(item.velocity); putU32(item.age);
         putU32(item.pickupDelay);
         putU8(cast(ubyte) item.dimension);
+        putU16(item.damage); putU8(item.enchantment); putU8(item.enchantmentLevel);
     }
 }
 
@@ -314,11 +334,19 @@ struct PacketReader
     {
         Inventory result;
         foreach (ref stack; result.hotbar)
-            stack = ItemStack(cast(ItemId) readU8(), readU8(), readU8());
+            stack = readStack();
         foreach (ref stack; result.storage)
-            stack = ItemStack(cast(ItemId) readU8(), readU8(), readU8());
-        result.carried = ItemStack(cast(ItemId) readU8(), readU8(), readU8());
+            stack = readStack();
+        result.carried = readStack();
+        result.station=readU8();
+        foreach(ref stack;result.work)stack=readStack();
+        result.stationX=readI32();result.stationY=readI32();result.stationZ=readI32();
+        result.burnTicks=readU16();result.cookTicks=readU16();
         return result;
+    }
+    ItemStack readStack()
+    {
+        return ItemStack(cast(ItemId)readU8(),readU8(),readU8(),readU16(),readU8(),readU8());
     }
     NetworkPlayerState readPlayer()
     {
@@ -353,6 +381,7 @@ struct PacketReader
         result.inWater = readBool(); result.eyeInWater = readBool();
         result.swimming = readBool();
         result.fireTicks = readU16();
+        result.eatingTicks = readU8();
         return result;
     }
     DroppedItemState readDroppedItem()
@@ -363,6 +392,7 @@ struct PacketReader
         result.velocity = readVec3(); result.age = readU32();
         result.pickupDelay = readU32();
         result.dimension = cast(DimensionId) readU8();
+        result.damage=readU16(); result.enchantment=readU8(); result.enchantmentLevel=readU8();
         return result;
     }
 }
@@ -456,6 +486,7 @@ ubyte[] encodeInput(PlayerInputCommand input)
             -(input.down(inputLeft)?1.0f:0.0f));
     writer.putF32(forwardAxis); writer.putF32(strafeAxis);
     writer.putU8(input.viewDistance);writer.putU8(input.simulationDistance);
+    writer.putBool(input.useHeld);
     return framePacket(GamePacketType.playerInput, writer.data);
 }
 
@@ -485,6 +516,7 @@ PlayerInputCommand decodeInput(const(ubyte)[] payload, out bool valid)
     {
         result.viewDistance=reader.readU8();
         result.simulationDistance=reader.readU8();
+        result.useHeld=reader.readBool();
     }
     valid = reader.valid;
     return result;
@@ -506,6 +538,7 @@ unittest
     input.moveStrafe = -0.75f;
     input.viewDistance = 9;
     input.simulationDistance = 7;
+    input.useHeld=true;
     auto encoded = encodeInput(input);
     assert(decodeFrameLength(encoded[0 .. 4]) == encoded.length - 4);
     bool valid;
@@ -516,6 +549,7 @@ unittest
     assert(decoded.skinParts == 0x15 && !decoded.mainHandRight);
     assert(decoded.moveForward == 0.42f && decoded.moveStrafe == -0.75f);
     assert(decoded.viewDistance==9&&decoded.simulationDistance==7);
+    assert(decoded.useHeld);
 
     NetworkPlayerState player;
     player.id = 7;
@@ -533,6 +567,9 @@ unittest
     player.fireTicks = 137;
     player.inventory.storage[4] = ItemStack(ItemId.stone,37,2);
     player.inventory.carried = ItemStack(ItemId.dirt,12,0);
+    player.inventory.station=3;
+    player.inventory.work[0]=ItemStack(ItemId.diamondPickaxe,1,0,27,1,2);
+    player.eatingTicks=17;
     PacketWriter stateWriter;
     stateWriter.putPlayer(player);
     PacketReader stateReader = PacketReader(stateWriter.data);
@@ -550,6 +587,16 @@ unittest
         && restored.inventory.storage[4].count==37);
     assert(restored.inventory.carried.item==ItemId.dirt
         && restored.inventory.carried.count==12);
+    assert(restored.eatingTicks==17&&restored.inventory.station==3);
+    assert(restored.inventory.work[0]==player.inventory.work[0]);
+    DroppedItemState drop;
+    drop.item=ItemId.netheriteSword;drop.count=1;
+    drop.damage=99;drop.enchantment=2;drop.enchantmentLevel=3;
+    PacketWriter dropWriter;dropWriter.putDroppedItem(drop);
+    PacketReader dropReader=PacketReader(dropWriter.data);
+    const decodedDrop=dropReader.readDroppedItem();
+    assert(dropReader.valid&&decodedDrop.item==drop.item&&decodedDrop.damage==99
+        &&decodedDrop.enchantment==2&&decodedDrop.enchantmentLevel==3);
 
     ubyte[] chunkLike;
     chunkLike.length = 70_000;

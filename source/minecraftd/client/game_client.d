@@ -1020,6 +1020,13 @@ final class GameClient
 
             multiplayer.poll(chat);
             // Presence follows authoritative game-mode snapshots live. A
+            if(player.inventory.station&&!inventoryMenu.station)
+                setInventoryMenu(true);
+            if(!player.inventory.station&&inventoryMenu.station&&inventoryMenu.active)
+                setInventoryMenu(false);
+            inventoryMenu.station=player.inventory.station;
+            chat.playerNames=null;
+            foreach(remote;multiplayer.remotePlayers())chat.playerNames~=remote.name;
             // published integrated world remains singleplayer until another
             // participant is actually present, then uses the world name as
             // its multiplayer server name.
@@ -1136,7 +1143,7 @@ final class GameClient
                 // Predict the main-hand swing immediately. Waiting for the
                 // authoritative placement snapshot made underwater use look
                 // inert even when the block was successfully placed.
-                player.attack();
+                // The server starts the swing only after use succeeds.
             }
 
             if (options.active && options.fromGame)
@@ -1210,7 +1217,7 @@ final class GameClient
             else if(inventoryMenu.active)
             {
                 const cursor=uiCursor;
-                const creative=player.gameMode==player.gameMode.creative;
+                const creative=player.gameMode==player.gameMode.creative&&!inventoryMenu.station;
                 const hovered=renderer.inventorySlotAt(cursor.x,cursor.y,
                     inventoryMenu,creative);
                 const hoveredTab=creative?renderer.creativeInventoryTabAt(
@@ -1286,14 +1293,13 @@ final class GameClient
                     const dropKey=window.pressed(
                         options.key(OptionsAction.bindDrop));
                     if(!editingSearch&&dropKey&&hovered>=0
-                        &&hovered<InventoryMenuRenderer.creativeCatalogBase)
+                        &&hovered<Inventory.slotCount)
                         multiplayer.requestInventoryAction(
                             PlayerActionType.inventoryDrop,cast(ubyte)hovered,
                             window.down(VK_CONTROL)?1:0);
                     if(gamepad.pressed(GamepadButton.y)&&hovered>=0)
                     {
-                        if(!creative||hovered<
-                            InventoryMenuRenderer.creativeCatalogBase)
+                        if(hovered<Inventory.slotCount)
                             multiplayer.requestInventoryAction(
                                 PlayerActionType.inventoryQuickMove,
                                 cast(ubyte)hovered);
@@ -1330,6 +1336,13 @@ final class GameClient
                         if(!pressed||clickHandled)continue;
                         if(hovered>=0)
                         {
+                            if(inventoryMenu.station)
+                            {
+                                multiplayer.requestInventoryAction(
+                                    hovered>=100?PlayerActionType.enchantItem:PlayerActionType.stationClick,
+                                    cast(ubyte)(hovered>=100?hovered-100:hovered),cast(ubyte)button);
+                                continue;
+                            }
                             if(creative&&hovered>=
                                 InventoryMenuRenderer.creativeCatalogBase
                                 &&hovered<InventoryMenuRenderer.creativeTrashSlot)
@@ -1528,7 +1541,7 @@ final class GameClient
                     window.setMouseCapture(true);
                     window.setCursorShape(CursorShape.arrow);
                 }
-                else if (enterPressed)
+                else if (enterPressed && !chat.acceptSuggestion())
                 {
                     chat.submit(multiplayer);
                     chatMouseSelecting = false;
@@ -1538,6 +1551,10 @@ final class GameClient
                 else
                 {
                     const selecting = window.down(VK_SHIFT);
+                    chat.refreshSuggestions();
+                    if(window.pressed(VK_TAB))chat.acceptSuggestion();
+                    if(window.pressed(0x26))chat.cycleSuggestion(-1);
+                    if(window.pressed(0x28))chat.cycleSuggestion(1);
                     if (leftPressed || window.repeated(VK_LEFT))
                         chat.moveCursor(-1, selecting);
                     if (rightPressed || window.repeated(VK_RIGHT))
@@ -1780,6 +1797,8 @@ final class GameClient
                 if(configuredSimulation>12)configuredSimulation=12;
                 inputCommand.viewDistance=cast(ubyte)configuredView;
                 inputCommand.simulationDistance=cast(ubyte)configuredSimulation;
+                inputCommand.useHeld=controlsActive&&(window.down(
+                    options.key(OptionsAction.bindUse))||gamepad.leftTrigger>0);
                 multiplayer.sendPredictedInput(inputCommand);
                 if (dropRequested)
                     multiplayer.requestDrop(cast(ubyte) player.selectedSlot,

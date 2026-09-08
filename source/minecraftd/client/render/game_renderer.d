@@ -1,5 +1,59 @@
 module minecraftd.client.render.game_renderer;
 
+unittest
+{
+    class RecordingGraphics : GraphicsDevice
+    {
+        uint uploads,releases;
+        override TextureHandle uploadTexture(const ImageData image,uint levels=0)
+        {return TextureHandle.init;}
+        override MeshHandle uploadStaticMesh(const Vertex[] vertices)
+        {return MeshHandle(++uploads,cast(uint)vertices.length);}
+        override void releaseStaticMesh(MeshHandle mesh){if(mesh.valid)++releases;}
+        override TextureHandle menuBlurTexture() const{return TextureHandle.init;}
+        override void resize(uint width,uint height){}
+        override void render(const FrameMesh frame){}
+        override void setVsync(bool enabled){}
+    }
+    auto world=new World();
+    scope(exit)destroy(world);
+    world.clearChunks();
+    auto column=new Chunk();
+    scope(exit)destroy(column);
+    column.set(1,70,1,BlockId.stone);
+    assert(world.installChunk(0,0,column.snapshot()));
+    assert(world.installChunk(1,0,column.snapshot()));
+    auto graphics=new RecordingGraphics();
+    auto renderer=new GameRenderer(world,graphics);
+    scope(exit)destroy(renderer);
+    const position=Vec3(1,72,1);
+    renderer.syncChunkMeshes(position,0,8);
+    assert(renderer.chunkMeshes.length==2);
+    const initialUploads=graphics.uploads;
+    const initialRevision=renderer.chunkMeshes[ChunkCoordinate(0,0)].revision;
+    world.setBlock(1,70,1,BlockId.oakPlanks);
+    world.setBlock(17,70,1,BlockId.oakPlanks);
+    foreach(_;0..100)
+    {
+        renderer.queueFluidRemesh(1,70,1);
+        renderer.queueFluidRemesh(17,70,1);
+    }
+    assert(renderer.flushFluidRemeshes(position));
+    assert(graphics.uploads==initialUploads+1);
+    assert(renderer.dirtyFluidSections.length==1);
+    assert(renderer.chunkMeshes[ChunkCoordinate(0,0)].revision==initialRevision);
+    assert(renderer.flushFluidRemeshes(position));
+    assert(graphics.uploads==initialUploads+2);
+    assert(renderer.dirtyFluidSections.length==0);
+
+    // Replacing a column between frames must evict its old geometry even
+    // when no meshing budget is available that frame.
+    assert(world.installChunk(0,0,column.snapshot()));
+    renderer.syncChunkMeshes(position,0,0);
+    assert(ChunkCoordinate(0,0) !in renderer.chunkMeshes);
+    assert(ChunkCoordinate(1,0) in renderer.chunkMeshes);
+}
+
 import core.stdc.math : fabsf, floorf, sinf, sqrtf, tanf;
 import std.algorithm : sort;
 import std.format : format;
@@ -48,7 +102,7 @@ import minecraftd.client.menu.inventory_menu:CreativeTab,InventoryMenuRenderer,
     InventoryMenuState,InventoryTextureSet;
 import minecraftd.game.resources.resource_manager : ResourceManager;
 import minecraftd.game.item.inventory : ItemId, ItemStack, placedBlock,
-    firstCatalogItem, lastCatalogItem, sameHeldStack;
+    firstCatalogItem, lastCatalogItem, sameHeldStack, lastItem, itemTextureName, toolKind;
 import minecraftd.game.entity.player : Player;
 version (Windows)
     import minecraftd.platform.windows.dx12.device : Dx12Device;
@@ -116,6 +170,7 @@ private struct DirtySection
 
 private struct RenderChunkGeometry
 {
+    const(void)* sourceChunk;
     RenderChunkSection[] sections;
     MeshHandle mesh;
     uint vertexCount;
@@ -144,6 +199,8 @@ final class GameRenderer
     private FontRenderer hudFont;
     private uint fontTexture;
     private uint whiteTexture;
+    private ubyte previousEatingTicks;
+    private ubyte previousFoodCount;
     private TitleScreenRenderer titleScreen;
     private TitleTextureSet titleTextures;
     private PauseMenuRenderer pauseMenu;
@@ -174,6 +231,7 @@ final class GameRenderer
     private uint[] fire0Frames;
     private uint[] fire1Frames;
     private bool[DirtySection] dirtyFluidSections;
+    private bool patchedTerrainLastFrame;
     private Vertex[][uint][ItemId] itemMeshes;
     private BlockTextureSet blockTextures;
     private uint terrainMipmapLevels;
@@ -222,6 +280,13 @@ final class GameRenderer
     private float lastOcclusionMilliseconds;
     private size_t lastResidentVertices;
     private size_t lastOccludedSections;
+
+    version(unittest) private this(World world,GraphicsDevice graphics)
+    {
+        this.world=world;
+        this.graphics=graphics;
+        blocks=new BlockRenderer(world);
+    }
 
     this(void* window, uint width, uint height, string projectRoot, World world,
         OptionsMenuState options, GraphicsApi graphicsApi = GraphicsApi.directX12)
@@ -315,6 +380,8 @@ final class GameRenderer
             blockTextures.catalogBottom[block] = loadCatalogTexture(
                 definition.bottomTexture);
         }
+        blockTextures.craftingFront=load("textures/block/crafting_table_front.png");
+        blockTextures.furnaceFront=load("textures/block/furnace_front.png");
         steve = loadHandle("textures/entity/player/wide/steve.png");
         accountSkin = steve;
         sun = graphics.uploadTexture(images.loadAdditivePngAsAlpha(
@@ -365,6 +432,7 @@ final class GameRenderer
         solidImage.rgba = [cast(ubyte) 255, 255, 255, 255];
         const solidTexture = graphics.uploadTexture(solidImage);
         whiteTexture = solidTexture.descriptorIndex;
+        blockTextures.white=whiteTexture;
         uint[6] panoramaTextures;
         foreach (face; 0 .. 6)
         {
@@ -402,6 +470,10 @@ final class GameRenderer
             loadFrom("minecraft_d","textures/gui/sprites/virtual_cursor.png"));
         inventoryTextures.creativeItemsBackground=load(
             "textures/gui/container/creative_inventory/tab_items.png");
+        inventoryTextures.stationBackgrounds=[
+            load("textures/gui/container/crafting_table.png"),
+            load("textures/gui/container/furnace.png"),
+            load("textures/gui/container/enchanting_table.png")];
         inventoryTextures.creativeSearchBackground=load(
             "textures/gui/container/creative_inventory/tab_item_search.png");
         inventoryTextures.creativeInventoryBackground=load(
@@ -470,6 +542,15 @@ final class GameRenderer
             blockTextures);
         itemMeshes[ItemId.flintAndSteel] = blocks.buildGeneratedItem(
             blockTextures.flintAndSteel,flintImage);
+        foreach(raw;cast(int)ItemId.woodenSword..cast(int)lastItem+1)
+        {
+            const item=cast(ItemId)raw;
+            const sprite=images.loadPng(resources.resolveAsset("minecraft",
+                "textures/item/"~itemTextureName(item)~".png"));
+            const texture=graphics.uploadTexture(sprite).descriptorIndex;
+            blockTextures.itemSprites[cast(ubyte)item]=texture;
+            itemMeshes[item]=blocks.buildGeneratedItem(texture,sprite);
+        }
         foreach (raw; cast(int)firstCatalogItem .. cast(int)lastCatalogItem + 1)
         {
             const item = cast(ItemId)raw;
@@ -656,6 +737,7 @@ final class GameRenderer
     int inventorySlotAt(int mouseX,int mouseY,const InventoryMenuState state,
         bool creative)const
     {
+        if(state.station)return inventoryMenu.hitStation(width,height,mouseX,mouseY,state.station);
         return creative
             ?inventoryMenu.hitCreativeSlot(width,height,mouseX,mouseY,state)
             :inventoryMenu.hitSlot(width,height,mouseX,mouseY);
@@ -832,6 +914,14 @@ final class GameRenderer
 
     void simulateTick(LocalPlayer player, MultiplayerClient multiplayer)
     {
+        const foodCount=player.inventory.hotbar[player.selectedSlot].count;
+        if(player.eatingTicks!=previousEatingTicks)
+        {
+            if(player.eatingTicks>7&&player.eatingTicks%4==0)sounds.playEating();
+            if(previousEatingTicks>=28&&!player.eatingTicks
+                &&(foodCount<previousFoodCount||player.gameMode==GameMode.creative))sounds.playEating(true);
+        }
+        previousEatingTicks=player.eatingTicks;previousFoodCount=foodCount;
         updateHeldItem(player);
         ItemStack selected;
         if(player.selectedSlot>=0&&player.selectedSlot<player.inventory.hotbar.length)
@@ -993,7 +1083,8 @@ final class GameRenderer
         // halfway restart guard, so both view-model and body repeat together.
         player.attack(true);
         ++miningTicks;
-        float destroyProgress=bareHandDestroyProgress(hit.block);
+        import minecraftd.game.item.workstations:toolMiningProgress=miningProgress;
+        float destroyProgress=toolMiningProgress(hit.block,player.inventory.hotbar[player.selectedSlot]);
         // SUBMERGED_MINING_SPEED defaults to .2; being airborne applies the
         // separate Java /5 penalty as well.
         if(player.eyeInWater)destroyProgress*=0.2f;
@@ -1012,18 +1103,14 @@ final class GameRenderer
             && !isNetherPortal(oldBlock) && !isWater(oldBlock)
             && !isFire(oldBlock))
         {
-            // Patch the affected 16-block section immediately. Removing only
-            // the broken cube's old faces exposed an unmeshed cavity until the
-            // incremental chunk rebuild reached this Y level, briefly letting
-            // the camera see through the ground.
-            refreshCachedBlockNeighborhood(x,y,z);
+            queueFluidRemesh(x,y,z);
             sounds.playBreak(oldBlock, center);
             particles.spawnBlockBreak(x, y, z, oldBlock);
         }
         else if (newBlock != BlockId.air && !isNetherPortal(newBlock)
             && !isWater(newBlock)&&!isFire(newBlock))
         {
-            refreshCachedBlockNeighborhood(x,y,z);
+            queueFluidRemesh(x,y,z);
             sounds.playPlace(newBlock,center);
         }
         if(isWater(oldBlock)||isWater(newBlock)||isFire(oldBlock)
@@ -1082,10 +1169,14 @@ final class GameRenderer
             ? elapsedSeconds - previousElapsedSeconds : 0.0f;
         previousElapsedSeconds = elapsedSeconds;
         multiplayer.advanceDroppedItems(frameSeconds > 0.1f ? 0.1f : frameSeconds);
-        flushFluidRemeshes();
+        // Alternate with full streaming jobs under sustained edits so neither
+        // arriving terrain nor nearby block patches can starve the other.
+        const patchedTerrain=!patchedTerrainLastFrame
+            &&flushFluidRemeshes(player.position);
+        patchedTerrainLastFrame=patchedTerrain;
         // Only one 16-block-high chunk section is meshed per presented frame.
         // This keeps procedural terrain work out of a single long frame.
-        syncChunkMeshes(player.position,player.yaw,1);
+        syncChunkMeshes(player.position,player.yaw,patchedTerrain?0:1);
         const meshingFinished=monotonicSeconds();
         lastMeshMilliseconds=cast(float)((meshingFinished-renderStarted)*1000.0);
         frame.clear(player.dimension == DimensionId.nether
@@ -1476,7 +1567,7 @@ final class GameRenderer
                 auto heldMesh = displayedMainHand.item in itemMeshes;
                 if (heldMesh !is null)
                 {
-                    const generated=displayedMainHand.item==ItemId.flintAndSteel;
+                    const generated=placedBlock(displayedMainHand.item)==BlockId.air;
                     const itemPose=generated
                         ? players.firstPersonGeneratedItemTransform(
                             player.interpolatedAttackProgress(partialTick),
@@ -1484,7 +1575,8 @@ final class GameRenderer
                         : players.firstPersonBlockTransform(
                             player.interpolatedAttackProgress(partialTick),
                             equipProgress);
-                    const itemModel=itemPose*viewModelMotion;
+                    const itemModel=itemPose*players.eatingTransform(player.eatingTicks,
+                        partialTick)*viewModelMotion;
                     const itemProjection=itemModel
                         *camera.viewModelProjectionMatrix(aspect);
                     foreach (textureIndex, geometry; *heldMesh)
@@ -1974,7 +2066,8 @@ private:
     {
         ChunkCoordinate[] stale;
         foreach(coordinate,geometry;chunkMeshes)
-            if(!world.hasChunk(coordinate.x,coordinate.z))stale~=coordinate;
+            if(cast(const(void)*)world.chunkAt(coordinate.x,coordinate.z) != geometry.sourceChunk)
+                stale~=coordinate;
         foreach(coordinate;stale)
         {
             auto geometry=coordinate in chunkMeshes;
@@ -2010,11 +2103,12 @@ private:
                     {found=true;best=coordinate;bestDistance=distance;}
                 }
                 if(!found)break;
-                const loaded=world.chunkAt(best.x,best.z);
+                auto loaded=world.chunkAt(best.x,best.z);
                 if(loaded is null)continue;
                 if(loaded.empty)
                 {
                     RenderChunkGeometry empty;
+                    empty.sourceChunk=cast(const(void)*)loaded;
                     empty.revision=world.chunkRevision(best.x,best.z);
                     if(auto previous=best in chunkMeshes)
                         graphics.releaseStaticMesh(previous.mesh);
@@ -2027,6 +2121,7 @@ private:
                 meshJobMaximumY=loaded.maximumOccupiedY();
                 meshJobRevision=world.chunkRevision(best.x,best.z);
                 meshJobGeometry=RenderChunkGeometry.init;
+                meshJobGeometry.sourceChunk=cast(const(void)*)loaded;
                 meshJobGeometry.minimumY=meshJobNextY;
                 meshJobGeometry.maximumY=meshJobMaximumY;
             }
@@ -2124,6 +2219,9 @@ private:
         admittedRenderChunks.length=0;
         admittedRenderSections.clear();
         occlusionGrace.clear();
+        dirtyFluidSections.clear();
+        meshJobActive=false;
+        meshJobGeometry=RenderChunkGeometry.init;
     }
 
     void purgeChunkOcclusionState(ChunkCoordinate coordinate)
@@ -2142,9 +2240,9 @@ private:
         auto heldMesh=stack.item in itemMeshes;
         if(heldMesh is null)return;
         const model=players.thirdPersonHeldItemTransform(
-            stack.item==ItemId.flintAndSteel,position,bodyYawDegrees,rightHand,
+            placedBlock(stack.item)==BlockId.air,position,bodyYawDegrees,rightHand,
             walkPosition,walkSpeed,attackProgress,crouching,ageInTicks,
-            slimArms);
+            slimArms,toolKind(stack.item)>=0);
         foreach(textureIndex,geometry;*heldMesh)
             frame.append(geometry,textureIndex,model*viewProjection,
                 stackLayer(stack.item,textureIndex),fog);
@@ -2231,38 +2329,55 @@ private:
             dirtyFluidSections[DirtySection(coordinate,sampleY>>4)]=true;
     }
 
-    void flushFluidRemeshes()
+    bool flushFluidRemeshes(Vec3 position)
     {
-        if(!dirtyFluidSections.length)return;
-        bool[ChunkCoordinate] changedChunks;
+        if(!dirtyFluidSections.length)return false;
+        DirtySection selected;
+        bool found;
+        float nearest=float.max;
+        DirtySection[] stale;
         foreach(dirty,present;dirtyFluidSections)
         {
             auto cached=dirty.coordinate in chunkMeshes;
-            if(cached is null)continue;
-            foreach(ref section;cached.sections)
+            if(cached is null||cached.sourceChunk !=
+                cast(const(void)*)world.chunkAt(dirty.coordinate.x,dirty.coordinate.z))
             {
-                if((section.minimumY>>4)!=dirty.verticalBand
-                    &&(section.maximumY>>4)!=dirty.verticalBand)continue;
-                section.blocks=blocks.buildChunkRange(blockTextures,
-                    dirty.coordinate,section.minimumY,section.maximumY);
-                section.portals=blocks.buildPortalsChunkRange(dirty.coordinate,
-                    section.minimumY,section.maximumY);
-                section.water=blocks.buildWaterChunkRange(dirty.coordinate,
-                    section.minimumY,section.maximumY);
-                section.fire=blocks.buildFireChunkRange(dirty.coordinate,
-                    section.minimumY,section.maximumY);
-                section.occluders=buildSectionOccluders(dirty.coordinate,
-                    section.minimumY,section.maximumY);
-                changedChunks[dirty.coordinate]=true;
+                stale~=dirty;
+                continue;
             }
+            const center=Vec3(dirty.coordinate.x*16+8,
+                dirty.verticalBand*16+8,dirty.coordinate.z*16+8);
+            const distance=(center-position).lengthSquared();
+            if(!found||distance<nearest)
+            {found=true;nearest=distance;selected=dirty;}
         }
-        dirtyFluidSections.clear();
-        foreach(coordinate,present;changedChunks)
-            if(auto cached=coordinate in chunkMeshes)
-            {
-                cached.revision=world.chunkRevision(coordinate.x,coordinate.z);
-                finalizeChunkGeometry(*cached);
-            }
+        foreach(dirty;stale)dirtyFluidSections.remove(dirty);
+        if(!found)return false;
+        dirtyFluidSections.remove(selected);
+        auto cached=selected.coordinate in chunkMeshes;
+        bool rebuilt;
+        // One vertical band per frame, coalescing all received edits. Old
+        // geometry stays intact until its replacement is ready.
+        foreach(ref section;cached.sections)
+        {
+            if((section.minimumY>>4)!=selected.verticalBand
+                &&(section.maximumY>>4)!=selected.verticalBand)continue;
+            section.blocks=blocks.buildChunkRange(blockTextures,
+                selected.coordinate,section.minimumY,section.maximumY);
+            section.portals=blocks.buildPortalsChunkRange(selected.coordinate,
+                section.minimumY,section.maximumY);
+            section.water=blocks.buildWaterChunkRange(selected.coordinate,
+                section.minimumY,section.maximumY);
+            section.fire=blocks.buildFireChunkRange(selected.coordinate,
+                section.minimumY,section.maximumY);
+            section.occluders=buildSectionOccluders(selected.coordinate,
+                section.minimumY,section.maximumY);
+            rebuilt=true;
+        }
+        // A partial patch cannot acknowledge the revision of an entire chunk:
+        // other sections and newly occupied heights still need a full rebuild.
+        if(rebuilt)finalizeChunkGeometry(*cached);
+        return rebuilt;
     }
 
     static void removeBlockFaceQuads(ref Vertex[] geometry,int x,int y,int z)

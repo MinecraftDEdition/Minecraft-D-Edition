@@ -34,6 +34,7 @@ struct InventoryTextureSet
     uint[7] bottomUnselected;
     uint[14] creativeTabIcons;
     bool[14] creativeTabCubeIcons;
+    uint[3] stationBackgrounds;
 }
 
 enum CreativeTab : ubyte
@@ -88,6 +89,7 @@ final class InventoryMenuState
     string searchInput;
     TextEditState searchEdit;
     int creativeScrollRow;
+    ubyte station;
 
     void open(){active=true;lastClickSlot=-1;controllerCursorInitialized=false;}
     void close()
@@ -132,6 +134,7 @@ final class InventoryMenuState
 
     void typeSearch(wstring value)
     {
+        if(value.length==0)return;
         foreach(character;value)
             if(character>=32&&character<127)
                 searchEdit.insert(searchInput,cast(char)character,64);
@@ -243,7 +246,7 @@ final class InventoryMenuRenderer
     enum int creativeImageWidth=195;
     enum int creativeImageHeight=136;
     enum int creativeCatalogBase=100;
-    enum int creativeTrashSlot=250;
+    enum int creativeTrashSlot=1000;
 
     int hitSlot(uint viewportWidth,uint viewportHeight,int mouseX,int mouseY)const
     {
@@ -401,6 +404,12 @@ final class InventoryMenuRenderer
         bool slimArms = false,bool drawControllerCursor = false,
         const InventoryMenuState state=null,bool creative=false)const
     {
+        if(inventory.station)
+        {
+            appendStation(frame,viewportWidth,viewportHeight,mouseX,mouseY,inventory,
+                textures,blockTextures,itemRenderer,font,fontTexture,partialTick,drawControllerCursor);
+            return;
+        }
         if(creative&&state !is null)
         {
             appendCreative(frame,viewportWidth,viewportHeight,mouseX,mouseY,
@@ -472,6 +481,76 @@ final class InventoryMenuRenderer
                 logicalMouseX-cursorSize/2,logicalMouseY-cursorSize/2,
                 cursorSize,cursorSize,logicalWidth,logicalHeight);
         }
+    }
+
+static void stationSlotPosition(ubyte station,int index,int left,int top,out int x,out int y)
+    {
+        if(index<Inventory.slotCount){slotPosition(index,left,top,x,y);return;}
+        const slot=index-Inventory.slotCount;
+        if(station==1)
+        {x=left+(slot==9?124:30+(slot%3)*18);y=top+(slot==9?35:17+(slot/3)*18);}
+        else if(station==2){x=left+(slot==2?116:56);y=top+(slot==0?17:(slot==1?53:35));}
+        else{x=left+(slot==0?15:35);y=top+47;}
+    }
+    int hitStation(uint w,uint h,int mx,int my,ubyte station)const
+    {
+        const scale=guiScale(w,h),left=(cast(int)w/scale-imageWidth)/2,
+            top=(cast(int)h/scale-imageHeight)/2;
+        const count=station==1?10:(station==2?3:2);
+        foreach(i;0..Inventory.slotCount+count)
+        {
+            int x,y;stationSlotPosition(station,i,left,top,x,y);
+            if(mx/scale>=x&&mx/scale<x+16&&my/scale>=y&&my/scale<y+16)return i;
+        }
+        if(station==3)
+            foreach(i;0..3)
+                if(mx/scale>=left+60&&mx/scale<left+170
+                    &&my/scale>=top+16+i*19&&my/scale<top+33+i*19)return 100+i;
+        return -1;
+    }
+    void appendStation(ref FrameMesh frame,uint w,uint h,int mx,int my,
+        const Inventory inv,const InventoryTextureSet textures,
+        const BlockTextureSet blockTextures,const HudRenderer items,
+        const FontRenderer font,uint fontTexture,float partialTick,bool controller)const
+    {
+        const scale=guiScale(w,h);
+        const lw=cast(float)w/scale,lh=cast(float)h/scale;
+        const left=(cast(int)lw-imageWidth)/2,top=(cast(int)lh-imageHeight)/2;
+        appendSolid(frame,textures.white,0,0,cast(int)lw,cast(int)lh,lw,lh,Color(0,0,0,.65f));
+        appendSprite(frame,textures.stationBackgrounds[inv.station-1],left,top,imageWidth,imageHeight,lw,lh);
+        const title=inv.station==1?"Crafting":(inv.station==2?"Furnace":"Enchant");
+        frame.append(font.buildText(title,left+8,top+5,lw,lh,Color(.25f,.25f,.25f,1)),
+            fontTexture,Mat4.identity(),DrawLayer.overlay);
+        const count=inv.station==1?10:(inv.station==2?3:2);
+        const hovered=hitStation(w,h,mx,my,inv.station);
+        foreach(i;0..Inventory.slotCount+count)
+        {
+            int x,y;stationSlotPosition(inv.station,i,left,top,x,y);
+            if(i==hovered)appendSlotHighlight(frame,textures.slotHighlightBack,x,y,lw,lh);
+            if(!inv.slot(i).empty())items.appendItem(frame,inv.slot(i),x,y,lw,lh,blockTextures,font,fontTexture,partialTick);
+        }
+        if(inv.station==2)
+        {
+            appendSolid(frame,textures.white,left+79,top+36,cast(int)(24*inv.cookTicks/200),3,lw,lh,Color(1,1,1,1));
+            if(inv.burnTicks)appendSolid(frame,textures.white,left+58,top+37,12,10,lw,lh,Color(1,.55f,.05f,1));
+        }
+        if(inv.station==3)
+        {
+            immutable string[3] choices=["Enchant I: 5 levels","Enchant II: 10","Unbreaking III: 15"];
+            foreach(i;0..3)
+            {
+                appendSolid(frame,textures.white,left+60,top+16+i*19,110,17,lw,lh,
+                    Color(.3f,.25f,.2f,1));
+                frame.append(font.buildText(choices[i],left+62,top+21+i*19,lw,lh,Color(1,1,1,1)),
+                    fontTexture,Mat4.identity(),DrawLayer.overlay);
+            }
+        }
+        if(!inv.carried.empty())
+            items.appendItem(frame,inv.carried,mx/scale-8,my/scale-8,lw,lh,blockTextures,font,fontTexture,partialTick);
+        else if(hovered>=0&&hovered<46&&!inv.slot(hovered).empty())
+            appendTooltip(frame,inv.slot(hovered),mx/scale,my/scale,lw,lh,
+                textures.tooltipBackground,textures.tooltipFrame,font,fontTexture);
+        if(controller)appendFullSprite(frame,textures.controllerCursor,mx/scale-4,my/scale-4,8,8,lw,lh);
     }
 
     void appendCreative(ref FrameMesh frame,uint viewportWidth,
@@ -914,10 +993,20 @@ private:
         const FontRenderer font,uint fontTexture)
     {
         const first=itemName(stack.item);
-        const second=itemCategory(stack.item);
+        import minecraftd.game.item.inventory:durability;
+        import std.conv:to;
+        string[] lines=[itemName(stack.item),itemCategory(stack.item)];
+        if(stack.enchantment)
+        {
+            immutable string[4] names=["","Efficiency","Sharpness","Unbreaking"];
+            if(stack.enchantment<names.length)
+                lines~=names[stack.enchantment]~" "~to!string(stack.enchantmentLevel);
+        }
+        if(durability(stack.item))
+            lines~="Durability: "~to!string(durability(stack.item)-stack.damage)~" / "~to!string(durability(stack.item));
         int tooltipWidth=font.width(first);
-        if(font.width(second)>tooltipWidth)tooltipWidth=font.width(second);
-        const tooltipHeight=second.length?22:11;
+        foreach(line;lines)if(font.width(line)>tooltipWidth)tooltipWidth=font.width(line);
+        const tooltipHeight=cast(int)lines.length*11;
         int x=mouseX+12;
         int y=mouseY-12;
         if(x+tooltipWidth+6>width)x=mouseX-12-tooltipWidth-6;
@@ -927,12 +1016,10 @@ private:
             tooltipHeight+8,9,width,height);
         appendNineSlice(frame,frameTexture,x-3,y-4,tooltipWidth+6,
             tooltipHeight+8,10,width,height);
-        frame.append(font.buildText(first,x,y,width,height,Color(1,1,1,1)),
-            fontTexture,Mat4.identity(),DrawLayer.overlay);
-        if(second.length)
-            frame.append(font.buildText(second,x,y+11,width,height,
-                    Color(85.0f/255.0f,85.0f/255.0f,1,1)),fontTexture,
-                Mat4.identity(),DrawLayer.overlay);
+        foreach(i,line;lines)
+            frame.append(font.buildText(line,x,y+cast(int)i*11,width,height,
+                i==0?Color(1,1,1,1):(i==1?Color(.333f,.333f,1,1):Color(.7f,.7f,.7f,1))),
+                fontTexture,Mat4.identity(),DrawLayer.overlay);
     }
 
     static void appendNineSlice(ref FrameMesh frame,uint texture,int x,int y,

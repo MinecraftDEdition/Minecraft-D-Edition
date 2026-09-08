@@ -137,6 +137,9 @@ final class GameConnection
     private Mutex inboxMutex;
     private Mutex sendMutex;
     private GamePacket[] inbox;
+    private size_t inboxBytes;
+    private enum maximumInboxBytes=32*1024*1024;
+    private enum maximumInboxPackets=65536;
     private shared bool running;
     version (MCD_EOS)
     {
@@ -310,13 +313,37 @@ final class GameConnection
             pollEos();
         synchronized (inboxMutex)
         {
-            auto result = inbox.dup;
-            inbox.length = 0;
+            auto result = inbox;
+            inbox = null;
+            inboxBytes=0;
             return result;
         }
     }
 
 private:
+    bool enqueueReceived(GamePacket packet)
+    {
+        synchronized(inboxMutex)
+        {
+            if(packet.payload.length>maximumInboxBytes-inboxBytes
+                ||inbox.length>=maximumInboxPackets)
+            {
+                atomicStore(running,false);
+                // Stop the sender too; leaving an unread TCP socket open can
+                // block the integrated server's broadcast loop for everyone.
+                if(socket !is null)
+                {
+                    try socket.shutdown(SocketShutdown.BOTH);
+                    catch(SocketOSException) {}
+                }
+                return false;
+            }
+            inboxBytes+=packet.payload.length;
+            inbox~=packet;
+            return true;
+        }
+    }
+
     version (MCD_EOS)
     {
     void pollEos()
@@ -334,8 +361,8 @@ private:
                 atomicStore(running, false);
                 return;
             }
-            synchronized (inboxMutex)
-                inbox ~= decoded;
+            foreach(decodedPacket;decoded)
+                if(!enqueueReceived(decodedPacket))return;
         }
         string closed;
         while ((closed = eosService.pollClosedPeer()).length)
@@ -360,9 +387,7 @@ private:
                 if (!receiveExact(body))
                     break;
                 const type = cast(GamePacketType) body[0];
-                auto payload = body[1 .. $].dup;
-                synchronized (inboxMutex)
-                    inbox ~= GamePacket(type, payload);
+                if(!enqueueReceived(GamePacket(type,body[1..$])))break;
             }
             catch (SocketOSException)
                 break;

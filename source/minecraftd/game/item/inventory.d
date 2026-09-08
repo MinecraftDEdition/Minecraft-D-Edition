@@ -68,10 +68,14 @@ enum ItemId : ubyte
     brownTerracotta, redTerracotta, orangeTerracotta, yellowTerracotta,
     limeTerracotta, greenTerracotta, cyanTerracotta, lightBlueTerracotta,
     blueTerracotta, purpleTerracotta, magentaTerracotta, pinkTerracotta,
+    craftingTable, furnace, enchantingTable,
+woodenSword, woodenAxe, woodenPickaxe, woodenShovel, woodenHoe, stoneSword, stoneAxe, stonePickaxe, stoneShovel, stoneHoe, copperSword, copperAxe, copperPickaxe, copperShovel, copperHoe, ironSword, ironAxe, ironPickaxe, ironShovel, ironHoe, goldenSword, goldenAxe, goldenPickaxe, goldenShovel, goldenHoe, diamondSword, diamondAxe, diamondPickaxe, diamondShovel, diamondHoe, netheriteSword, netheriteAxe, netheritePickaxe, netheriteShovel, netheriteHoe, beef, cookedBeef, porkchop, cookedPorkchop, chicken, cookedChicken, mutton, cookedMutton, rabbit, cookedRabbit, cod, cookedCod, apple, bread, stick, coal, ironIngot, copperIngot, goldIngot, diamond, lapisLazuli, rawIron, rawCopper, rawGold, wheat, flint, leather, paper, book, netheriteIngot,
 }
 
 enum ItemId firstCatalogItem = ItemId.coarseDirt;
-enum ItemId lastCatalogItem = ItemId.pinkTerracotta;
+enum ItemId lastCatalogItem = ItemId.enchantingTable;
+enum ItemId lastItem = ItemId.netheriteIngot;
+static assert(cast(int)lastItem <= 255);
 enum ItemId lastBlockItem = lastCatalogItem;
 static assert(cast(int)lastCatalogItem <= ubyte.max,
     "Item registry exceeds the current inventory/network ID width");
@@ -109,11 +113,23 @@ enum CreativeItemGroup : ubyte
     foreach (raw; cast(int)firstCatalogItem .. cast(int)lastCatalogItem + 1)
         result ~= cast(ItemId)raw;
     result ~= ItemId.flintAndSteel;
+    foreach(raw;cast(int)ItemId.woodenSword..cast(int)lastItem+1)
+        result~=cast(ItemId)raw;
     return result;
 }
 
 bool creativeItemInGroup(ItemId item, CreativeItemGroup group)
 {
+    if(item>=ItemId.craftingTable&&item<=ItemId.enchantingTable)
+        return group==CreativeItemGroup.functionalBlocks;
+    if(item>=ItemId.woodenSword)
+    {
+        if(item<=ItemId.netheriteHoe)
+            return group==CreativeItemGroup.toolsAndUtilities
+                ||(group==CreativeItemGroup.combat&&toolKind(item)<=1);
+        if(item<=ItemId.bread)return group==CreativeItemGroup.foodAndDrinks;
+        return group==CreativeItemGroup.ingredients;
+    }
     const catalog = item >= firstCatalogItem && item <= lastCatalogItem;
     final switch (group)
     {
@@ -176,13 +192,16 @@ struct ItemStack
     ItemId item;
     ubyte count;
     ubyte popTicks;
+    ushort damage;
+    ubyte enchantment; // 1 efficiency, 2 sharpness, 3 unbreaking
+    ubyte enchantmentLevel;
 
     bool empty() const { return item == ItemId.none || count == 0; }
 }
 
 ubyte maximumStackSize(ItemId item)
 {
-    return item==ItemId.flintAndSteel?cast(ubyte)1:cast(ubyte)64;
+    return durability(item)>0?cast(ubyte)1:cast(ubyte)64;
 }
 
 struct Inventory
@@ -195,9 +214,15 @@ struct Inventory
     ItemStack[hotbarSize] hotbar;
     ItemStack[storageSize] storage;
     ItemStack carried;
+    ubyte station; // 0 inventory, 1 crafting, 2 furnace, 3 enchanting
+    ItemStack[10] work;
+    int stationX,stationY,stationZ;
+    ushort burnTicks,cookTicks;
 
     ItemStack slot(int index) const
     {
+        if(station&&index>=slotCount&&index<slotCount+10)
+            return work[index-slotCount];
         if (index < 0 || index >= slotCount)
             return ItemStack.init;
         return index < storageSize ? storage[index]
@@ -206,6 +231,8 @@ struct Inventory
 
     void setSlot(int index, ItemStack stack)
     {
+        if(station&&index>=slotCount&&index<slotCount+10)
+        {normalize(stack);work[index-slotCount]=stack;return;}
         if (index < 0 || index >= slotCount)
             return;
         normalize(stack);
@@ -271,6 +298,19 @@ struct Inventory
 
     bool removeOne(int slot)
     {
+        return removeSelectedOne(slot);
+    }
+
+    ubyte addStack(ItemStack incoming)
+    {
+        if(!incoming.damage&&!incoming.enchantment)return add(incoming.item,incoming.count);
+        foreach(i;0..slotCount)
+            if(slot(i).empty()){setSlot(i,incoming);return 0;}
+        return incoming.count;
+    }
+
+    bool removeSelectedOne(int slot)
+    {
         if (slot < 0 || slot >= hotbarSize || hotbar[slot].empty())
             return false;
         auto stack = &hotbar[slot];
@@ -328,7 +368,7 @@ struct Inventory
 
     void click(int index, bool rightButton)
     {
-        if (index < 0 || index >= slotCount)
+        if (index < 0 || index >= slotCount+(station?10:0))
             return;
         auto target = slot(index);
         if (!rightButton)
@@ -366,14 +406,18 @@ struct Inventory
             if (!target.empty())
             {
                 const taken = cast(ubyte) ((target.count + 1) / 2);
-                carried = ItemStack(target.item, taken, 0);
+                carried = target;
+                carried.count=taken;
+                carried.popTicks=0;
                 target.count -= taken;
                 normalize(target);
             }
         }
         else if (target.empty())
         {
-            target = ItemStack(carried.item, 1, 5);
+            target = carried;
+            target.count=1;
+            target.popTicks=5;
             --carried.count;
             normalize(carried);
         }
@@ -472,7 +516,9 @@ struct Inventory
         auto stack = slot(index);
         if (stack.empty()) return ItemStack.init;
         const amount = wholeStack ? stack.count : cast(ubyte) 1;
-        ItemStack result = ItemStack(stack.item, amount, 0);
+        ItemStack result = stack;
+        result.count=amount;
+        result.popTicks=0;
         stack.count -= amount;
         normalize(stack);
         setSlot(index, stack);
@@ -483,7 +529,9 @@ struct Inventory
     {
         if (carried.empty()) return ItemStack.init;
         const amount = wholeStack ? carried.count : cast(ubyte) 1;
-        ItemStack result = ItemStack(carried.item, amount, 0);
+        ItemStack result = carried;
+        result.count=amount;
+        result.popTicks=0;
         carried.count -= amount;
         normalize(carried);
         return result;
@@ -492,7 +540,7 @@ struct Inventory
     ubyte returnCarried()
     {
         if (carried.empty()) return 0;
-        const leftover = add(carried.item, carried.count);
+        const leftover = addStack(carried);
         carried.count = leftover;
         normalize(carried);
         return leftover;
@@ -543,6 +591,8 @@ private:
 
 string itemName(ItemId item)
 {
+    if(item>=ItemId.woodenSword&&item<=lastItem)
+        return extraItemNames[cast(int)item-cast(int)ItemId.woodenSword];
     switch (item)
     {
         case ItemId.none: return "";
@@ -572,9 +622,88 @@ string itemName(ItemId item)
     }
 }
 
+immutable string[] extraItemNames = ["Wooden Sword","Wooden Axe","Wooden Pickaxe","Wooden Shovel","Wooden Hoe","Stone Sword","Stone Axe","Stone Pickaxe","Stone Shovel","Stone Hoe","Copper Sword","Copper Axe","Copper Pickaxe","Copper Shovel","Copper Hoe","Iron Sword","Iron Axe","Iron Pickaxe","Iron Shovel","Iron Hoe","Golden Sword","Golden Axe","Golden Pickaxe","Golden Shovel","Golden Hoe","Diamond Sword","Diamond Axe","Diamond Pickaxe","Diamond Shovel","Diamond Hoe","Netherite Sword","Netherite Axe","Netherite Pickaxe","Netherite Shovel","Netherite Hoe","Beef","Cooked Beef","Porkchop","Cooked Porkchop","Chicken","Cooked Chicken","Mutton","Cooked Mutton","Rabbit","Cooked Rabbit","Cod","Cooked Cod","Apple","Bread","Stick","Coal","Iron Ingot","Copper Ingot","Gold Ingot","Diamond","Lapis Lazuli","Raw Iron","Raw Copper","Raw Gold","Wheat","Flint","Leather","Paper","Book","Netherite Ingot"];
+immutable string[] extraItemTextures = ["wooden_sword","wooden_axe","wooden_pickaxe","wooden_shovel","wooden_hoe","stone_sword","stone_axe","stone_pickaxe","stone_shovel","stone_hoe","copper_sword","copper_axe","copper_pickaxe","copper_shovel","copper_hoe","iron_sword","iron_axe","iron_pickaxe","iron_shovel","iron_hoe","golden_sword","golden_axe","golden_pickaxe","golden_shovel","golden_hoe","diamond_sword","diamond_axe","diamond_pickaxe","diamond_shovel","diamond_hoe","netherite_sword","netherite_axe","netherite_pickaxe","netherite_shovel","netherite_hoe","beef","cooked_beef","porkchop","cooked_porkchop","chicken","cooked_chicken","mutton","cooked_mutton","rabbit","cooked_rabbit","cod","cooked_cod","apple","bread","stick","coal","iron_ingot","copper_ingot","gold_ingot","diamond","lapis_lazuli","raw_iron","raw_copper","raw_gold","wheat","flint","leather","paper","book","netherite_ingot"];
+string itemTextureName(ItemId item)
+{
+    return item>=ItemId.woodenSword&&item<=lastItem
+        ?extraItemTextures[cast(int)item-cast(int)ItemId.woodenSword]:"";
+}
+string itemIdentifier(ItemId item)
+{
+    import std.ascii:toLower;
+    string result;
+    foreach(c;itemName(item)) result~=c==' '?'_':toLower(c);
+    if(item==ItemId.flintAndSteel)return "flint_and_steel";
+    return result;
+}
+ItemId findItem(string name)
+{
+    import std.string:startsWith;
+    if(name.startsWith("minecraft:"))name=name[10..$];
+    foreach(item;creativeCatalog)if(itemIdentifier(item)==name)return item;
+    return ItemId.none;
+}
+int toolKind(ItemId item)
+{
+    return item>=ItemId.woodenSword&&item<=ItemId.netheriteHoe
+        ?(cast(int)item-cast(int)ItemId.woodenSword)%5:-1;
+}
+int toolTier(ItemId item)
+{
+    return toolKind(item)>=0?(cast(int)item-cast(int)ItemId.woodenSword)/5:-1;
+}
+ushort durability(ItemId item)
+{
+    if(item==ItemId.flintAndSteel)return 64;
+    immutable ushort[7] values=[59,131,190,250,32,1561,2031];
+    const tier=toolTier(item);
+    return tier>=0?values[tier]:0;
+}
+void damageStack(ref ItemStack stack,int amount=1)
+{
+    const limit=durability(stack.item);
+    if(!limit)return;
+    import std.random:uniform;
+    foreach(i;0..amount)
+        if(stack.enchantment!=3||uniform(0,cast(int)stack.enchantmentLevel+1)==0)
+            ++stack.damage;
+    if(stack.damage>=limit)stack=ItemStack.init;
+}
+float weaponDamage(ItemStack stack)
+{
+    const tier=toolTier(stack.item), kind=toolKind(stack.item);
+    immutable float[7] bonuses=[0,1,1,2,0,3,4];
+    float result=1;
+    if(kind==0)result=4+bonuses[tier];
+    if(kind==1)result=tier==0||tier==4?7:9+(tier==6?1:0);
+    if(kind==2)result=2+bonuses[tier];
+    if(kind==3)result=2.5f+bonuses[tier];
+    if(stack.enchantment==2)result+=.5f+.5f*stack.enchantmentLevel;
+    return result;
+}
+struct FoodDefinition { int nutrition; float saturation; }
+FoodDefinition foodDefinition(ItemId item)
+{
+    switch(item)
+    {
+        case ItemId.beef,ItemId.porkchop:return FoodDefinition(3,1.8f);
+        case ItemId.cookedBeef,ItemId.cookedPorkchop:return FoodDefinition(8,12.8f);
+        case ItemId.chicken,ItemId.mutton,ItemId.cod:return FoodDefinition(2,.4f);
+        case ItemId.cookedChicken,ItemId.cookedMutton:return FoodDefinition(6,7.2f);
+        case ItemId.rabbit:return FoodDefinition(3,1.8f);
+        case ItemId.cookedRabbit,ItemId.cookedCod,ItemId.bread:return FoodDefinition(5,6);
+        case ItemId.apple:return FoodDefinition(4,2.4f);
+        default:return FoodDefinition.init;
+    }
+}
+
 string itemCategory(ItemId item)
 {
     if (item == ItemId.none) return "";
+    if (creativeItemInGroup(item,CreativeItemGroup.foodAndDrinks))return "Food & Drinks";
+    if (creativeItemInGroup(item,CreativeItemGroup.functionalBlocks))return "Functional Blocks";
+    if (creativeItemInGroup(item,CreativeItemGroup.ingredients))return "Ingredients";
     if (creativeItemInGroup(item,CreativeItemGroup.toolsAndUtilities))
         return "Tools & Utilities";
     if (creativeItemInGroup(item,CreativeItemGroup.buildingBlocks))

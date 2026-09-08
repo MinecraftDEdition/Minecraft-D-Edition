@@ -90,6 +90,22 @@ final class ChatRenderer
 
         if (!chat.active)
             return;
+        const suggestionCount=chat.suggestions.length>6?6:chat.suggestions.length;
+        if(suggestionCount)
+        {
+            const start=chat.suggestionIndex>=6?chat.suggestionIndex-5:0;
+            foreach(i;0..suggestionCount)
+            {
+                const index=start+i;
+                const y=cast(int)logicalHeight-18-cast(int)(suggestionCount-i)*11;
+                const text=chat.suggestions[index];
+                appendRect(frame,3,y-1,9+font.width(text),y+10,logicalWidth,
+                    logicalHeight,index==chat.suggestionIndex?Color(.22f,.22f,.45f,1):Color(0,0,0,.9f));
+                frame.append(font.buildText(text,5,y,logicalWidth,logicalHeight,
+                    index==chat.suggestionIndex?Color(1,1,.3f,1):Color(.8f,.8f,.8f,1)),
+                    fontTexture,Mat4.identity(),DrawLayer.overlay);
+            }
+        }
 
         appendRect(frame, 2, cast(int) logicalHeight - 14,
             cast(int) logicalWidth - 2, cast(int) logicalHeight - 2,

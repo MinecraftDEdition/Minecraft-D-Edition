@@ -79,10 +79,11 @@ enum BlockId : ubyte
     brownTerracotta, redTerracotta, orangeTerracotta, yellowTerracotta,
     limeTerracotta, greenTerracotta, cyanTerracotta, lightBlueTerracotta,
     blueTerracotta, purpleTerracotta, magentaTerracotta, pinkTerracotta,
+    craftingTable, furnace, enchantingTable,
 }
 
 enum BlockId firstCatalogBlock = BlockId.coarseDirt;
-enum BlockId lastCatalogBlock = BlockId.pinkTerracotta;
+enum BlockId lastCatalogBlock = BlockId.enchantingTable;
 static assert(cast(int)lastCatalogBlock <= ubyte.max,
     "Block registry exceeds the current save/network ID width");
 
@@ -282,6 +283,9 @@ immutable CatalogBlockDefinition[] catalogBlockDefinitions = [
     cube("Purple Terracotta", "purple_terracotta", "stone", 1.25f, false),
     cube("Magenta Terracotta", "magenta_terracotta", "stone", 1.25f, false),
     cube("Pink Terracotta", "pink_terracotta", "stone", 1.25f, false),
+    sided("Crafting Table", "crafting_table_side", "crafting_table_top", "oak_planks", "wood", 2.5f, true, true),
+    sided("Furnace", "furnace_side", "furnace_top", "furnace_top", "stone", 3.5f, false),
+    sided("Enchanting Table", "enchanting_table_side", "enchanting_table_top", "enchanting_table_bottom", "stone", 5f, false),
 ];
 
 bool isCatalogBlock(BlockId block)
@@ -346,6 +350,7 @@ BlockSoundType soundType(BlockId block)
 
 bool isOpaque(BlockId block)
 {
+    if(block==BlockId.enchantingTable)return false;
     return isCatalogBlock(block) || (block != BlockId.air && block != BlockId.netherPortalX
         && block != BlockId.netherPortalZ && block != BlockId.glass
         && !isWater(block) && block != BlockId.fire);
@@ -353,7 +358,7 @@ bool isOpaque(BlockId block)
 
 bool isSolid(BlockId block)
 {
-    return isOpaque(block) || block == BlockId.glass;
+    return isOpaque(block) || block == BlockId.glass || block==BlockId.enchantingTable;
 }
 
 bool isNetherPortal(BlockId block)

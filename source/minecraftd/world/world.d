@@ -1,5 +1,20 @@
 module minecraftd.world.world;
 
+unittest
+{
+    auto world=new World();
+    scope(exit)destroy(world);
+    const first=world.chunkRevision(0,0);
+    const snapshot=world.chunkAt(0,0).snapshot();
+    assert(world.unloadChunk(0,0));
+    assert(world.installChunk(0,0,snapshot));
+    const replacement=world.chunkRevision(0,0);
+    assert(replacement!=first);
+    world.clearChunks();
+    assert(world.installChunk(0,0,snapshot));
+    assert(world.chunkRevision(0,0)!=replacement);
+}
+
 import core.stdc.math : cosf, fabsf, floorf, sinf;
 import std.conv : to;
 import std.file : exists, mkdirRecurse, read, write;
@@ -149,6 +164,9 @@ final class World
     Chunk chunk;
     private Chunk[ChunkCoordinate] chunks;
     private uint[ChunkCoordinate] chunkRevisions;
+    // Never reuse a mesh revision after unloading/replacing a chunk, including
+    // a clear/reload that happens entirely between two rendered frames.
+    private uint nextChunkRevision;
     private bool[ChunkCoordinate] dirtyChunks;
     private WaterChunkCache[ChunkCoordinate] waterCache;
     private FireChunkCache[ChunkCoordinate] fireCache;
@@ -506,7 +524,7 @@ public:
     void markDirty()
     {
         foreach (coordinate, loaded; chunks)
-            chunkRevisions[coordinate] = chunkRevisions[coordinate] + 1;
+            chunkRevisions[coordinate] = ++nextChunkRevision;
         ++revision;
     }
 
@@ -990,8 +1008,7 @@ private:
             const coordinate = ChunkCoordinate(center.x + dx, center.z + dz);
             if (coordinate in chunks)
             {
-                if(auto found=coordinate in chunkRevisions)++*found;
-                else chunkRevisions[coordinate]=1;
+                chunkRevisions[coordinate]=++nextChunkRevision;
             }
         }
     }
@@ -1001,8 +1018,7 @@ private:
         void bump(ChunkCoordinate coordinate)
         {
             if(coordinate !in chunks)return;
-            if(auto found=coordinate in chunkRevisions)++*found;
-            else chunkRevisions[coordinate]=1;
+            chunkRevisions[coordinate]=++nextChunkRevision;
         }
         bump(center);
         const west=localX==0,east=localX==Chunk.width-1;
@@ -1345,7 +1361,8 @@ private:
                 continue;
             const x=coordinate.x*Chunk.width+localX;
             const z=coordinate.z*Chunk.depth+localZ;
-            if (!visitor(Aabb(x, y, z, x + 1.0f, y + 1.0f, z + 1.0f)))
+            const h=loaded.get(localX,y,localZ)==BlockId.enchantingTable?.75f:1.0f;
+            if (!visitor(Aabb(x, y, z, x + 1.0f, y + h, z + 1.0f)))
                 return false;
         }
         return true;
@@ -1366,7 +1383,8 @@ private:
         foreach (x; minX .. maxX + 1)
         {
             if (!isSolid(getBlock(x,y,z))) continue;
-            if (!visitor(Aabb(x,y,z,x+1.0f,y+1.0f,z+1.0f))) return false;
+            const h=getBlock(x,y,z)==BlockId.enchantingTable?.75f:1.0f;
+            if (!visitor(Aabb(x,y,z,x+1.0f,y+h,z+1.0f))) return false;
         }
         return true;
     }

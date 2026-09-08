@@ -338,6 +338,12 @@ public:
         play("random/click_stereo.ogg", 1.0f, 1.0f, uiVolume);
     }
 
+    void playEating(bool finished=false)
+    {
+        play(finished?"random/burp.ogg":"random/eat"~randomChoice(3)~".ogg",
+            finished?.5f:.6f,finished?.9f:1.0f+(randomFloat()-.5f)*.2f,playerVolume);
+    }
+
     void playPortalTrigger(Vec3 position)
     {
         playAt("portal/trigger.ogg", position, 0.25f,

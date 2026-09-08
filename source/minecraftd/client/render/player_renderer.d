@@ -436,16 +436,33 @@ final class PlayerRenderer
         const attackYaw=sinf(attackProgress*attackProgress*PI);
         const attackArc=sinf(root*PI);
         return Mat4.translation(Vec3(-0.5f,-0.5f,-0.5f))
-            *Mat4.rotationY(-90.0f*DEG_TO_RAD)
             *Mat4.rotationZ(25.0f*DEG_TO_RAD)
+            // Java's XYZ quaternion is Z->Y->X for our row vectors. Convert
+            // camera -Z to +Z by reversing the Y/X angles, not just the final
+            // translation. The old order laid sprites across the wrong axis.
+            *Mat4.rotationY(90.0f*DEG_TO_RAD)
             *Mat4.scale(Vec3(0.68f,0.68f,0.68f))
-            *Mat4.translation(Vec3(1.13f/16.0f,3.2f/16.0f,1.13f/16.0f))
-            *Mat4.rotationY(-45.0f*DEG_TO_RAD)
-            *Mat4.rotationX(-80.0f*attackArc*DEG_TO_RAD)
+            *Mat4.translation(Vec3(1.13f/16.0f,3.2f/16.0f,-1.13f/16.0f))
+            *Mat4.rotationY(45.0f*DEG_TO_RAD)
+            *Mat4.rotationX(80.0f*attackArc*DEG_TO_RAD)
             *Mat4.rotationZ(-20.0f*attackArc*DEG_TO_RAD)
-            *Mat4.rotationY((45.0f-20.0f*attackYaw)*DEG_TO_RAD)
+            *Mat4.rotationY((-45.0f+20.0f*attackYaw)*DEG_TO_RAD)
             *Mat4.translation(Vec3(swingX+0.56f,
                 swingY-0.52f-equipProgress*0.6f,-swingZ+0.72f));
+    }
+
+    Mat4 eatingTransform(ubyte ticks,float partialTick) const
+    {
+        if(!ticks)return Mat4.identity();
+        import core.stdc.math:powf,fabsf;
+        const remaining=32.0f-ticks+1.0f-partialTick;
+        const fraction=remaining/32.0f;
+        const pull=1.0f-powf(fraction,27.0f);
+        const bob=fraction<.8f?fabsf(cosf(remaining/4*PI)*.1f):0;
+        return Mat4.rotationZ(30*pull*DEG_TO_RAD)
+            *Mat4.rotationX(10*pull*DEG_TO_RAD)
+            *Mat4.rotationY(90*pull*DEG_TO_RAD)
+            *Mat4.translation(Vec3(-.6f*pull,.5f*pull+bob,0));
     }
 
     /// Attaches an item to the end of the animated main arm rather than to a
@@ -454,7 +471,7 @@ final class PlayerRenderer
     Mat4 thirdPersonHeldItemTransform(bool generated,Vec3 position,
         float bodyYawDegrees,bool rightHand,float walkPosition,float walkSpeed,
         float attackProgress,bool crouching,float ageInTicks,
-        bool slimArms = false) const
+        bool slimArms = false,bool handheldTool = false) const
     {
         float armX=rightHand
             ? -cosf(walkPosition*0.6662f+PI)*walkSpeed
@@ -492,14 +509,23 @@ final class PlayerRenderer
             -10.0f/16.0f,0);
         const center=grip+(generated?Vec3(0,0.13f,0.055f)
             :Vec3(rightHand?-0.055f:0.055f,0.04f,0.075f));
-        const itemPose=generated
+        const itemPose=generated&&handheldTool
+            ? Mat4.translation(Vec3(-.5f,-.5f,-.5f))
+                *Mat4.scale(Vec3(.85f,.85f,.85f))
+                *Mat4.rotationZ((rightHand?55.0f:-55.0f)*DEG_TO_RAD)
+                *Mat4.rotationY((rightHand?-90.0f:90.0f)*DEG_TO_RAD)
+                *Mat4.translation(Vec3(0,4.0f/16.0f,.5f/16.0f))
+                *Mat4.rotationX(-90*DEG_TO_RAD)
+                *Mat4.translation(grip)
+            : generated
             ? Mat4.translation(Vec3(-0.5f,-0.5f,-0.5f))
-                *Mat4.scale(Vec3(0.42f,0.42f,0.42f))
-                *Mat4.translation(center)
+                *Mat4.rotationX(-90*DEG_TO_RAD)
+                *Mat4.scale(Vec3(0.55f,0.55f,0.55f))
+                *Mat4.translation(grip+Vec3(0,1.0f/16.0f,3.0f/16.0f))
             : Mat4.translation(Vec3(-0.5f,-0.5f,-0.5f))
-                *Mat4.rotationY((rightHand?35.0f:-35.0f)*DEG_TO_RAD)
-                *Mat4.rotationX(-12.0f*DEG_TO_RAD)
-                *Mat4.scale(Vec3(0.25f,0.25f,0.25f))
+                *Mat4.rotationY((rightHand?45.0f:-45.0f)*DEG_TO_RAD)
+                *Mat4.rotationX(-15.0f*DEG_TO_RAD)
+                *Mat4.scale(Vec3(0.375f,0.375f,0.375f))
                 *Mat4.translation(center);
         const armPose=Mat4.translation(shoulder*-1.0f)
             *Mat4.rotationX(armX)*Mat4.rotationY(armY)*Mat4.rotationZ(armZ)

@@ -69,6 +69,7 @@ class Player : Entity
     bool drowningDamageDue;
     /// Remaining authoritative burn duration in 20 Hz game ticks.
     int fireTicks;
+    ubyte eatingTicks;
 
     // Survival state uses Java's half-heart/food scale (20 = ten icons).
     float health = 20.0f;

@@ -17,8 +17,10 @@ import minecraftd.client.player.local_player : LocalPlayer;
 import minecraftd.common.aabb : Aabb;
 import minecraftd.common.math3d : DEG_TO_RAD, PI, Vec3, forwardFromYawPitch;
 import minecraftd.game.item.inventory : Inventory, ItemId, ItemStack, bareHandDrop,
-    blockItem, lastBlockItem, maximumStackSize, placedBlock;
+    blockItem, lastBlockItem = lastItem, maximumStackSize, placedBlock,
+    foodDefinition, damageStack, weaponDamage, durability;
 import minecraftd.game.entity.player : Player;
+import minecraftd.game.item.workstations;
 import minecraftd.network.chat_protocol : sanitizeChat;
 import minecraftd.network.game_protocol : DroppedItemState, GamePacketType,
     CombatEventType, DamageCause, NetworkPlayerState, PacketReader, PacketWriter,
@@ -134,6 +136,7 @@ private final class ServerPlayer
     uint portalTicks;
     bool portalLatched;
     PortalRectangle overworldPortal;
+    ItemId eatingItem;
 
     this(uint id, string name, Vec3 spawn, GameMode gameMode, bool hardcore)
     {
@@ -182,6 +185,7 @@ final class IntegratedGameServer
     private uint serverTick;
     private uint randomState = 0x9E3779B9u;
     private uint savedWorldRevision;
+    private Inventory[string] furnaces;
     private uint savedNetherRevision;
     private ushort listeningPort;
     private string sharedAddress;
@@ -193,6 +197,14 @@ final class IntegratedGameServer
     this(ushort port = 0)
     {
         initialize(new World(), port);
+    }
+
+    version(unittest) private this(World ownedWorld)
+    {
+        // Exercise authoritative actions without opening sockets/worker threads.
+        world=ownedWorld;netherWorld=new World();
+        peersMutex=new Mutex();generationMutex=new Mutex();inboundMutex=new Mutex();
+        worldBans=new BanList("");universalBans=new BanList("");
     }
 
     this(WorldSettings settings, string directory,
@@ -233,6 +245,7 @@ private:
         }
         savedNetherRevision = netherWorld.contentRevision;
         savedWorldRevision = world.contentRevision;
+        loadFurnaces();
         listener = new TcpSocket();
         listener.setOption(SocketOptionLevel.SOCKET, SocketOption.REUSEADDR, 1);
         // A port of zero lets Windows allocate a distinct endpoint per world,
@@ -305,8 +318,9 @@ public:
             generationJobs.length=0;
             generationQueued.clear();
         }
-        foreach (player; players) destroy(player);
+        foreach (player; players){closeInventory(player);destroy(player);}
         world.save();
+        saveFurnaces();
         netherWorld.save();
         destroy(netherWorld);
         destroy(world);
@@ -430,6 +444,8 @@ private:
             tickPlayerFire(serverPlayer);
 
         tickDroppedItems();
+        tickWorkstations();
+        foreach(serverPlayer;players)tickEating(serverPlayer);
         if (serverTick % 5 == 0)
         {
             Vec3[] overworldCenters,netherCenters;
@@ -547,6 +563,12 @@ private:
                         const action = cast(PlayerActionType) reader.readU8();
                         const target = reader.readU8();
                         const auxiliary = reader.readU8();
+                        if(reader.valid&&(action==PlayerActionType.stationClick
+                            ||action==PlayerActionType.enchantItem))
+                        {
+                            stationAction(*serverPlayer,action,target,auxiliary);
+                            break;
+                        }
                         if (reader.valid && (action == PlayerActionType.dropItem
                             || action == PlayerActionType.dropStack))
                         {
@@ -558,22 +580,22 @@ private:
                         else if (reader.valid && action == PlayerActionType.respawn)
                             respawnPlayer(*serverPlayer);
                         else if (reader.valid
-                            && action == PlayerActionType.inventoryClick)
+                            && action == PlayerActionType.inventoryClick && target<Inventory.slotCount)
                             (*serverPlayer).player.inventory.click(target,
                                 auxiliary != 0);
                         else if (reader.valid
-                            && action == PlayerActionType.inventoryQuickMove)
+                            && action == PlayerActionType.inventoryQuickMove && target<Inventory.slotCount)
                             (*serverPlayer).player.inventory.quickMove(target);
                         else if (reader.valid
                             && action == PlayerActionType.inventoryHotbarSwap)
                             (*serverPlayer).player.inventory.swapHotbar(target,
                                 auxiliary);
                         else if (reader.valid
-                            && action == PlayerActionType.inventoryDrop)
+                            && action == PlayerActionType.inventoryDrop && (target<Inventory.slotCount||target==ubyte.max))
                             dropInventoryItem(*serverPlayer,target,
                                 auxiliary != 0);
                         else if (reader.valid
-                            && action == PlayerActionType.inventoryCollect)
+                            && action == PlayerActionType.inventoryCollect && target<Inventory.slotCount)
                             (*serverPlayer).player.inventory.collectMatching(target);
                         else if (reader.valid
                             && action == PlayerActionType.inventoryClose)
@@ -605,7 +627,10 @@ private:
                         else if (reader.valid
                             && action == PlayerActionType.creativeClearInventory
                             && (*serverPlayer).player.gameMode == GameMode.creative)
+                        {
+                            closeInventory(*serverPlayer);
                             (*serverPlayer).player.inventory = Inventory.init;
+                        }
                     }
                     break;
                 case GamePacketType.profileUpdate:
@@ -874,7 +899,7 @@ private:
         // The held mining action requests a swing every tick. attack(true)
         // observes the halfway guard shared with the predicting client.
         player.attack(true);
-        float destroyProgress=bareHandDestroyProgress(hit.block);
+        float destroyProgress=miningProgress(hit.block,player.inventory.hotbar[player.selectedSlot]);
         if(player.eyeInWater)destroyProgress*=0.2f;
         if(!player.onGround)destroyProgress*=0.2f;
         serverPlayer.miningProgress += destroyProgress;
@@ -884,12 +909,145 @@ private:
         activeWorld.setBlock(hit.x, hit.y, hit.z, BlockId.air);
         broadcastBlockChange(hit.x, hit.y, hit.z, hit.block, BlockId.air,
             serverPlayer.id, serverPlayer.dimension);
-        const drop = bareHandDrop(hit.block);
+        const drop = harvestDrop(hit.block,player.inventory.hotbar[player.selectedSlot].item);
+        damageStack(player.inventory.hotbar[player.selectedSlot]);
         if (drop != ItemId.none)
             spawnDrop(drop, Vec3(hit.x + 0.5f, hit.y + 0.5f,
                 hit.z + 0.5f), serverPlayer.dimension);
         serverPlayer.mining = false;
         serverPlayer.miningProgress = 0.0f;
+    }
+
+string furnaceKey(ServerPlayer p)
+    {
+        const inv=p.player.inventory;
+        return to!string(cast(int)p.dimension)~","~to!string(inv.stationX)~","
+            ~to!string(inv.stationY)~","~to!string(inv.stationZ);
+    }
+    void openStation(ServerPlayer p,ubyte kind,int x,int y,int z)
+    {
+        closeInventory(p);
+        auto inv=&p.player.inventory;
+        inv.station=kind;inv.stationX=x;inv.stationY=y;inv.stationZ=z;
+        if(kind==2)
+        {
+            const key=furnaceKey(p);
+            if(auto stored=key in furnaces){inv.work=stored.work;inv.burnTicks=stored.burnTicks;inv.cookTicks=stored.cookTicks;}
+            else storeFurnace(p);
+        }
+    }
+    void storeFurnace(ServerPlayer p)
+    {
+        furnaces[furnaceKey(p)]=p.player.inventory;
+    }
+    void stationAction(ServerPlayer p,PlayerActionType action,ubyte target,ubyte auxiliary)
+    {
+        auto inv=&p.player.inventory;
+        if(!inv.station||p.player.health<=0)return;
+        const block=worldFor(p.dimension).getBlock(inv.stationX,inv.stationY,inv.stationZ);
+        const center=Vec3(inv.stationX+.5f,inv.stationY+.5f,inv.stationZ+.5f);
+        if((center-p.player.position).lengthSquared()>64
+            ||cast(int)block!=cast(int)BlockId.craftingTable+inv.station-1)
+        {closeInventory(p);return;}
+        if(inv.station==2)
+        {
+            if(auto stored=furnaceKey(p) in furnaces)
+            {inv.work=stored.work;inv.burnTicks=stored.burnTicks;inv.cookTicks=stored.cookTicks;}
+        }
+        if(action==PlayerActionType.enchantItem)
+        {
+            const level=cast(ubyte)(target+1);
+            auto tool=&inv.work[0];
+            if(inv.station!=3||target>2||!durability(tool.item)||tool.enchantment)return;
+            const free=p.player.gameMode==GameMode.creative;
+            if(!free&&(p.player.experienceLevel<level*5||inv.work[1].item!=ItemId.lapisLazuli||inv.work[1].count<level))return;
+            if(!free)
+            {
+                p.player.experienceLevel-=level;
+                inv.work[1].count-=level;if(!inv.work[1].count)inv.work[1]=ItemStack.init;
+            }
+            import minecraftd.game.item.inventory:toolKind;
+            tool.enchantment=target==2||toolKind(tool.item)<0?3:(toolKind(tool.item)==0?2:1);
+            tool.enchantmentLevel=level;
+            return;
+        }
+        const beforeOutput=inv.work[2].count;
+        if(!clickWorkstation(*inv,target,auxiliary!=0))return;
+        if(inv.station==2&&target==Inventory.slotCount+2)
+            p.player.giveExperience(beforeOutput-inv.work[2].count);
+        if(inv.station==2)storeFurnace(p);
+    }
+    void tickWorkstations()
+    {
+        foreach(key,ref inv;furnaces)tickFurnace(inv);
+        foreach(p;players)
+        {
+            auto inv=&p.player.inventory;
+            if(!inv.station)continue;
+            const pos=Vec3(inv.stationX+.5f,inv.stationY+.5f,inv.stationZ+.5f);
+            if((pos-p.player.position).lengthSquared()>64||p.player.health<=0
+                ||cast(int)worldFor(p.dimension).getBlock(inv.stationX,inv.stationY,inv.stationZ)
+                    !=cast(int)BlockId.craftingTable+inv.station-1)
+            {closeInventory(p);continue;}
+            if(inv.station==2)
+                if(auto stored=furnaceKey(p) in furnaces)
+                {inv.work=stored.work;inv.burnTicks=stored.burnTicks;inv.cookTicks=stored.cookTicks;}
+        }
+        if(serverTick%100==0)saveFurnaces();
+    }
+    void saveFurnaces()
+    {
+        if(!world.saveDirectory.length)return;
+        import std.file:write,rename;
+        string output;
+        foreach(key,inv;furnaces)
+        {
+            output~=key~"\t"~to!string(inv.burnTicks)~"\t"~to!string(inv.cookTicks);
+            foreach(s;inv.work[0..3])output~="\t"~to!string(cast(int)s.item)~","~to!string(s.count);
+            output~="\n";
+        }
+        const path=buildPath(world.saveDirectory,"furnaces.tsv");
+        write(path~".tmp",output);
+        rename(path~".tmp",path);
+    }
+    void loadFurnaces()
+    {
+        if(!world.saveDirectory.length)return;
+        import std.file:exists,readText;
+        import std.string:split,splitLines;
+        const path=buildPath(world.saveDirectory,"furnaces.tsv");
+        if(!exists(path))return;
+        foreach(line;readText(path).splitLines)
+        {
+            const cols=line.split("\t");if(cols.length!=6)continue;
+            try
+            {
+                Inventory inv;inv.station=2;inv.burnTicks=to!ushort(cols[1]);inv.cookTicks=to!ushort(cols[2]);
+                foreach(i;0..3){const pair=cols[i+3].split(",");if(pair.length!=2)continue;
+                    inv.work[i]=ItemStack(cast(ItemId)to!ubyte(pair[0]),to!ubyte(pair[1]));}
+                furnaces[cols[0].idup]=inv;
+            }
+            catch(Exception){}
+        }
+    }
+    void tickEating(ServerPlayer p)
+    {
+        auto player=p.player;
+        const item=player.inventory.hotbar[player.selectedSlot].item;
+        const food=foodDefinition(item);
+        if(!p.input.useHeld||!food.nutrition||player.health<=0||player.inventory.station
+            ||player.gameMode==GameMode.spectator
+            ||(player.foodLevel>=20&&player.gameMode!=GameMode.creative))
+        {player.eatingTicks=0;p.eatingItem=ItemId.none;return;}
+        if(item!=p.eatingItem){player.eatingTicks=0;p.eatingItem=item;}
+        if(++player.eatingTicks>=32)
+        {
+            player.foodLevel+=food.nutrition;if(player.foodLevel>20)player.foodLevel=20;
+            player.saturationLevel+=food.saturation;
+            if(player.saturationLevel>player.foodLevel)player.saturationLevel=player.foodLevel;
+            if(player.gameMode!=GameMode.creative)player.inventory.removeOne(player.selectedSlot);
+            player.eatingTicks=0;
+        }
     }
 
     void pickSelectedBlock(ServerPlayer serverPlayer)
@@ -973,10 +1131,13 @@ private:
             && attacker.player.fallDistance > 0.0f
             && !attacker.player.sprinting && !attacker.player.flying;
         const healthBeforeAttack = target.player.health;
-        target.player.takeDamage(critical ? 1.5f : 1.0f,
+        target.player.takeDamage(weaponDamage(attacker.player.inventory.hotbar[
+                attacker.player.selectedSlot])*(critical ? 1.5f : 1.0f),
             Player.wrapDegrees(worldAngle - target.player.yaw));
         if (target.player.health < healthBeforeAttack)
         {
+            if(attacker.player.gameMode!=GameMode.creative)
+                damageStack(attacker.player.inventory.hotbar[attacker.player.selectedSlot]);
             recordDamage(target, DamageCause.generic);
             if (target.player.health <= 0.0f)
                 handleDeath(target, DamageCause.generic, attacker.name);
@@ -1028,6 +1189,17 @@ private:
             || player.gameMode == GameMode.spectator)
             return;
         const slot = player.selectedSlot;
+        auto useWorld=worldFor(serverPlayer.dimension);
+        const useHit=useWorld.rayCastForPlacement(player.eyePosition(1),
+            forwardFromYawPitch(player.yaw,player.pitch),5);
+        if(useHit.hit&&!player.crouching&&useHit.block>=BlockId.craftingTable
+            &&useHit.block<=BlockId.enchantingTable)
+        {
+            openStation(serverPlayer,cast(ubyte)(cast(int)useHit.block
+                -cast(int)BlockId.craftingTable+1),useHit.x,useHit.y,useHit.z);
+            player.attack(true);
+            return;
+        }
         if (slot < 0 || slot >= player.inventory.hotbar.length)
             return;
         const stack = player.inventory.hotbar[slot];
@@ -1042,14 +1214,19 @@ private:
             PortalRectangle rectangle;
             if(!ignitionHit.hit)
                 return;
-            player.attack(true);
             if(igniteNetherPortal(activeWorld,ignitionHit.placeX,
                 ignitionHit.placeY,ignitionHit.placeZ,rectangle))
+            {
+                player.attack(true);
+                if(player.gameMode!=GameMode.creative)damageStack(player.inventory.hotbar[slot]);
                 broadcastPortal(rectangle,serverPlayer.id,
                     serverPlayer.dimension);
+            }
             else if(activeWorld.canPlaceFire(ignitionHit.placeX,
                 ignitionHit.placeY,ignitionHit.placeZ))
             {
+                player.attack(true);
+                if(player.gameMode!=GameMode.creative)damageStack(player.inventory.hotbar[slot]);
                 const old=activeWorld.getBlock(ignitionHit.placeX,
                     ignitionHit.placeY,ignitionHit.placeZ);
                 activeWorld.setBlock(ignitionHit.placeX,ignitionHit.placeY,
@@ -1110,6 +1287,20 @@ private:
     void closeInventory(ServerPlayer serverPlayer)
     {
         auto inventory=&serverPlayer.player.inventory;
+        // Furnace contents already belong to the shared block, not this viewer.
+        // Never overwrite newer smelting/another viewer's changes when closing.
+        if(inventory.station&&inventory.station!=2)
+        {
+            foreach(index;0..(inventory.station==1?9:2))
+            {
+                auto stack=inventory.work[index];
+                if(stack.empty())continue;
+                const remaining=inventory.addStack(stack);
+                if(remaining){stack.count=remaining;spawnThrownStack(serverPlayer,stack);}
+            }
+        }
+        inventory.station=0;
+        inventory.work=typeof(inventory.work).init;
         if(inventory.carried.empty())return;
         inventory.returnCarried();
         if(!inventory.carried.empty())
@@ -1134,7 +1325,7 @@ private:
         velocity.z += sinf(randomAngle) * randomMagnitude;
         const origin = player.eyePosition(1.0f) + Vec3(0.0f, -0.3f, 0.0f);
         spawnDrop(stack.item, stack.count, origin, velocity, 40,
-            serverPlayer.dimension);
+            serverPlayer.dimension,stack.damage,stack.enchantment,stack.enchantmentLevel);
     }
 
     void spawnDrop(ItemId item, Vec3 position,
@@ -1152,11 +1343,12 @@ private:
     }
 
     void spawnDrop(ItemId item, ubyte count, Vec3 position, Vec3 velocity,
-        uint pickupDelay, DimensionId dimension = DimensionId.overworld)
+        uint pickupDelay, DimensionId dimension = DimensionId.overworld,
+        ushort damage=0,ubyte enchantment=0,ubyte enchantmentLevel=0)
     {
         if(item==ItemId.none||count==0)return;
         droppedItems ~= DroppedItemState(nextItemId++, item, count,
-            position, velocity, 0, pickupDelay, dimension);
+            position, velocity, 0, pickupDelay, dimension,damage,enchantment,enchantmentLevel);
     }
 
     void tickDroppedItems()
@@ -1215,7 +1407,8 @@ private:
                 const delta = serverPlayer.player.position - item.position;
                 if (delta.lengthSquared() > 2.25f)
                     continue;
-                const leftover = serverPlayer.player.inventory.add(item.item, item.count);
+                const stack=ItemStack(item.item,item.count,0,item.damage,item.enchantment,item.enchantmentLevel);
+                const leftover = serverPlayer.player.inventory.addStack(stack);
                 if (leftover == item.count)
                     continue;
                 sendPickup(serverPlayer.id, item.position, item.dimension);
@@ -1405,6 +1598,7 @@ private:
         state.deathMessage = serverPlayer.deathMessage;
         state.selectedSlot = cast(ubyte) player.selectedSlot;
         state.inventory = player.inventory;
+        state.eatingTicks = player.eatingTicks;
         state.mining = serverPlayer.mining;
         state.miningX = serverPlayer.miningX;
         state.miningY = serverPlayer.miningY;
@@ -1485,12 +1679,34 @@ private:
     void broadcastBlockChange(int x, int y, int z, BlockId oldBlock,
         BlockId newBlock, uint actorPlayerId, DimensionId dimension)
     {
+        if(oldBlock==BlockId.furnace&&newBlock!=BlockId.furnace)
+        {
+            const key=to!string(cast(int)dimension)~","~to!string(x)~","
+                ~to!string(y)~","~to!string(z);
+            if(auto stored=key in furnaces)
+            {
+                foreach(stack;stored.work[0..3])
+                    if(!stack.empty())spawnDrop(stack.item,stack.count,
+                        Vec3(x+.5f,y+.5f,z+.5f),Vec3(0,2,0),10,dimension);
+                furnaces.remove(key);
+            }
+        }
         PacketWriter writer;
         writer.putI32(x); writer.putI32(y); writer.putI32(z);
         writer.putU8(cast(ubyte) oldBlock); writer.putU8(cast(ubyte) newBlock);
         writer.putU32(actorPlayerId);
-        broadcastToDimension(framePacket(GamePacketType.blockChange,
-            writer.data), dimension);
+        const packet=framePacket(GamePacketType.blockChange,writer.data);
+        const coordinate=ChunkCoordinate(chunkCoordinate(x),chunkCoordinate(z));
+        synchronized(peersMutex)
+        foreach(peer;peers)
+        {
+            if(!peer.loggedIn||peer.socket is null
+                ||coordinate !in peer.sentChunks)continue;
+            auto viewer=peer.playerId in players;
+            if(viewer is null||(*viewer).dimension!=dimension)continue;
+            try peer.send(packet);
+            catch(SocketOSException) {}
+        }
     }
 
     void broadcastPortal(PortalRectangle rectangle, uint actorPlayerId,
@@ -1525,6 +1741,7 @@ private:
             return;
         }
 
+        if(executeGameplayCommand(senderPeer,sender,message))return;
         const command = parseHostCommand(message);
         if (command.kind == HostCommandKind.invalid)
         {
@@ -1581,6 +1798,142 @@ private:
             ~ (command.universal ? " from all of your worlds" : " from this world")
             ~ (expiresAt == 0 ? " permanently" : " for "
                 ~ to!string(command.durationSeconds) ~ " seconds"));
+    }
+
+bool executeGameplayCommand(ServerPeer peer,ServerPlayer sender,string message)
+    {
+        import std.string:split,startsWith;
+        import std.math:isFinite;
+        import minecraftd.game.item.inventory:findItem,itemName;
+        const args=message.split();
+        if(!args.length)return false;
+        const command=args[0];
+        if(command!="/give"&&command!="/kill"&&command!="/clear"&&command!="/tp"
+            &&command!="/teleport"&&command!="/gamemode"&&command!="/xp"&&command!="/help")return false;
+        void reply(string s){sendSystemMessage(peer,s);}
+        ServerPlayer[] targets(string name)
+        {
+            if(name=="@s")return [sender];
+            ServerPlayer[] result;
+            foreach(p;players)if(name=="@a"||p.name==name||p.accountId==name)result~=p;
+            return result;
+        }
+        try
+        {
+            if(command=="/help")
+            {reply("/give <player> <item> [count], /kill [player], /clear [player] [item], /tp [player] <x y z|player>, /gamemode <mode> [player], /xp <levels> [player]");return true;}
+            if(command=="/give")
+            {
+                if(args.length<3||args.length>4){reply("Usage: /give <player> <item> [count]");return true;}
+                const item=findItem(args[2]);
+                const count=args.length==4?to!int(args[3]):1;
+                if(item==ItemId.none||count<1||count>2304){reply("Unknown item or count outside 1..2304");return true;}
+                auto selected=targets(args[1]);
+                if(!selected.length){reply("No matching players");return true;}
+                foreach(p;selected)
+                {
+                    int left=count;
+                    while(left>0)
+                    {
+                        const amount=cast(ubyte)(left>64?64:left);
+                        const remaining=p.player.inventory.add(item,amount);
+                        if(remaining)spawnDrop(item,remaining,p.player.position,Vec3(0,2,0),10,p.dimension);
+                        left-=amount;
+                    }
+                }
+                reply("Gave "~to!string(count)~" "~itemName(item));return true;
+            }
+            if(command=="/kill"||command=="/clear")
+            {
+                if(args.length>(command=="/kill"?2:3)){reply("Too many arguments");return true;}
+                auto selected=targets(args.length>1?args[1]:"@s");
+                if(!selected.length){reply("No matching players");return true;}
+                const filter=args.length>2?findItem(args[2]):ItemId.none;
+                if(args.length>2&&filter==ItemId.none){reply("Unknown item");return true;}
+                foreach(p;selected)
+                {
+                    if(command=="/kill")
+                    {
+                        p.player.health=0;handleDeath(p,DamageCause.generic,"");
+                    }
+                    else
+                    {
+                        foreach(i;0..Inventory.slotCount)
+                            if(filter==ItemId.none||p.player.inventory.slot(i).item==filter)
+                                p.player.inventory.setSlot(i,ItemStack.init);
+                        if(filter==ItemId.none||p.player.inventory.carried.item==filter)
+                            p.player.inventory.carried=ItemStack.init;
+                    }
+                }
+                reply(command=="/kill"?"Killed selected players":"Cleared inventory");return true;
+            }
+            if(command=="/gamemode"||command=="/xp")
+            {
+                if(args.length<2||args.length>3){reply("Usage: "~command~" <value> [player]");return true;}
+                auto selected=targets(args.length>2?args[2]:"@s");
+                if(!selected.length){reply("No matching players");return true;}
+                if(command=="/xp")
+                {
+                    const levels=to!int(args[1]);if(levels<0||levels>100){reply("Levels must be 0..100");return true;}
+                    foreach(p;selected)foreach(i;0..levels)p.player.giveExperience(p.player.experienceNeededForNextLevel());
+                }
+                else
+                {
+                    GameMode mode;
+                    switch(args[1])
+                    {
+                        case "survival", "0":mode=GameMode.survival;break;
+                        case "creative", "1":mode=GameMode.creative;break;
+                        case "adventure", "2":mode=GameMode.adventure;break;
+                        case "spectator", "3":mode=GameMode.spectator;break;
+                        default:reply("Unknown game mode");return true;
+                    }
+                    foreach(p;selected){closeInventory(p);p.player.gameMode=mode;p.player.flying=mode==GameMode.spectator;}
+                }
+                reply("Updated selected players");return true;
+            }
+            if(command=="/tp"||command=="/teleport")
+            {
+                ServerPlayer[] selected;size_t start;
+                if(args.length==2||args.length==4){selected=[sender];start=1;}
+                else if(args.length==3||args.length==5){selected=targets(args[1]);start=2;}
+                else{reply("Usage: /tp [player] <x y z|destination player>");return true;}
+                if(!selected.length){reply("No matching players");return true;}
+                Vec3 destination;
+                if(args.length-start==1)
+                {
+                    auto dest=targets(args[start]);
+                    if(dest.length!=1){reply("Destination must be one player");return true;}
+                    if(dest[0].dimension!=sender.dimension){reply("Destination must be in this dimension");return true;}
+                    destination=dest[0].player.position;
+                }
+                else
+                {
+                    float coordinate(string value,float relative)
+                    {
+                        const offset=value.startsWith("~");
+                        if(offset)value=value[1..$];
+                        const number=value.length?to!float(value):0;
+                        if(!isFinite(number))throw new Exception("Non-finite coordinate");
+                        const result=number+(offset?relative:0);
+                        if(!isFinite(result)||result< -30_000_000||result>30_000_000)
+                            throw new Exception("Coordinate outside world bounds");
+                        return result;
+                    }
+                    destination=Vec3(coordinate(args[start],sender.player.position.x),
+                        coordinate(args[start+1],sender.player.position.y),coordinate(args[start+2],sender.player.position.z));
+                    if(!worldFor(sender.dimension).inBounds(cast(int)destination.x,cast(int)destination.y,cast(int)destination.z))
+                    {reply("Destination is outside world bounds");return true;}
+                }
+                foreach(p;selected)if(p.dimension!=sender.dimension)
+                {reply("Selected players must be in your dimension");return true;}
+                foreach(p;selected){closeInventory(p);p.player.position=p.player.previousPosition=destination;
+                    p.player.velocity=Vec3.init;p.player.fallDistance=0;}
+                reply("Teleported selected players");return true;
+            }
+        }
+        catch(Exception){reply("Invalid command arguments");}
+        return true;
     }
 
     void sendSystemMessage(ServerPeer peer, string message)
@@ -1903,6 +2256,7 @@ private:
         string departedName;
         if (peer.playerId in players)
         {
+            closeInventory(players[peer.playerId]);
             departedName = players[peer.playerId].name;
             destroy(players[peer.playerId]);
             players.remove(peer.playerId);
@@ -2046,4 +2400,62 @@ unittest
         == "Steve fell from a high place");
     assert(fallDeathMessage("Steve",5.0f)
         == "Steve hit the ground too hard");
+}
+
+unittest
+{
+    auto world=new World();
+    auto server=new IntegratedGameServer(world);
+    scope(exit)destroy(server);
+    auto first=new ServerPlayer(1,"Tester",Vec3(20,20,20),GameMode.survival,false);
+    auto second=new ServerPlayer(2,"Visitor",Vec3(20,20,20),GameMode.survival,false);
+    server.players[1]=first;server.players[2]=second;
+    world.setBlock(20,20,21,BlockId.furnace);
+    server.openStation(first,2,20,20,21);
+    first.player.inventory.carried=ItemStack(ItemId.beef,2);
+    server.stationAction(first,PlayerActionType.stationClick,36,0);
+    first.player.inventory.carried=ItemStack(ItemId.coal,1);
+    server.stationAction(first,PlayerActionType.stationClick,37,0);
+    server.openStation(second,2,20,20,21);
+    foreach(i;0..200)server.tickWorkstations();
+    assert(first.player.inventory.work[2].item==ItemId.cookedBeef);
+    server.stationAction(first,PlayerActionType.stationClick,38,0);
+    assert(first.player.inventory.carried.item==ItemId.cookedBeef);
+    server.closeInventory(second);
+    server.openStation(second,2,20,20,21);
+    assert(second.player.inventory.work[2].empty()); // stale viewer cannot duplicate output
+    world.setBlock(20,20,21,BlockId.air);
+    server.broadcastBlockChange(20,20,21,BlockId.furnace,BlockId.air,1,DimensionId.overworld);
+    server.tickWorkstations();
+    assert(!server.furnaces.length&&!first.player.inventory.station&&!second.player.inventory.station);
+    assert(server.droppedItems.length==1&&server.droppedItems[0].item==ItemId.beef);
+
+    world.setBlock(20,20,21,BlockId.craftingTable);
+    server.openStation(first,1,20,20,21);
+    foreach(i;[0,1,3,4])first.player.inventory.work[i]=ItemStack(ItemId.birchPlanks,1);
+    server.stationAction(first,PlayerActionType.stationClick,45,0);
+    assert(first.player.inventory.carried.item==ItemId.craftingTable);
+    server.stationAction(first,PlayerActionType.stationClick,45,0);
+    assert(first.player.inventory.carried.count==1);
+    server.closeInventory(first);
+
+    world.setBlock(20,20,21,BlockId.enchantingTable);
+    server.openStation(first,3,20,20,21);
+    first.player.inventory.work[0]=ItemStack(ItemId.ironPickaxe,1);
+    first.player.inventory.work[1]=ItemStack(ItemId.lapisLazuli,3);
+    first.player.experienceLevel=15;
+    server.stationAction(first,PlayerActionType.enchantItem,1,0);
+    assert(first.player.inventory.work[0].enchantment==1&&first.player.inventory.work[0].enchantmentLevel==2);
+    assert(first.player.experienceLevel==13&&first.player.inventory.work[1].count==1);
+    server.closeInventory(first);
+
+    first.player.selectedSlot=0;
+    first.player.inventory.hotbar[0]=ItemStack(ItemId.cookedBeef,2);
+    first.player.foodLevel=1;first.input.useHeld=true;
+    foreach(i;0..31)server.tickEating(first);
+    assert(first.player.inventory.hotbar[0].count==2);
+    server.tickEating(first);
+    assert(first.player.inventory.hotbar[0].count==1&&first.player.foodLevel==9);
+    first.input.useHeld=false;server.tickEating(first);
+    assert(!first.player.eatingTicks);
 }

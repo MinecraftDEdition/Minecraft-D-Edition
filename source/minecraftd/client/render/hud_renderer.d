@@ -8,7 +8,7 @@ import minecraftd.client.render.font_renderer : FontRenderer;
 import minecraftd.client.render.mesh : Color, DrawLayer, FrameMesh, Vertex, appendQuad;
 import minecraftd.common.math3d : Mat4, Vec2, Vec3;
 import minecraftd.game.entity.player : Player;
-import minecraftd.game.item.inventory : ItemId, ItemStack, itemName, placedBlock;
+import minecraftd.game.item.inventory : ItemId, ItemStack, itemName, placedBlock, durability;
 
 struct HudTextureSet
 {
@@ -66,6 +66,21 @@ final class HudRenderer
         const stretch=1.0f+pop/5.0f;
         appendBlockItem(frame,stack.item,x,y,logicalWidth,logicalHeight,
             1.0f/stretch,(stretch+1.0f)*0.5f,blockTextures);
+        if(stack.damage&&durability(stack.item))
+        {
+            void bar(int width,int height,Color color)
+            {
+                Vertex[] vertices;
+                const l=(x+2.0f)/logicalWidth*2-1,r=(x+2.0f+width)/logicalWidth*2-1;
+                const t=1-(y+13.0f)/logicalHeight*2,b=1-(y+13.0f+height)/logicalHeight*2;
+                appendQuad(vertices,Vec3(l,b,0),Vec3(r,b,0),Vec3(r,t,0),Vec3(l,t,0),
+                    Vec2(0,1),Vec2(1,1),Vec2(1,0),Vec2(0,0),color,color,color,color);
+                frame.append(vertices,blockTextures.white,Mat4.identity(),DrawLayer.overlay);
+            }
+            const remaining=1.0f-cast(float)stack.damage/durability(stack.item);
+            bar(13,2,Color(0,0,0,1));
+            bar(cast(int)(13*remaining+.5f),1,Color(1-remaining,remaining,0,1));
+        }
         if(stack.count>1)
         {
             const countText=to!string(stack.count);
@@ -278,6 +293,19 @@ private:
         float logicalWidth, float logicalHeight, float scaleX, float scaleY,
         const BlockTextureSet textures)
     {
+        if(auto sprite=cast(ubyte)item in textures.itemSprites)
+        {
+            Vertex[] output;
+            const l=(x+8-8*scaleX)/logicalWidth*2-1;
+            const r=(x+8+8*scaleX)/logicalWidth*2-1;
+            const t=1-(y+8-8*scaleY)/logicalHeight*2;
+            const b=1-(y+8+8*scaleY)/logicalHeight*2;
+            const white=Color(1,1,1,1);
+            appendQuad(output,Vec3(l,b,0),Vec3(r,b,0),Vec3(r,t,0),Vec3(l,t,0),
+                Vec2(0,1),Vec2(1,1),Vec2(1,0),Vec2(0,0),white,white,white,white);
+            frame.append(output,*sprite,Mat4.identity(),DrawLayer.overlay);
+            return;
+        }
         uint top;
         uint side;
         switch (item)

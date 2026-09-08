@@ -29,8 +29,55 @@ final class ChatState
     private size_t draftCursor;
     private size_t draftSelectionAnchor;
 
+string[] suggestions;
+    int suggestionIndex;
+    string[] playerNames;
+    private string suggestionInput;
+    private size_t completionStart;
+    void refreshSuggestions()
+    {
+        import std.string:split,startsWith;
+        import minecraftd.game.item.inventory:creativeCatalog,itemIdentifier;
+        const prefix=input[0..cursor];
+        if(prefix==suggestionInput)return;
+        suggestionInput=prefix;suggestions=null;suggestionIndex=0;
+        if(!prefix.startsWith("/"))return;
+        completionStart=cursor;
+        while(completionStart>0&&input[completionStart-1]!=' ')--completionStart;
+        const token=input[completionStart..cursor];
+        const parts=prefix.split();
+        const index=parts.length-(token.length?1:0);
+        string[] candidates;
+        if(index==0)candidates=["/give","/kill","/clear","/tp","/teleport","/gamemode","/xp","/help","/ban","/kick","/unban"];
+        else if(parts.length&&((parts[0]=="/give"&&index==2)||(parts[0]=="/clear"&&index==2)))
+        {foreach(item;creativeCatalog)candidates~=itemIdentifier(item);}
+        else if(parts.length&&parts[0]=="/gamemode"&&index==1)
+            candidates=["survival","creative","adventure","spectator"];
+        else if(index==1||(parts.length&&parts[0]=="/gamemode"&&index==2))
+            candidates=["@s","@a"]~playerNames;
+        foreach(candidate;candidates)
+            if(candidate.startsWith(token)&&candidate!=token)suggestions~=candidate;
+    }
+    void cycleSuggestion(int direction)
+    {
+        refreshSuggestions();
+        if(!suggestions.length)return;
+        suggestionIndex=(suggestionIndex+direction+cast(int)suggestions.length)%cast(int)suggestions.length;
+    }
+    bool acceptSuggestion()
+    {
+        refreshSuggestions();
+        if(!suggestions.length)return false;
+        const value=suggestions[suggestionIndex];
+        input=input[0..completionStart]~value~" "~input[cursor..$];
+        cursor=selectionAnchor=completionStart+value.length+1;
+        suggestions=null;suggestionInput="";
+        return true;
+    }
+
     void open()
     {
+        suggestionInput="";suggestions=null;
         active = true;
         input = draft;
         cursor = draftCursor <= input.length ? draftCursor : input.length;
@@ -41,6 +88,7 @@ final class ChatState
 
     void close(bool saveDraft = false)
     {
+        suggestionInput="";suggestions=null;
         active = false;
         if (saveDraft)
         {
