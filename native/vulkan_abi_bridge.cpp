@@ -457,76 +457,76 @@ struct Context {
     void createBlurCapture() {
         if (textures.empty()) {
             for (uint32_t i = 0; i < 3; ++i) {
-            Texture texture;
-            VkDescriptorSetAllocateInfo setInfo{
-                VK_STRUCTURE_TYPE_DESCRIPTOR_SET_ALLOCATE_INFO};
-            setInfo.descriptorPool = descriptorPool;
-            setInfo.descriptorSetCount = 1;
-            setInfo.pSetLayouts = &descriptorLayout;
-            require(vkAllocateDescriptorSets(device, &setInfo, &texture.set),
-                "vkAllocateDescriptorSets(blur)");
-            textures.push_back(texture);
+                Texture texture;
+                VkDescriptorSetAllocateInfo setInfo{
+                    VK_STRUCTURE_TYPE_DESCRIPTOR_SET_ALLOCATE_INFO};
+                setInfo.descriptorPool = descriptorPool;
+                setInfo.descriptorSetCount = 1;
+                setInfo.pSetLayouts = &descriptorLayout;
+                require(vkAllocateDescriptorSets(device, &setInfo, &texture.set),
+                    "vkAllocateDescriptorSets(blur)");
+                textures.push_back(texture);
             }
         }
         blurExtent = {std::max(1u, extent.width / 2), std::max(1u, extent.height / 2)};
         for (uint32_t index = 0; index < 3; ++index) {
-        Texture& texture = textures[index];
-        VkImageCreateInfo image{VK_STRUCTURE_TYPE_IMAGE_CREATE_INFO};
-        image.imageType = VK_IMAGE_TYPE_2D;
-        image.format = colorFormat;
-        image.extent = index == 0 ? VkExtent3D{extent.width, extent.height, 1}
-            : VkExtent3D{blurExtent.width, blurExtent.height, 1};
-        image.mipLevels = 1;
-        image.arrayLayers = 1;
-        image.samples = VK_SAMPLE_COUNT_1_BIT;
-        image.tiling = VK_IMAGE_TILING_OPTIMAL;
-        image.usage = VK_IMAGE_USAGE_SAMPLED_BIT | (index == 0
-            ? VK_IMAGE_USAGE_TRANSFER_DST_BIT : VK_IMAGE_USAGE_COLOR_ATTACHMENT_BIT);
+            Texture& texture = textures[index];
+            VkImageCreateInfo image{VK_STRUCTURE_TYPE_IMAGE_CREATE_INFO};
+            image.imageType = VK_IMAGE_TYPE_2D;
+            image.format = colorFormat;
+            image.extent = index == 0 ? VkExtent3D{extent.width, extent.height, 1}
+                : VkExtent3D{blurExtent.width, blurExtent.height, 1};
+            image.mipLevels = 1;
+            image.arrayLayers = 1;
+            image.samples = VK_SAMPLE_COUNT_1_BIT;
+            image.tiling = VK_IMAGE_TILING_OPTIMAL;
+            image.usage = VK_IMAGE_USAGE_SAMPLED_BIT | (index == 0
+                ? VK_IMAGE_USAGE_TRANSFER_DST_BIT : VK_IMAGE_USAGE_COLOR_ATTACHMENT_BIT);
 #ifdef MCD_BLUR_SMOKE
-        image.usage |= VK_IMAGE_USAGE_TRANSFER_SRC_BIT;
+            image.usage |= VK_IMAGE_USAGE_TRANSFER_SRC_BIT;
 #endif
-        image.sharingMode = VK_SHARING_MODE_EXCLUSIVE;
-        require(vkCreateImage(device, &image, nullptr, &texture.image),
-            "vkCreateImage(blur)");
-        VkMemoryRequirements requirements{};
-        vkGetImageMemoryRequirements(device, texture.image, &requirements);
-        VkMemoryAllocateInfo allocation{VK_STRUCTURE_TYPE_MEMORY_ALLOCATE_INFO};
-        allocation.allocationSize = requirements.size;
-        allocation.memoryTypeIndex = memoryType(requirements.memoryTypeBits,
-            VK_MEMORY_PROPERTY_DEVICE_LOCAL_BIT);
-        require(vkAllocateMemory(device, &allocation, nullptr, &texture.memory),
-            "vkAllocateMemory(blur)");
-        require(vkBindImageMemory(device, texture.image, texture.memory, 0),
-            "vkBindImageMemory(blur)");
-        VkImageViewCreateInfo view{VK_STRUCTURE_TYPE_IMAGE_VIEW_CREATE_INFO};
-        view.image = texture.image;
-        view.viewType = VK_IMAGE_VIEW_TYPE_2D;
-        view.format = colorFormat;
-        view.subresourceRange.aspectMask = VK_IMAGE_ASPECT_COLOR_BIT;
-        view.subresourceRange.levelCount = 1;
-        view.subresourceRange.layerCount = 1;
-        require(vkCreateImageView(device, &view, nullptr, &texture.view),
-            "vkCreateImageView(blur)");
-        VkDescriptorImageInfo imageInfo{};
-        imageInfo.imageView = texture.view;
-        imageInfo.imageLayout = VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL;
-        VkDescriptorImageInfo samplerInfo{};
-        samplerInfo.sampler = blurSampler;
-        std::array<VkWriteDescriptorSet, 2> writes{};
-        writes[0] = {VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET};
-        writes[0].dstSet = texture.set;
-        writes[0].dstBinding = 0;
-        writes[0].descriptorCount = 1;
-        writes[0].descriptorType = VK_DESCRIPTOR_TYPE_SAMPLED_IMAGE;
-        writes[0].pImageInfo = &imageInfo;
-        writes[1] = {VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET};
-        writes[1].dstSet = texture.set;
-        writes[1].dstBinding = 1;
-        writes[1].descriptorCount = 1;
-        writes[1].descriptorType = VK_DESCRIPTOR_TYPE_SAMPLER;
-        writes[1].pImageInfo = &samplerInfo;
-        vkUpdateDescriptorSets(device, static_cast<uint32_t>(writes.size()),
-            writes.data(), 0, nullptr);
+            image.sharingMode = VK_SHARING_MODE_EXCLUSIVE;
+            require(vkCreateImage(device, &image, nullptr, &texture.image),
+                "vkCreateImage(blur)");
+            VkMemoryRequirements requirements{};
+            vkGetImageMemoryRequirements(device, texture.image, &requirements);
+            VkMemoryAllocateInfo allocation{VK_STRUCTURE_TYPE_MEMORY_ALLOCATE_INFO};
+            allocation.allocationSize = requirements.size;
+            allocation.memoryTypeIndex = memoryType(requirements.memoryTypeBits,
+                VK_MEMORY_PROPERTY_DEVICE_LOCAL_BIT);
+            require(vkAllocateMemory(device, &allocation, nullptr, &texture.memory),
+                "vkAllocateMemory(blur)");
+            require(vkBindImageMemory(device, texture.image, texture.memory, 0),
+                "vkBindImageMemory(blur)");
+            VkImageViewCreateInfo view{VK_STRUCTURE_TYPE_IMAGE_VIEW_CREATE_INFO};
+            view.image = texture.image;
+            view.viewType = VK_IMAGE_VIEW_TYPE_2D;
+            view.format = colorFormat;
+            view.subresourceRange.aspectMask = VK_IMAGE_ASPECT_COLOR_BIT;
+            view.subresourceRange.levelCount = 1;
+            view.subresourceRange.layerCount = 1;
+            require(vkCreateImageView(device, &view, nullptr, &texture.view),
+                "vkCreateImageView(blur)");
+            VkDescriptorImageInfo imageInfo{};
+            imageInfo.imageView = texture.view;
+            imageInfo.imageLayout = VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL;
+            VkDescriptorImageInfo samplerInfo{};
+            samplerInfo.sampler = blurSampler;
+            std::array<VkWriteDescriptorSet, 2> writes{};
+            writes[0] = {VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET};
+            writes[0].dstSet = texture.set;
+            writes[0].dstBinding = 0;
+            writes[0].descriptorCount = 1;
+            writes[0].descriptorType = VK_DESCRIPTOR_TYPE_SAMPLED_IMAGE;
+            writes[0].pImageInfo = &imageInfo;
+            writes[1] = {VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET};
+            writes[1].dstSet = texture.set;
+            writes[1].dstBinding = 1;
+            writes[1].descriptorCount = 1;
+            writes[1].descriptorType = VK_DESCRIPTOR_TYPE_SAMPLER;
+            writes[1].pImageInfo = &samplerInfo;
+            vkUpdateDescriptorSets(device, static_cast<uint32_t>(writes.size()),
+                writes.data(), 0, nullptr);
         }
         VkAttachmentDescription attachment{};
         attachment.format = colorFormat;
@@ -676,14 +676,14 @@ struct Context {
         if (blurRenderPass) vkDestroyRenderPass(device, blurRenderPass, nullptr);
         blurRenderPass = VK_NULL_HANDLE;
         if (!textures.empty()) {
-            for (uint32_t i = 0; i < 3; ++i) {
-            Texture& blur = textures[i];
-            if (blur.view) vkDestroyImageView(device, blur.view, nullptr);
-            if (blur.image) vkDestroyImage(device, blur.image, nullptr);
-            if (blur.memory) vkFreeMemory(device, blur.memory, nullptr);
-            blur.view = VK_NULL_HANDLE;
-            blur.image = VK_NULL_HANDLE;
-            blur.memory = VK_NULL_HANDLE;
+            for (uint32_t i = 0; i < 3 && i < textures.size(); ++i) {
+                Texture& blur = textures[i];
+                if (blur.view) vkDestroyImageView(device, blur.view, nullptr);
+                if (blur.image) vkDestroyImage(device, blur.image, nullptr);
+                if (blur.memory) vkFreeMemory(device, blur.memory, nullptr);
+                blur.view = VK_NULL_HANDLE;
+                blur.image = VK_NULL_HANDLE;
+                blur.memory = VK_NULL_HANDLE;
             }
             blurInitialized = false;
         }

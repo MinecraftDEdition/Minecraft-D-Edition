@@ -16,7 +16,9 @@ Manual checks still needed on Windows and macOS:
 3. Inspect swords/tools in first person, third person, dropped form, and inventory. Check both broad faces and thin edges with both renderers.
 4. Pause while music is playing, keep the menu open past the track's end, and verify the next track starts according to the configured music frequency. Repeat in singleplayer and multiplayer.
 
-## Pause blur assessment only — no implementation changes
+## Original pause blur assessment
+
+The assessment below describes the old implementation. Its replacement and validation are documented in [PAUSE_BLUR.md](PAUSE_BLUR.md).
 
 `PSBlur` in `shaders/world.hlsl` takes nine samples arranged in a cross. Both DirectX and Vulkan use nearest-neighbor sampling with wrapping. The strength setting increases the spacing of these same samples; it does not add coverage. This preserves hard pixel boundaries and produces separated image copies instead of a smooth broad blur. At the default setting the furthest sample is approximately nine screen pixels away; at maximum it is about sixteen.
 
