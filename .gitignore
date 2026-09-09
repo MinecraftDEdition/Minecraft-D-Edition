@@ -1,6 +1,7 @@
 .dub/
 build/
 dist/
+test-output/
 __pycache__/
 *.pyc
 *.exe

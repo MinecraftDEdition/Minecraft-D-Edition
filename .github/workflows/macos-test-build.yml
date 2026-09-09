@@ -32,6 +32,15 @@ jobs:
       - name: Prepare macOS dependencies
         run: bash distribution/macos/prepare_dependencies.sh
 
+      - name: Verify pause blur through MoltenVK
+        run: |
+          deps="$GITHUB_WORKSPACE/distribution/macos/build/deps"
+          clang++ -std=c++17 -O2 -I"$deps/include" -F"$deps" \
+            tests/blur_macos_smoke.cpp -o "$RUNNER_TEMP/blur-macos-smoke" \
+            -L"$deps/lib" -lMoltenVK -framework SDL3 \
+            -Wl,-rpath,"$deps/lib" -Wl,-rpath,"$deps"
+          "$RUNNER_TEMP/blur-macos-smoke"
+
       - name: Prepare licensed EOS SDK
         env:
           GH_TOKEN: ${{ github.token }}

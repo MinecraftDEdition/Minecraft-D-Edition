@@ -139,13 +139,18 @@ struct Context {
     VkDescriptorSetLayout descriptorLayout = VK_NULL_HANDLE;
     VkDescriptorPool descriptorPool = VK_NULL_HANDLE;
     VkSampler sampler = VK_NULL_HANDLE;
+    VkSampler blurSampler = VK_NULL_HANDLE;
+    VkRenderPass blurRenderPass = VK_NULL_HANDLE;
+    VkPipeline blurOffscreenPipeline = VK_NULL_HANDLE;
+    std::array<VkFramebuffer, 2> blurFramebuffers{};
+    VkExtent2D blurExtent{};
     VkPipelineLayout pipelineLayout = VK_NULL_HANDLE;
     std::array<VkPipeline, 7> pipelines{};
 
     VkCommandPool commandPool = VK_NULL_HANDLE;
     VkCommandBuffer command = VK_NULL_HANDLE;
     VkSemaphore imageAvailable = VK_NULL_HANDLE;
-    VkSemaphore renderingFinished = VK_NULL_HANDLE;
+    std::vector<VkSemaphore> renderingFinished;
     VkFence frameFence = VK_NULL_HANDLE;
 
     VkBuffer vertexBuffer = VK_NULL_HANDLE;
@@ -155,7 +160,7 @@ struct Context {
     std::vector<StaticMesh> retiredStaticMeshes;
     uint64_t nextStaticMeshId = 1;
     std::vector<Texture> textures;
-    uint32_t blurTexture = 0;
+    uint32_t blurTexture = 1;
     bool blurInitialized = false;
 
     std::vector<uint32_t> vertexShader;
@@ -236,15 +241,32 @@ struct Context {
             destinationStage = VK_PIPELINE_STAGE_TRANSFER_BIT;
         } else if (before == VK_IMAGE_LAYOUT_PRESENT_SRC_KHR
             && after == VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL) {
+            barrier.srcAccessMask = VK_ACCESS_COLOR_ATTACHMENT_WRITE_BIT;
             barrier.dstAccessMask = VK_ACCESS_TRANSFER_READ_BIT;
             sourceStage = VK_PIPELINE_STAGE_COLOR_ATTACHMENT_OUTPUT_BIT;
             destinationStage = VK_PIPELINE_STAGE_TRANSFER_BIT;
         } else if (before == VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL
             && after == VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL) {
             barrier.srcAccessMask = VK_ACCESS_TRANSFER_READ_BIT;
-            barrier.dstAccessMask = VK_ACCESS_COLOR_ATTACHMENT_WRITE_BIT;
+            barrier.dstAccessMask = VK_ACCESS_COLOR_ATTACHMENT_READ_BIT
+                | VK_ACCESS_COLOR_ATTACHMENT_WRITE_BIT;
             sourceStage = VK_PIPELINE_STAGE_TRANSFER_BIT;
             destinationStage = VK_PIPELINE_STAGE_COLOR_ATTACHMENT_OUTPUT_BIT;
+        } else if (after == VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL
+            && (before == VK_IMAGE_LAYOUT_UNDEFINED
+                || before == VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL)) {
+            if (before == VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL) {
+                barrier.srcAccessMask = VK_ACCESS_SHADER_READ_BIT;
+                sourceStage = VK_PIPELINE_STAGE_FRAGMENT_SHADER_BIT;
+            }
+            barrier.dstAccessMask = VK_ACCESS_COLOR_ATTACHMENT_WRITE_BIT;
+            destinationStage = VK_PIPELINE_STAGE_COLOR_ATTACHMENT_OUTPUT_BIT;
+        } else if (before == VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL
+            && after == VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL) {
+            barrier.srcAccessMask = VK_ACCESS_COLOR_ATTACHMENT_WRITE_BIT;
+            barrier.dstAccessMask = VK_ACCESS_SHADER_READ_BIT;
+            sourceStage = VK_PIPELINE_STAGE_COLOR_ATTACHMENT_OUTPUT_BIT;
+            destinationStage = VK_PIPELINE_STAGE_FRAGMENT_SHADER_BIT;
         } else {
             throw std::runtime_error("Unsupported Vulkan image transition");
         }
@@ -254,6 +276,9 @@ struct Context {
 
     uint32_t uploadTexture(const uint8_t* rgba, uint32_t textureWidth,
         uint32_t textureHeight,uint32_t mipLevels) {
+        // Uploads share the frame command pool; it cannot be reset in flight.
+        require(vkWaitForFences(device, 1, &frameFence, VK_TRUE, UINT64_MAX),
+            "vkWaitForFences(texture upload)");
         if (!rgba || textureWidth == 0 || textureHeight == 0 || mipLevels == 0)
             throw std::runtime_error("Vulkan texture has no pixels");
         if (textures.size() >= MaxTextures)
@@ -431,6 +456,7 @@ struct Context {
 
     void createBlurCapture() {
         if (textures.empty()) {
+            for (uint32_t i = 0; i < 3; ++i) {
             Texture texture;
             VkDescriptorSetAllocateInfo setInfo{
                 VK_STRUCTURE_TYPE_DESCRIPTOR_SET_ALLOCATE_INFO};
@@ -440,18 +466,25 @@ struct Context {
             require(vkAllocateDescriptorSets(device, &setInfo, &texture.set),
                 "vkAllocateDescriptorSets(blur)");
             textures.push_back(texture);
-            blurTexture = 0;
+            }
         }
-        Texture& texture = textures[blurTexture];
+        blurExtent = {std::max(1u, extent.width / 2), std::max(1u, extent.height / 2)};
+        for (uint32_t index = 0; index < 3; ++index) {
+        Texture& texture = textures[index];
         VkImageCreateInfo image{VK_STRUCTURE_TYPE_IMAGE_CREATE_INFO};
         image.imageType = VK_IMAGE_TYPE_2D;
         image.format = colorFormat;
-        image.extent = {extent.width, extent.height, 1};
+        image.extent = index == 0 ? VkExtent3D{extent.width, extent.height, 1}
+            : VkExtent3D{blurExtent.width, blurExtent.height, 1};
         image.mipLevels = 1;
         image.arrayLayers = 1;
         image.samples = VK_SAMPLE_COUNT_1_BIT;
         image.tiling = VK_IMAGE_TILING_OPTIMAL;
-        image.usage = VK_IMAGE_USAGE_TRANSFER_DST_BIT | VK_IMAGE_USAGE_SAMPLED_BIT;
+        image.usage = VK_IMAGE_USAGE_SAMPLED_BIT | (index == 0
+            ? VK_IMAGE_USAGE_TRANSFER_DST_BIT : VK_IMAGE_USAGE_COLOR_ATTACHMENT_BIT);
+#ifdef MCD_BLUR_SMOKE
+        image.usage |= VK_IMAGE_USAGE_TRANSFER_SRC_BIT;
+#endif
         image.sharingMode = VK_SHARING_MODE_EXCLUSIVE;
         require(vkCreateImage(device, &image, nullptr, &texture.image),
             "vkCreateImage(blur)");
@@ -478,7 +511,7 @@ struct Context {
         imageInfo.imageView = texture.view;
         imageInfo.imageLayout = VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL;
         VkDescriptorImageInfo samplerInfo{};
-        samplerInfo.sampler = sampler;
+        samplerInfo.sampler = blurSampler;
         std::array<VkWriteDescriptorSet, 2> writes{};
         writes[0] = {VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET};
         writes[0].dstSet = texture.set;
@@ -494,6 +527,37 @@ struct Context {
         writes[1].pImageInfo = &samplerInfo;
         vkUpdateDescriptorSets(device, static_cast<uint32_t>(writes.size()),
             writes.data(), 0, nullptr);
+        }
+        VkAttachmentDescription attachment{};
+        attachment.format = colorFormat;
+        attachment.samples = VK_SAMPLE_COUNT_1_BIT;
+        attachment.loadOp = VK_ATTACHMENT_LOAD_OP_DONT_CARE;
+        attachment.storeOp = VK_ATTACHMENT_STORE_OP_STORE;
+        attachment.initialLayout = VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL;
+        attachment.finalLayout = VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL;
+        VkAttachmentReference reference{0, VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL};
+        VkSubpassDescription subpass{};
+        subpass.pipelineBindPoint = VK_PIPELINE_BIND_POINT_GRAPHICS;
+        subpass.colorAttachmentCount = 1;
+        subpass.pColorAttachments = &reference;
+        VkRenderPassCreateInfo pass{VK_STRUCTURE_TYPE_RENDER_PASS_CREATE_INFO};
+        pass.attachmentCount = 1;
+        pass.pAttachments = &attachment;
+        pass.subpassCount = 1;
+        pass.pSubpasses = &subpass;
+        require(vkCreateRenderPass(device, &pass, nullptr, &blurRenderPass),
+            "vkCreateRenderPass(blur)");
+        for (uint32_t i = 0; i < 2; ++i) {
+            VkFramebufferCreateInfo fb{VK_STRUCTURE_TYPE_FRAMEBUFFER_CREATE_INFO};
+            fb.renderPass = blurRenderPass;
+            fb.attachmentCount = 1;
+            fb.pAttachments = &textures[i + 1].view;
+            fb.width = blurExtent.width;
+            fb.height = blurExtent.height;
+            fb.layers = 1;
+            require(vkCreateFramebuffer(device, &fb, nullptr, &blurFramebuffers[i]),
+                "vkCreateFramebuffer(blur)");
+        }
         blurInitialized = false;
     }
 
@@ -508,7 +572,7 @@ struct Context {
     }
 
     VkPipeline createPipeline(bool depth, bool depthWrite, bool invertedBlend,
-        bool blur = false, bool cullBackFaces = false) {
+        bool blur = false, bool cullBackFaces = false, bool offscreen = false) {
         const VkShaderModule vertex = shaderModule(vertexShader);
         const VkShaderModule pixel = shaderModule(blur ? blurPixelShader : pixelShader);
         VkPipelineShaderStageCreateInfo stages[2]{};
@@ -557,7 +621,7 @@ struct Context {
         depthState.depthWriteEnable = depthWrite ? VK_TRUE : VK_FALSE;
         depthState.depthCompareOp = VK_COMPARE_OP_LESS_OR_EQUAL;
         VkPipelineColorBlendAttachmentState blend{};
-        blend.blendEnable = VK_TRUE;
+        blend.blendEnable = blur ? VK_FALSE : VK_TRUE;
         blend.srcColorBlendFactor = invertedBlend
             ? VK_BLEND_FACTOR_ONE_MINUS_DST_COLOR : VK_BLEND_FACTOR_SRC_ALPHA;
         blend.dstColorBlendFactor = invertedBlend
@@ -590,7 +654,7 @@ struct Context {
         info.pColorBlendState = &blendState;
         info.pDynamicState = &dynamic;
         info.layout = pipelineLayout;
-        info.renderPass = renderPass;
+        info.renderPass = offscreen ? blurRenderPass : renderPass;
         VkPipeline result = VK_NULL_HANDLE;
         const VkResult created = vkCreateGraphicsPipelines(device, VK_NULL_HANDLE,
             1, &info, nullptr, &result);
@@ -604,14 +668,23 @@ struct Context {
         for (auto pipeline : pipelines)
             if (pipeline) vkDestroyPipeline(device, pipeline, nullptr);
         pipelines.fill(VK_NULL_HANDLE);
+        if (blurOffscreenPipeline) vkDestroyPipeline(device, blurOffscreenPipeline, nullptr);
+        blurOffscreenPipeline = VK_NULL_HANDLE;
+        for (auto fb : blurFramebuffers)
+            if (fb) vkDestroyFramebuffer(device, fb, nullptr);
+        blurFramebuffers.fill(VK_NULL_HANDLE);
+        if (blurRenderPass) vkDestroyRenderPass(device, blurRenderPass, nullptr);
+        blurRenderPass = VK_NULL_HANDLE;
         if (!textures.empty()) {
-            Texture& blur = textures[blurTexture];
+            for (uint32_t i = 0; i < 3; ++i) {
+            Texture& blur = textures[i];
             if (blur.view) vkDestroyImageView(device, blur.view, nullptr);
             if (blur.image) vkDestroyImage(device, blur.image, nullptr);
             if (blur.memory) vkFreeMemory(device, blur.memory, nullptr);
             blur.view = VK_NULL_HANDLE;
             blur.image = VK_NULL_HANDLE;
             blur.memory = VK_NULL_HANDLE;
+            }
             blurInitialized = false;
         }
         for (auto framebuffer : framebuffers)
@@ -631,6 +704,9 @@ struct Context {
         for (auto view : swapViews) vkDestroyImageView(device, view, nullptr);
         swapViews.clear();
         swapImages.clear();
+        for (auto semaphore : renderingFinished)
+            if (semaphore) vkDestroySemaphore(device, semaphore, nullptr);
+        renderingFinished.clear();
         if (swapchain) vkDestroySwapchainKHR(device, swapchain, nullptr);
         swapchain = VK_NULL_HANDLE;
     }
@@ -705,6 +781,13 @@ struct Context {
         vkGetSwapchainImagesKHR(device, swapchain, &imageCount, nullptr);
         swapImages.resize(imageCount);
         vkGetSwapchainImagesKHR(device, swapchain, &imageCount, swapImages.data());
+        // Presentation can outlive the frame fence. Reuse its semaphore only
+        // after acquiring the corresponding swapchain image again.
+        renderingFinished.resize(imageCount, VK_NULL_HANDLE);
+        VkSemaphoreCreateInfo semaphore{VK_STRUCTURE_TYPE_SEMAPHORE_CREATE_INFO};
+        for (auto& finished : renderingFinished)
+            require(vkCreateSemaphore(device, &semaphore, nullptr, &finished),
+                "vkCreateSemaphore(present)");
         for (auto imageHandle : swapImages) {
             VkImageViewCreateInfo view{VK_STRUCTURE_TYPE_IMAGE_VIEW_CREATE_INFO};
             view.image = imageHandle;
@@ -743,10 +826,13 @@ struct Context {
         VkSubpassDependency dependency{};
         dependency.srcSubpass = VK_SUBPASS_EXTERNAL;
         dependency.dstSubpass = 0;
-        dependency.srcStageMask = VK_PIPELINE_STAGE_COLOR_ATTACHMENT_OUTPUT_BIT |
+        // Keep dependencies identical in the scene and resumed overlay passes
+        // so their framebuffers and graphics pipelines remain compatible.
+        dependency.srcStageMask = VK_PIPELINE_STAGE_ALL_COMMANDS_BIT;
+        dependency.srcAccessMask = VK_ACCESS_MEMORY_READ_BIT | VK_ACCESS_MEMORY_WRITE_BIT;
+        dependency.dstStageMask = VK_PIPELINE_STAGE_COLOR_ATTACHMENT_OUTPUT_BIT |
             VK_PIPELINE_STAGE_EARLY_FRAGMENT_TESTS_BIT;
-        dependency.dstStageMask = dependency.srcStageMask;
-        dependency.dstAccessMask = VK_ACCESS_COLOR_ATTACHMENT_WRITE_BIT |
+        dependency.dstAccessMask = VK_ACCESS_COLOR_ATTACHMENT_READ_BIT | VK_ACCESS_COLOR_ATTACHMENT_WRITE_BIT |
             VK_ACCESS_DEPTH_STENCIL_ATTACHMENT_WRITE_BIT;
         VkRenderPassCreateInfo render{VK_STRUCTURE_TYPE_RENDER_PASS_CREATE_INFO};
         render.attachmentCount = 2;
@@ -761,10 +847,6 @@ struct Context {
         attachments[0].initialLayout = VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL;
         attachments[1].loadOp = VK_ATTACHMENT_LOAD_OP_DONT_CARE;
         attachments[1].initialLayout = VK_IMAGE_LAYOUT_DEPTH_STENCIL_ATTACHMENT_OPTIMAL;
-        dependency.srcStageMask = VK_PIPELINE_STAGE_TRANSFER_BIT;
-        dependency.srcAccessMask = VK_ACCESS_TRANSFER_READ_BIT;
-        dependency.dstStageMask = VK_PIPELINE_STAGE_COLOR_ATTACHMENT_OUTPUT_BIT;
-        dependency.dstAccessMask = VK_ACCESS_COLOR_ATTACHMENT_WRITE_BIT;
         require(vkCreateRenderPass(device, &render, nullptr, &overlayRenderPass),
             "vkCreateRenderPass(overlay)");
 
@@ -819,6 +901,7 @@ struct Context {
         pipelines[2] = createPipeline(false, false, false);
         pipelines[3] = createPipeline(false, false, true);
         pipelines[4] = createPipeline(false, false, false, true);
+        blurOffscreenPipeline = createPipeline(false, false, false, true, false, true);
         pipelines[5] = createPipeline(true, false, false, false, true);
         pipelines[6] = createPipeline(true, true, false);
         swapchainDirty = false;
@@ -907,7 +990,7 @@ struct Context {
                 vkCmdEndRenderPass(command);
                 transition(swapImages[imageIndex], VK_IMAGE_LAYOUT_PRESENT_SRC_KHR,
                     VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL);
-                transition(textures[blurTexture].image,
+                transition(textures[0].image,
                     blurInitialized ? VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL
                         : VK_IMAGE_LAYOUT_UNDEFINED,
                     VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL);
@@ -919,15 +1002,59 @@ struct Context {
                 copy.extent = {extent.width, extent.height, 1};
                 vkCmdCopyImage(command, swapImages[imageIndex],
                     VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL,
-                    textures[blurTexture].image,
+                    textures[0].image,
                     VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL, 1, &copy);
-                transition(textures[blurTexture].image,
+                transition(textures[0].image,
                     VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL,
                     VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL);
                 transition(swapImages[imageIndex],
                     VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL,
                     VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL);
+                // Full scene -> half-size A -> horizontal B -> vertical A.
+                // The same SPIR-V and render passes are used by MoltenVK.
+                VkViewport blurViewport{0.0f, static_cast<float>(blurExtent.height),
+                    static_cast<float>(blurExtent.width), -static_cast<float>(blurExtent.height),
+                    0.0f, 1.0f};
+                VkRect2D blurScissor{{0, 0}, blurExtent};
+                vkCmdSetViewport(command, 0, 1, &blurViewport);
+                vkCmdSetScissor(command, 0, 1, &blurScissor);
+                for (uint32_t pass = 0; pass < 3; ++pass) {
+                    const uint32_t target = pass == 1 ? 2 : 1;
+                    const uint32_t source = pass == 0 ? 0 : (pass == 1 ? 1 : 2);
+                    transition(textures[target].image,
+                        blurInitialized || pass == 2
+                            ? VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL : VK_IMAGE_LAYOUT_UNDEFINED,
+                        VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL);
+                    VkRenderPassBeginInfo blurBegin{VK_STRUCTURE_TYPE_RENDER_PASS_BEGIN_INFO};
+                    blurBegin.renderPass = blurRenderPass;
+                    blurBegin.framebuffer = blurFramebuffers[target - 1];
+                    blurBegin.renderArea.extent = blurExtent;
+                    vkCmdBeginRenderPass(command, &blurBegin, VK_SUBPASS_CONTENTS_INLINE);
+                    vkCmdBindPipeline(command, VK_PIPELINE_BIND_POINT_GRAPHICS,
+                        blurOffscreenPipeline);
+                    vkCmdBindDescriptorSets(command, VK_PIPELINE_BIND_POINT_GRAPHICS,
+                        pipelineLayout, 0, 1, &textures[source].set, 0, nullptr);
+                    PushConstants blurPush{};
+                    std::memcpy(blurPush.transform, draw.transform, sizeof(blurPush.transform));
+                    if (pass != 0) {
+                        const float sourceSize = static_cast<float>(pass == 1
+                            ? blurExtent.width : blurExtent.height);
+                        const float screenSize = static_cast<float>(pass == 1
+                            ? extent.width : extent.height);
+                        blurPush.fog[7] = draw.fog[7] * sourceSize / screenSize;
+                        blurPush.fog[pass == 1 ? 8 : 9] = 1.0f / sourceSize;
+                    }
+                    vkCmdPushConstants(command, pipelineLayout,
+                        VK_SHADER_STAGE_VERTEX_BIT | VK_SHADER_STAGE_FRAGMENT_BIT,
+                        0, sizeof(blurPush), &blurPush);
+                    vkCmdDraw(command, draw.vertexCount, 1, draw.firstVertex, 0);
+                    vkCmdEndRenderPass(command);
+                    transition(textures[target].image, VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL,
+                        VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL);
+                }
                 blurInitialized = true;
+                vkCmdSetViewport(command, 0, 1, &viewport);
+                vkCmdSetScissor(command, 0, 1, &scissor);
                 VkRenderPassBeginInfo overlayBegin{
                     VK_STRUCTURE_TYPE_RENDER_PASS_BEGIN_INFO};
                 overlayBegin.renderPass = overlayRenderPass;
@@ -958,6 +1085,7 @@ struct Context {
             PushConstants push{};
             std::memcpy(push.transform, draw.transform, sizeof(push.transform));
             std::memcpy(push.fog, draw.fog, sizeof(push.fog));
+            if (draw.layer == 5) std::memset(push.fog, 0, sizeof(push.fog));
             vkCmdPushConstants(command, pipelineLayout,
                 VK_SHADER_STAGE_VERTEX_BIT | VK_SHADER_STAGE_FRAGMENT_BIT,
                 0, sizeof(push), &push);
@@ -974,12 +1102,12 @@ struct Context {
         submit.commandBufferCount = 1;
         submit.pCommandBuffers = &command;
         submit.signalSemaphoreCount = 1;
-        submit.pSignalSemaphores = &renderingFinished;
+        submit.pSignalSemaphores = &renderingFinished[imageIndex];
         require(vkQueueSubmit(queue, 1, &submit, frameFence),
             "vkQueueSubmit(frame)");
         VkPresentInfoKHR present{VK_STRUCTURE_TYPE_PRESENT_INFO_KHR};
         present.waitSemaphoreCount = 1;
-        present.pWaitSemaphores = &renderingFinished;
+        present.pWaitSemaphores = &renderingFinished[imageIndex];
         present.swapchainCount = 1;
         present.pSwapchains = &swapchain;
         present.pImageIndices = &imageIndex;
@@ -1147,8 +1275,6 @@ struct Context {
         VkSemaphoreCreateInfo semaphore{VK_STRUCTURE_TYPE_SEMAPHORE_CREATE_INFO};
         require(vkCreateSemaphore(device, &semaphore, nullptr, &imageAvailable),
             "vkCreateSemaphore");
-        require(vkCreateSemaphore(device, &semaphore, nullptr, &renderingFinished),
-            "vkCreateSemaphore");
         VkFenceCreateInfo fence{VK_STRUCTURE_TYPE_FENCE_CREATE_INFO};
         fence.flags = VK_FENCE_CREATE_SIGNALED_BIT;
         require(vkCreateFence(device, &fence, nullptr, &frameFence),
@@ -1188,6 +1314,12 @@ struct Context {
         samplerInfo.maxLod = 16.0f;
         require(vkCreateSampler(device, &samplerInfo, nullptr, &sampler),
             "vkCreateSampler");
+        samplerInfo.magFilter = samplerInfo.minFilter = VK_FILTER_LINEAR;
+        samplerInfo.addressModeU = samplerInfo.addressModeV = samplerInfo.addressModeW
+            = VK_SAMPLER_ADDRESS_MODE_CLAMP_TO_EDGE;
+        samplerInfo.maxLod = 0.0f;
+        require(vkCreateSampler(device, &samplerInfo, nullptr, &blurSampler),
+            "vkCreateSampler(blur)");
         VkPushConstantRange push{};
         push.stageFlags = VK_SHADER_STAGE_VERTEX_BIT | VK_SHADER_STAGE_FRAGMENT_BIT;
         push.size = sizeof(PushConstants);
@@ -1235,10 +1367,10 @@ struct Context {
         if (vertexMemory) vkFreeMemory(device, vertexMemory, nullptr);
         if (pipelineLayout) vkDestroyPipelineLayout(device, pipelineLayout, nullptr);
         if (sampler) vkDestroySampler(device, sampler, nullptr);
+        if (blurSampler) vkDestroySampler(device, blurSampler, nullptr);
         if (descriptorPool) vkDestroyDescriptorPool(device, descriptorPool, nullptr);
         if (descriptorLayout) vkDestroyDescriptorSetLayout(device, descriptorLayout, nullptr);
         if (imageAvailable) vkDestroySemaphore(device, imageAvailable, nullptr);
-        if (renderingFinished) vkDestroySemaphore(device, renderingFinished, nullptr);
         if (frameFence) vkDestroyFence(device, frameFence, nullptr);
         if (commandPool) vkDestroyCommandPool(device, commandPool, nullptr);
         vkDestroyDevice(device, nullptr);

@@ -2417,9 +2417,11 @@ private:
             white,white,white,white);
         const setting = options is null ? 5
             : options.integer("menuBackgroundBlurriness",5);
+        if(setting<=0)return;
         frame.append(output,graphics.menuBlurTexture().descriptorIndex,
             Mat4.identity(),DrawLayer.blurBackdrop,
-            FogSettings.blur(width,height,0.5f+cast(float)setting*0.45f));
+            // Sigma in full-resolution pixels: default 12, maximum 24.
+            FogSettings.blur(width,height,cast(float)setting*2.4f));
     }
 
     static void applyHurtTint(ref Vertex[] geometry, int hurtTime, bool dead)

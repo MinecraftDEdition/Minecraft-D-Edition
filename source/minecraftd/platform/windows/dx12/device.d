@@ -76,6 +76,8 @@ final class Dx12Device : GraphicsDevice
     private ID3D12Resource depthBuffer;
     private ID3D12Resource[backBufferCount] vertexBuffers;
     private ID3D12Resource blurCapture;
+    private ID3D12Resource[2] blurTargets;
+    private uint blurWidth,blurHeight;
     private uint blurTextureIndex;
     private D3D12_VERTEX_BUFFER_VIEW[backBufferCount] vertexViews;
     private ID3D12Resource[] textures;
@@ -120,6 +122,7 @@ final class Dx12Device : GraphicsDevice
         foreach(ref vertexBuffer;vertexBuffers)
             if(vertexBuffer !is null)vertexBuffer.Release();
         if (blurCapture !is null) blurCapture.Release();
+        foreach(target;blurTargets)if(target !is null)target.Release();
         if (depthBuffer !is null) depthBuffer.Release();
         foreach (ref target; renderTargets) if (target !is null) target.Release();
         if (fence !is null) fence.Release();
@@ -316,6 +319,11 @@ final class Dx12Device : GraphicsDevice
             blurCapture.Release();
             blurCapture = null;
         }
+        foreach(ref target;blurTargets)
+        {
+            if(target !is null)target.Release();
+            target=null;
+        }
         foreach (ref target; renderTargets)
         {
             if (target !is null)
@@ -427,17 +435,56 @@ final class Dx12Device : GraphicsDevice
                         transition(renderTargets[frameIndex],
                             D3D12_RESOURCE_STATE_COPY_SOURCE,
                             D3D12_RESOURCE_STATE_RENDER_TARGET);
-                        mdSetRenderTargets(cast(void*) list, rtv.ptr, dsv.ptr);
                         list.SetPipelineState(blurPipelineState);
+                        // Filter down to half resolution, then convolve one
+                        // axis at a time. Each target returns to sample state.
+                        mdPrepareDraw(cast(void*)list,cast(void*)rootSignature,
+                            cast(void*)srvHeap,cast(float)blurWidth,cast(float)blurHeight,
+                            vertexViews[frameIndex].BufferLocation,
+                            vertexViews[frameIndex].StrideInBytes,
+                            vertexViews[frameIndex].SizeInBytes);
+                        foreach(pass;0..3)
+                        {
+                            const targetIndex=pass==1?1:0;
+                            const sourceIndex=pass==0?0:(pass==1?1:2);
+                            auto target=blurTargets[targetIndex];
+                            transition(target,D3D12_RESOURCE_STATE_PIXEL_SHADER_RESOURCE,
+                                D3D12_RESOURCE_STATE_RENDER_TARGET);
+                            mdSetRenderTargets(cast(void*)list,
+                                cpuHandle(rtvHeap,backBufferCount+targetIndex,rtvStride).ptr,0);
+                            float[12] passFog=0;
+                            if(pass!=0)
+                            {
+                                passFog[7]=draw.fog.constants()[7]
+                                    *cast(float)(pass==1?blurWidth:blurHeight)
+                                    /cast(float)(pass==1?width:height);
+                                passFog[pass==1?8:9]=1.0f/(pass==1?blurWidth:blurHeight);
+                            }
+                            mdDraw(cast(void*)list,draw.transform.m.ptr,passFog.ptr,
+                                gpuHandle(srvHeap,sourceIndex,srvStride).ptr,
+                                draw.vertexCount,draw.firstVertex);
+                            transition(target,D3D12_RESOURCE_STATE_RENDER_TARGET,
+                                D3D12_RESOURCE_STATE_PIXEL_SHADER_RESOURCE);
+                        }
+                        mdPrepareDraw(cast(void*)list,cast(void*)rootSignature,
+                            cast(void*)srvHeap,cast(float)width,cast(float)height,
+                            vertexViews[frameIndex].BufferLocation,
+                            vertexViews[frameIndex].StrideInBytes,
+                            vertexViews[frameIndex].SizeInBytes);
+                        activeMeshId=0;
+                        mdSetRenderTargets(cast(void*) list, rtv.ptr, 0);
                         break;
                     case DrawLayer.overlay: list.SetPipelineState(skyPipelineState); break;
                     case DrawLayer.invertedOverlay: list.SetPipelineState(invertedOverlayPipelineState); break;
                 }
             }
             const textureHandle = gpuHandle(srvHeap, draw.textureIndex, srvStride);
-            const fog = draw.fog.constants();
+            auto fog = draw.fog.constants();
+            if(draw.layer==DrawLayer.blurBackdrop)fog[]=0;
             mdDraw(cast(void*) list, draw.transform.m.ptr, fog.ptr, textureHandle.ptr,
                 draw.vertexCount, draw.firstVertex);
+            if(draw.layer==DrawLayer.blurBackdrop)
+                mdSetRenderTargets(cast(void*)list,rtv.ptr,dsv.ptr);
         }
 
         transition(renderTargets[frameIndex], D3D12_RESOURCE_STATE_RENDER_TARGET,
@@ -451,6 +498,59 @@ final class Dx12Device : GraphicsDevice
     }
 
     override void setVsync(bool enabled) { vsync = enabled; }
+
+    version(BlurSmoke) ImageData readBlurPixels()
+    {
+        waitForGpu();
+        const rowPitch=(blurWidth*4+255)&~255u;
+        auto heap=D3D12_HEAP_PROPERTIES(D3D12_HEAP_TYPE_READBACK,
+            D3D12_CPU_PAGE_PROPERTY_UNKNOWN,D3D12_MEMORY_POOL_UNKNOWN,1,1);
+        auto desc=D3D12_RESOURCE_DESC(D3D12_RESOURCE_DIMENSION_BUFFER,0,
+            cast(ulong)rowPitch*blurHeight,1,1,1,DXGI_FORMAT_UNKNOWN,
+            DXGI_SAMPLE_DESC(1,0),D3D12_TEXTURE_LAYOUT_ROW_MAJOR,D3D12_RESOURCE_FLAG_NONE);
+        ID3D12Resource buffer;
+        requireSuccess(device.CreateCommittedResource(&heap,D3D12_HEAP_FLAG_NONE,
+            &desc,D3D12_RESOURCE_STATE_COPY_DEST,null,&IID_ID3D12Resource,&buffer),"Blur readback");
+        scope(exit)buffer.Release();
+        beginCommands();
+        transition(blurTargets[0],D3D12_RESOURCE_STATE_PIXEL_SHADER_RESOURCE,D3D12_RESOURCE_STATE_COPY_SOURCE);
+        D3D12_TEXTURE_COPY_LOCATION source,destination;
+        source.pResource=blurTargets[0];
+        source.Type=D3D12_TEXTURE_COPY_TYPE_SUBRESOURCE_INDEX;
+        destination.pResource=buffer;
+        destination.Type=D3D12_TEXTURE_COPY_TYPE_PLACED_FOOTPRINT;
+        destination.PlacedFootprint.Footprint=D3D12_SUBRESOURCE_FOOTPRINT(
+            backBufferFormat,blurWidth,blurHeight,1,rowPitch);
+        list.CopyTextureRegion(&destination,0,0,0,&source,null);
+        transition(blurTargets[0],D3D12_RESOURCE_STATE_COPY_SOURCE,D3D12_RESOURCE_STATE_PIXEL_SHADER_RESOURCE);
+        executeCommands();waitForGpu();
+        ID3D12InfoQueue info;
+        if(SUCCEEDED(device.QueryInterface(&IID_ID3D12InfoQueue,cast(void**)&info)))
+        {
+            scope(exit)info.Release();
+            foreach(i;0..info.GetNumStoredMessages())
+            {
+                SIZE_T bytes;
+                info.GetMessage(i,null,&bytes);
+                auto storage=new ubyte[bytes];
+                auto message=cast(D3D12_MESSAGE*)storage.ptr;
+                requireSuccess(info.GetMessage(i,message,&bytes),"Read D3D12 validation message");
+                import std.string : fromStringz;
+                assert(message.Severity>D3D12_MESSAGE_SEVERITY_ERROR,
+                    fromStringz(message.pDescription).idup);
+            }
+            info.ClearStoredMessages();
+        }
+        ubyte* mapped;
+        requireSuccess(buffer.Map(0,null,cast(void**)&mapped),"Map blur readback");
+        scope(exit)buffer.Unmap(0,null);
+        ImageData image;
+        image.width=blurWidth;image.height=blurHeight;
+        image.rgba.length=blurWidth*blurHeight*4;
+        foreach(y;0..blurHeight)
+            memcpy(image.rgba.ptr+y*blurWidth*4,mapped+y*rowPitch,blurWidth*4);
+        return image;
+    }
 
 private:
     void createPipeline()
@@ -543,7 +643,7 @@ private:
     {
         D3D12_DESCRIPTOR_HEAP_DESC heapDesc;
         heapDesc.Type = D3D12_DESCRIPTOR_HEAP_TYPE_RTV;
-        heapDesc.NumDescriptors = backBufferCount;
+        heapDesc.NumDescriptors = backBufferCount+2;
         requireSuccess(device.CreateDescriptorHeap(&heapDesc, &IID_ID3D12DescriptorHeap,
             &rtvHeap), "Create RTV heap");
         rtvStride = device.GetDescriptorHandleIncrementSize(D3D12_DESCRIPTOR_HEAP_TYPE_RTV);
@@ -659,7 +759,7 @@ private:
             cast(void*) device, cast(void*) rootSignature,
             shaders.vertex.GetBufferPointer(), shaders.vertex.GetBufferSize(),
             shaders.blurPixel.GetBufferPointer(), shaders.blurPixel.GetBufferSize(),
-            backBufferFormat, depthBufferFormat, 0, 0, 0, 0);
+            backBufferFormat, DXGI_FORMAT_UNKNOWN, 0, 0, 0, 0);
         if (blurPipelineState is null)
             throw new Exception("Create menu-blur graphics pipeline failed");
     }
@@ -707,11 +807,11 @@ private:
             &desc, D3D12_RESOURCE_STATE_PIXEL_SHADER_RESOURCE, null,
             &IID_ID3D12Resource, &blurCapture), "Create menu blur capture");
 
-        // Descriptor zero is permanently reserved for the resizeable scene copy.
+        // Reserve scene copy plus two half-resolution ping-pong textures.
         if (nextTexture == 0)
         {
-            blurTextureIndex = 0;
-            nextTexture = 1;
+            blurTextureIndex = 1;
+            nextTexture = 3;
         }
         D3D12_SHADER_RESOURCE_VIEW_DESC srv;
         srv.Format = backBufferFormat;
@@ -721,9 +821,24 @@ private:
         srv.Texture2D.MipLevels = 1;
         srv.Texture2D.PlaneSlice = 0;
         srv.Texture2D.ResourceMinLODClamp = 0;
-        const destination = cpuHandle(srvHeap, blurTextureIndex, srvStride);
+        const destination = cpuHandle(srvHeap, 0, srvStride);
         mdCreateShaderResourceView(cast(void*) device, cast(void*) blurCapture,
             &srv, destination.ptr);
+        blurWidth=width>1?width/2:1;
+        blurHeight=height>1?height/2:1;
+        desc.Width=blurWidth;
+        desc.Height=blurHeight;
+        desc.Flags=D3D12_RESOURCE_FLAG_ALLOW_RENDER_TARGET;
+        foreach(index;0..2)
+        {
+            requireSuccess(device.CreateCommittedResource(&heap,D3D12_HEAP_FLAG_NONE,
+                &desc,D3D12_RESOURCE_STATE_PIXEL_SHADER_RESOURCE,null,
+                &IID_ID3D12Resource,&blurTargets[index]),"Create blur intermediate");
+            mdCreateShaderResourceView(cast(void*)device,cast(void*)blurTargets[index],
+                &srv,cpuHandle(srvHeap,cast(uint)index+1,srvStride).ptr);
+            mdCreateRenderTargetView(cast(void*)device,cast(void*)blurTargets[index],
+                cpuHandle(rtvHeap,backBufferCount+cast(uint)index,rtvStride).ptr);
+        }
     }
 
     void beginCommands()

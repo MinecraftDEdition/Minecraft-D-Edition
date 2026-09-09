@@ -6,6 +6,8 @@ import minecraftd.client.render.graphics_device : GraphicsDevice, TextureHandle;
 import minecraftd.client.render.mesh : FrameMesh, MeshHandle, Vertex;
 import minecraftd.client.render.texture_manager : ImageData, buildMipChain;
 
+version(BlurSmoke) private extern(C) int mdVkReadBlur(void*,ubyte*,uint,uint*,uint*);
+
 private extern(C) nothrow
 {
     void* mdVkCreate(void* window, uint width, uint height,
@@ -45,6 +47,17 @@ final class VulkanDevice : GraphicsDevice
 {
     private void* context;
     private VulkanDraw[] nativeDraws;
+
+    version(BlurSmoke) ImageData readBlurPixels()
+    {
+        uint width,height;
+        assert(mdVkReadBlur(context,null,0,&width,&height));
+        ImageData image;
+        image.width=width;image.height=height;
+        image.rgba.length=width*height*4;
+        assert(mdVkReadBlur(context,image.rgba.ptr,cast(uint)image.rgba.length,&width,&height));
+        return image;
+    }
 
     this(void* window, uint width, uint height, string projectRoot)
     {

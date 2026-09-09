@@ -380,11 +380,16 @@ void* mdCreateRootSignature(void* d) {
     sampler.ComparisonFunc = D3D12_COMPARISON_FUNC_ALWAYS;
     sampler.MaxLOD = D3D12_FLOAT32_MAX;
     sampler.ShaderVisibility = D3D12_SHADER_VISIBILITY_PIXEL;
+    D3D12_STATIC_SAMPLER_DESC samplers[2] = {sampler, sampler};
+    samplers[1].ShaderRegister = 1;
+    samplers[1].Filter = D3D12_FILTER_MIN_MAG_LINEAR_MIP_POINT;
+    samplers[1].AddressU = samplers[1].AddressV = samplers[1].AddressW
+        = D3D12_TEXTURE_ADDRESS_MODE_CLAMP;
     D3D12_ROOT_SIGNATURE_DESC desc{};
     desc.NumParameters = _countof(parameters);
     desc.pParameters = parameters;
-    desc.NumStaticSamplers = 1;
-    desc.pStaticSamplers = &sampler;
+    desc.NumStaticSamplers = 2;
+    desc.pStaticSamplers = samplers;
     desc.Flags = D3D12_ROOT_SIGNATURE_FLAG_ALLOW_INPUT_ASSEMBLER_INPUT_LAYOUT;
     ID3DBlob* blob = nullptr;
     ID3DBlob* errors = nullptr;
@@ -496,7 +501,8 @@ void mdTransition(void* l, void* resource, unsigned before, unsigned after) {
 void mdSetRenderTargets(void* l, size_t rtv, size_t dsv) {
     const D3D12_CPU_DESCRIPTOR_HANDLE r{rtv};
     const D3D12_CPU_DESCRIPTOR_HANDLE d{dsv};
-    static_cast<ID3D12GraphicsCommandList*>(l)->OMSetRenderTargets(1, &r, FALSE, &d);
+    static_cast<ID3D12GraphicsCommandList*>(l)->OMSetRenderTargets(1, &r, FALSE,
+        dsv ? &d : nullptr);
 }
 void mdPrepareDraw(void* l, void* root, void* heap, float width, float height,
                    unsigned long long vertexAddress, unsigned stride, unsigned size) {

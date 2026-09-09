@@ -19,6 +19,7 @@ struct VulkanConstants
 #define gFogDistances gConstants.fogDistances
 [[vk::binding(0, 0)]] Texture2D gTexture;
 [[vk::binding(1, 0)]] SamplerState gSampler;
+#define gBlurSampler gSampler
 #else
 cbuffer Transform : register(b0)
 {
@@ -37,6 +38,7 @@ cbuffer Fog : register(b1)
 
 Texture2D gTexture : register(t0);
 SamplerState gSampler : register(s0);
+SamplerState gBlurSampler : register(s1);
 #endif
 
 struct VertexInput
@@ -88,18 +90,30 @@ float4 PSMain(PixelInput input) : SV_TARGET
 // pixels rather than imitating blur with a translucent rectangle.
 float4 PSBlur(PixelInput input) : SV_TARGET
 {
-    float2 texel = gFogDistances.xy;
-    float radius = max(gFogCameraAndEnabled.w, 0.0f);
-    float2 dx = float2(texel.x * radius, 0.0f);
-    float2 dy = float2(0.0f, texel.y * radius);
-    float4 color = gTexture.Sample(gSampler, input.uv) * 0.196326f;
-    color += gTexture.Sample(gSampler, input.uv + dx * 1.384615f) * 0.136731f;
-    color += gTexture.Sample(gSampler, input.uv - dx * 1.384615f) * 0.136731f;
-    color += gTexture.Sample(gSampler, input.uv + dy * 1.384615f) * 0.136731f;
-    color += gTexture.Sample(gSampler, input.uv - dy * 1.384615f) * 0.136731f;
-    color += gTexture.Sample(gSampler, input.uv + dx * 3.230769f) * 0.064187f;
-    color += gTexture.Sample(gSampler, input.uv - dx * 3.230769f) * 0.064187f;
-    color += gTexture.Sample(gSampler, input.uv + dy * 3.230769f) * 0.064187f;
-    color += gTexture.Sample(gSampler, input.uv - dy * 3.230769f) * 0.064187f;
-    return color * input.color;
+    // Zero sigma is the filtered downsample / final upscale pass. Otherwise
+    // xy is one source texel along exactly one axis, never a sparse cross.
+    float sigma = clamp(gFogCameraAndEnabled.w, 0.0f, 12.0f);
+    float3 color = gTexture.SampleLevel(gBlurSampler, input.uv, 0).rgb;
+    float weightSum = 1.0f;
+    if (sigma > 0.0f)
+    {
+        float inverseVariance = 0.5f / (sigma * sigma);
+        int radius = (int)ceil(3.0f * sigma);
+        // A linear sample combines two adjacent Gaussian taps exactly.
+        // The kernel covers every texel through three standard deviations.
+        [loop] for (int tap = 1; tap <= radius; tap += 2)
+        {
+            float a = exp(-(float)(tap * tap) * inverseVariance);
+            float b = tap + 1 <= radius
+                ? exp(-(float)((tap + 1) * (tap + 1)) * inverseVariance) : 0.0f;
+            float weight = a + b;
+            float2 offset = gFogDistances.xy * (tap + b / weight);
+            color += (gTexture.SampleLevel(gBlurSampler, input.uv + offset, 0).rgb
+                + gTexture.SampleLevel(gBlurSampler, input.uv - offset, 0).rgb) * weight;
+            weightSum += 2.0f * weight;
+        }
+    }
+    // Scene alpha is irrelevant to backdrop filtering. Always overwrite the
+    // intermediate target, whose previous contents are deliberately discarded.
+    return float4(color / weightSum, 1.0f) * input.color;
 }
