@@ -23,6 +23,7 @@ Vulkan validation also exposed issues in the existing pause-rendering path. Scen
 - Checks verify diagonal coverage, monotonic transitions on both axes, preserved constant regions, and clamped edges. DX12 and Vulkan produced identical output for all nine combinations on the test machine.
 - DX12 debug-layer errors are checked in the readback helper. Vulkan synchronization validation completed without errors or warnings after the fixes.
 - The macOS workflow now builds and runs `tests/blur_macos_smoke.cpp` against the bundled MoltenVK. All nine native Mac combinations passed in [the development CI run](https://github.com/MinecraftDEdition/Minecraft-D-Edition/actions/runs/34378181733).
+- That CI run also completed the Apple Silicon app and DMG build, application launch test, and package/signature inspection successfully. The test installer is available as a workflow artifact; release publication was skipped.
 
 The checked-in `shaders/spirv/world.blur.frag.spv` was regenerated from `shaders/world.hlsl`; the Mac app packaging copies that shader and compiles the same Vulkan bridge. Test readback helpers are excluded from normal builds. No Metal renderer is introduced.
 
