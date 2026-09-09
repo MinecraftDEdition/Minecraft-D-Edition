@@ -2,6 +2,32 @@ module minecraftd.client.render.block_renderer;
 
 unittest
 {
+    import minecraftd.common.math3d:cross,dot;
+    auto world=new World();
+    scope(exit)destroy(world);
+    auto renderer=new BlockRenderer(world);
+    scope(exit)destroy(renderer);
+    ImageData image;
+    image.width=image.height=1;
+    image.rgba=[255,255,255,255];
+    auto mesh=renderer.buildGeneratedItem(1,image)[1];
+    assert(mesh.length==36);
+    const center=Vec3(.5f,.5f,.5f);
+    foreach(triangle;0..mesh.length/3)
+    {
+        Vec3 point(size_t i)
+        {
+            const p=mesh[triangle*3+i].position;
+            return Vec3(p[0],p[1],p[2]);
+        }
+        const a=point(0),b=point(1),c=point(2);
+        assert(dot(cross(b-a,c-a),(a+b+c)/3-center)>0,
+            "Generated item caps and edges must face outward");
+    }
+}
+
+unittest
+{
     auto world=new World();
     scope(exit)destroy(world);
     world.clearChunks();
@@ -461,6 +487,16 @@ final class BlockRenderer
                 appendQuad(geometry,Vec3(x0,y0,backZ),Vec3(x1,y0,backZ),
                     Vec3(x1,y0,frontZ),Vec3(x0,y0,frontZ),uv,uv,uv,uv,
                     side,side,side,side);
+        }
+        // Generated sprite surfaces were wound inward, unlike block models.
+        // Reverse triangles with their UVs attached so both caps and extruded
+        // edges face outward without mirroring the artwork.
+        foreach(triangle;0..geometry.length/3)
+        {
+            const offset=triangle*3;
+            const temporary=geometry[offset+1];
+            geometry[offset+1]=geometry[offset+2];
+            geometry[offset+2]=temporary;
         }
         result[texture] = geometry;
         return result;

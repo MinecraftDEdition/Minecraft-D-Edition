@@ -1,5 +1,38 @@
 module minecraftd.client.player.local_player;
 
+unittest
+{
+    foreach(water;[BlockId.waterFlow7,BlockId.waterFlow3,BlockId.waterSource])
+    {
+        auto world=new World();
+        scope(exit)destroy(world);
+        world.clearChunks();
+        foreach(z;0..32)foreach(x;0..4)
+        {
+            world.setBlock(x,0,z,BlockId.stone);
+            world.setBlock(x,1,z,z<3?water:BlockId.stone);
+            foreach(y;2..8)world.setBlock(x,y,z,BlockId.air);
+        }
+        auto player=new LocalPlayer();
+        scope(exit)destroy(player);
+        player.position=player.previousPosition=Vec3(1.5f,1,2.4f);
+        player.yaw=0;
+        foreach(_;0..40)
+            player.simulateTick(world,true,false,false,false,true,false,false);
+        import std.format : format;
+        assert(player.position.z>3.3f&&player.position.y>=2,
+            format("Wading jump must clear a one-block bank: water=%s position=%s",water,player.position));
+    }
+    auto world=new World();
+    scope(exit)destroy(world);
+    foreach(y;1..5)world.setBlock(8,y,3,BlockId.waterSource);
+    auto swimmer=new LocalPlayer();
+    scope(exit)destroy(swimmer);
+    swimmer.simulateTick(world,false,false,false,false,true,false,false);
+    assert(swimmer.eyeInWater&&swimmer.velocity.y<1,
+        "Deep water must retain its swimming impulse");
+}
+
 import core.stdc.math : atan2f, fabsf, floorf, sinf, cosf, sqrtf;
 import minecraftd.common.aabb : Aabb;
 import minecraftd.common.math3d : Vec3, DEG_TO_RAD, clamp;
@@ -125,7 +158,14 @@ final class LocalPlayer : Player
         }
         else if(inWater)
         {
-            if(jumping)velocity.y+=0.8f;
+            // Standing in wading-depth water must retain a ground jump. The
+            // swimming impulse alone cannot reliably clear a one-block bank.
+            if(jumping&&onGround&&!eyeInWater)
+            {
+                velocity.y=8.4f;
+                addExhaustion(this.sprinting?0.2f:0.05f);
+            }
+            else if(jumping)velocity.y+=0.8f;
             if(crouchRequested)velocity.y-=0.8f;
             onGround=false;
             fallDistance=0.0f;
@@ -187,6 +227,13 @@ final class LocalPlayer : Player
             velocity.x*=drag;
             velocity.z*=drag;
             velocity.y=velocity.y*0.8f-0.1f;
+            if(jumping&&horizontalCollision&&!eyeInWater)
+            {
+                const exitBounds=boundingBox().moved(Vec3(
+                    requestedMovement.x,0.6f,requestedMovement.z));
+                if(world.isUnobstructed(exitBounds)&&!world.intersectsWater(exitBounds))
+                    velocity.y=6.0f;
+            }
         }
         else if (!onGround && !flightActive)
         {

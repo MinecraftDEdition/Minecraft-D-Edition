@@ -21,6 +21,7 @@ private __gshared int pendingClientWidth;
 private __gshared int pendingClientHeight;
 private __gshared HCURSOR desiredCursor;
 private __gshared bool closeRequested;
+private __gshared bool focusLost;
 private __gshared bool[256] framePressed;
 private __gshared bool[256] frameRepeated;
 
@@ -36,6 +37,14 @@ extern (Windows) LRESULT windowProcedure(HWND window, UINT message, WPARAM wPara
 {
     switch (message)
     {
+        case WM_KILLFOCUS:
+            focusLost=true;
+            framePressed[]=false;
+            frameRepeated[]=false;
+            pendingWheelDelta=0;
+            pendingCharacterCount=0;
+            ReleaseCapture();
+            return DefWindowProcW(window,message,wParam,lParam);
         case WM_KEYDOWN:
         case WM_SYSKEYDOWN:
             // Bit 30 is set for auto-repeated key-down messages. `pressed`
@@ -104,6 +113,7 @@ final class GameWindow
     int height;
     bool running = true;
     bool mouseCaptured = false;
+    private bool captureRequested;
     bool fullscreen;
     bool cursorVisible = true;
 
@@ -231,11 +241,26 @@ final class GameWindow
             running = false;
         }
         pollGamepad();
+        if(focusLost)
+        {
+            applyMouseCapture(false);
+            focusLost=false;
+        }
+        applyMouseCapture(captureRequested&&focused());
+        if(!focused())
+        {
+            framePressed[]=false;
+            frameRepeated[]=false;
+            pendingWheelDelta=0;
+            pendingCharacterCount=0;
+        }
     }
+
+    bool focused() const { return GetForegroundWindow()==handle; }
 
     GamepadState gamepadState() const
     {
-        return gamepad;
+        return focused()?gamepad:GamepadState.init;
     }
 
     bool consumeResize(out int resizedWidth, out int resizedHeight)
@@ -252,23 +277,24 @@ final class GameWindow
 
     bool down(int virtualKey) const
     {
-        return (GetAsyncKeyState(virtualKey) & 0x8000) != 0;
+        return focused()&&(GetAsyncKeyState(virtualKey) & 0x8000) != 0;
     }
 
     bool pressed(int virtualKey) const
     {
-        return virtualKey >= 0 && virtualKey < framePressed.length
+        return focused()&&virtualKey >= 0 && virtualKey < framePressed.length
             && framePressed[virtualKey];
     }
 
     bool repeated(int virtualKey) const
     {
-        return virtualKey >= 0 && virtualKey < frameRepeated.length
+        return focused()&&virtualKey >= 0 && virtualKey < frameRepeated.length
             && frameRepeated[virtualKey];
     }
 
     int firstPressedKey() const
     {
+        if(!focused())return -1;
         foreach (key, pressedNow; framePressed)
             if (pressedNow)
                 return cast(int) key;
@@ -416,6 +442,12 @@ final class GameWindow
     }
 
     void setMouseCapture(bool capture)
+    {
+        captureRequested=capture;
+        applyMouseCapture(capture&&focused());
+    }
+
+    private void applyMouseCapture(bool capture)
     {
         if (mouseCaptured == capture && handle !is null)
             return;

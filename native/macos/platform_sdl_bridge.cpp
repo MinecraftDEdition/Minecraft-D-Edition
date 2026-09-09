@@ -246,6 +246,13 @@ void mcdPlatformPump(void* value) {
                 break;
             case SDL_EVENT_WINDOW_FOCUS_LOST:
                 context->down.fill(false);
+                context->pressed.fill(false);
+                context->repeated.fill(false);
+                context->text.clear();
+                context->wheel = 0;
+                SDL_SetWindowRelativeMouseMode(context->window, false);
+                context->captured = false;
+                SDL_GetRelativeMouseState(nullptr, nullptr);
                 break;
             default: break;
         }
@@ -255,6 +262,12 @@ void mcdPlatformPump(void* value) {
 int mcdPlatformRunning(void* value) {
     auto* context = static_cast<WindowContext*>(value);
     return context && context->running ? 1 : 0;
+}
+
+int mcdPlatformFocused(void* value) {
+    auto* context = static_cast<WindowContext*>(value);
+    return context && (SDL_GetWindowFlags(context->window)
+        & SDL_WINDOW_INPUT_FOCUS) ? 1 : 0;
 }
 
 int mcdPlatformConsumeResize(void* value, int* width, int* height) {
@@ -316,7 +329,7 @@ void mcdPlatformClearText(void* value) {
 void mcdPlatformMouseDelta(void* value, int* x, int* y) {
     auto* context = static_cast<WindowContext*>(value);
     float dx = 0.0f, dy = 0.0f;
-    if (context && context->captured)
+    if (context && context->captured && mcdPlatformFocused(value))
         SDL_GetRelativeMouseState(&dx, &dy);
     if (x) *x = static_cast<int>(dx);
     if (y) *y = static_cast<int>(dy);
@@ -356,9 +369,13 @@ int mcdPlatformFullscreen(void* value) {
 void mcdPlatformSetMouseCapture(void* value, int captured) {
     auto* context = static_cast<WindowContext*>(value);
     if (!context) return;
-    context->captured = captured != 0;
-    SDL_SetWindowRelativeMouseMode(context->window, context->captured);
-    const bool wantsTextInput = !context->captured;
+    const bool effectiveCapture = captured != 0 && mcdPlatformFocused(value);
+    if (context->captured != effectiveCapture) {
+        context->captured = effectiveCapture;
+        SDL_SetWindowRelativeMouseMode(context->window, context->captured);
+        SDL_GetRelativeMouseState(nullptr, nullptr);
+    }
+    const bool wantsTextInput = !context->captured && mcdPlatformFocused(value);
     if (wantsTextInput != context->textInputActive) {
         if (wantsTextInput)
             SDL_StartTextInput(context->window);

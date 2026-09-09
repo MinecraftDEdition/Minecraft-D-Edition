@@ -25,6 +25,7 @@ private extern(C) nothrow
     void* mcdPlatformRendererWindow(void* context);
     void mcdPlatformPump(void* context);
     int mcdPlatformRunning(void* context);
+    int mcdPlatformFocused(void* context);
     int mcdPlatformConsumeResize(void* context, int* width, int* height);
     int mcdPlatformKeyDown(void* context, int key);
     int mcdPlatformKeyPressed(void* context, int key);
@@ -56,6 +57,7 @@ final class GameWindow
     int height;
     bool running = true;
     bool mouseCaptured;
+    private bool captureRequested;
     bool fullscreen;
     bool cursorVisible = true;
 
@@ -102,7 +104,13 @@ final class GameWindow
         running = mcdPlatformRunning(context) != 0;
         gamepad = gamepadBackend is null
             ? GamepadState.init : gamepadBackend.poll();
+        const capture=captureRequested&&focused();
+        mouseCaptured=capture;
+        cursorVisible=!capture;
+        mcdPlatformSetMouseCapture(context,capture?1:0);
     }
+
+    bool focused() const{return mcdPlatformFocused(cast(void*)context)!=0;}
 
     bool consumeResize(out int resizedWidth, out int resizedHeight)
     {
@@ -115,19 +123,19 @@ final class GameWindow
 
     bool down(int key) const
     {
-        return mcdPlatformKeyDown(cast(void*) context, key) != 0;
+        return focused()&&mcdPlatformKeyDown(cast(void*) context, key) != 0;
     }
     bool pressed(int key) const
     {
-        return mcdPlatformKeyPressed(cast(void*) context, key) != 0;
+        return focused()&&mcdPlatformKeyPressed(cast(void*) context, key) != 0;
     }
     bool repeated(int key) const
     {
-        return mcdPlatformKeyRepeated(cast(void*) context, key) != 0;
+        return focused()&&mcdPlatformKeyRepeated(cast(void*) context, key) != 0;
     }
     int firstPressedKey() const
     {
-        return mcdPlatformFirstPressedKey(cast(void*) context);
+        return focused()?mcdPlatformFirstPressedKey(cast(void*) context):-1;
     }
     int consumeWheelSteps() { return mcdPlatformConsumeWheel(context); }
 
@@ -180,9 +188,10 @@ final class GameWindow
 
     void setMouseCapture(bool capture)
     {
-        mouseCaptured = capture;
-        cursorVisible = !capture;
-        mcdPlatformSetMouseCapture(context, capture ? 1 : 0);
+        captureRequested=capture;
+        mouseCaptured = capture&&focused();
+        cursorVisible = !mouseCaptured;
+        mcdPlatformSetMouseCapture(context, mouseCaptured ? 1 : 0);
     }
 
     bool setClipboardText(string value)
@@ -205,7 +214,7 @@ final class GameWindow
 
     GamepadState gamepadState() const
     {
-        return gamepad;
+        return focused()?gamepad:GamepadState.init;
     }
 
 private:

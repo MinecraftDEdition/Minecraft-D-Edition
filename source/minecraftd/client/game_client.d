@@ -1582,9 +1582,17 @@ final class GameClient
             if (returnToTitle)
                 break;
 
-            const controlsActive = !chat.active && !pauseMenu.active
+            const controlsActive = window.focused()&&!chat.active && !pauseMenu.active
                 &&!inventoryMenu.active
                 && !deathScreen.active;
+            if(!window.focused())
+            {
+                pendingUse=pendingAttack=pendingDrop=pendingDropStack=false;
+                pendingFlightToggle=false;
+                attackToggleState=useToggleState=crouchToggleState=false;
+                sprintLatched=controllerSprintLatched=false;
+                lastJumpTapMilliseconds=dropHeldTicks=0;
+            }
             player.skinParts=options.skinParts();
             player.mainHandRight=options.mainHandRight();
             if (controlsActive)
@@ -1682,7 +1690,8 @@ final class GameClient
             // server. In multiplayer the client keeps ticking and sends neutral
             // input while controls are captured by the menu.
             const worldPaused = multiplayer.serverPaused;
-            renderer.tickGameMusic(player.dimension, worldPaused);
+            // Music and its scheduling clock continue while simulation pauses.
+            renderer.tickGameMusic(player.dimension, false);
             if (worldPaused)
                 accumulator = 0.0;
             else
