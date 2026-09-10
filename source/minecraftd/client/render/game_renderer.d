@@ -103,6 +103,8 @@ import minecraftd.client.menu.inventory_menu:CreativeTab,InventoryMenuRenderer,
 import minecraftd.game.resources.resource_manager : ResourceManager;
 import minecraftd.client.render.texture_animation : decodeTextureAnimation;
 import minecraftd.client.render.texture_compatibility : compatibleTexture;
+import minecraftd.game.resources.languages : activeLanguage;
+import minecraftd.client.render.unicode_font : buildUnicodeFont;
 import minecraftd.game.item.inventory : ItemId, ItemStack, placedBlock,
     firstCatalogItem, lastCatalogItem, sameHeldStack, lastItem, itemTextureName, toolKind;
 import minecraftd.game.entity.player : Player;
@@ -308,7 +310,9 @@ final class GameRenderer
         if(configuredMipmaps>4)configuredMipmaps=4;
         terrainMipmapLevels=cast(uint)configuredMipmaps;
         occlusion=new SoftwareOcclusionCuller();
-        resources = new ResourceManager(projectRoot,options.resourcePacks.mounts());
+        auto packMounts=options.resourcePacks.mounts();
+        resources = new ResourceManager(projectRoot,packMounts);
+        options.languages.configure(packMounts);activeLanguage=options.languages;
         images = new TextureManager();
         final switch (graphicsApi)
         {
@@ -431,9 +435,10 @@ final class GameRenderer
         );
         auto asciiImage = images.loadPng(
             resources.resolveAsset("minecraft", "textures/font/ascii.png"));
-        const asciiTexture = graphics.uploadTexture(asciiImage);
+        auto unicode=buildUnicodeFont(asciiImage,images,resources,options.languages.glyphText());
+        const asciiTexture = graphics.uploadTexture(unicode.image);
         fontTexture = asciiTexture.descriptorIndex;
-        hudFont = new FontRenderer(asciiImage);
+        hudFont = new FontRenderer(asciiImage,unicode.glyphs);
         ImageData solidImage;
         solidImage.width = solidImage.height = 1;
         solidImage.rgba = [cast(ubyte) 255, 255, 255, 255];

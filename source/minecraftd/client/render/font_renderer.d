@@ -3,6 +3,9 @@ module minecraftd.client.render.font_renderer;
 import minecraftd.client.render.mesh : Color, Vertex, appendQuad;
 import minecraftd.client.render.texture_manager : ImageData;
 import minecraftd.common.math3d : Vec2, Vec3, cross, forwardFromYawPitch;
+import minecraftd.client.render.unicode_font : FontGlyph;
+import std.utf : decode;
+import minecraftd.client.render.text_layout : visualText;
 
 /// Minecraft's bitmap provider for font/ascii.png. Glyphs occupy an 8x8 cell;
 /// their advances are derived from the last nontransparent source column.
@@ -12,9 +15,11 @@ final class FontRenderer
     enum int lineHeight = 9;
 
     private ubyte[256] advances;
+    private FontGlyph[dchar] glyphs;
 
-    this(const ImageData atlas)
+    this(const ImageData atlas,FontGlyph[dchar] glyphs=null)
     {
+        this.glyphs=glyphs;
         const cellWidth=atlas.width/16,cellHeight=atlas.height/16;
         if(!cellWidth||!cellHeight)throw new Exception("Font atlas must contain a 16 by 16 glyph grid");
         foreach (code; 0 .. 256)
@@ -38,8 +43,8 @@ final class FontRenderer
     int width(string text) const
     {
         int result;
-        foreach (ubyte value; cast(const(ubyte)[]) text)
-            result += advances[value];
+        foreach (dchar value; visualText(text))
+            result += glyph(value).advance;
         return result;
     }
 
@@ -54,14 +59,15 @@ final class FontRenderer
             int used;
             while (end < text.length)
             {
-                const value = cast(ubyte) text[end];
-                const next = used + advances[value];
+                auto nextEnd=end;
+                const value = decode(text,nextEnd);
+                const next = used + glyph(value).advance;
                 if (next > maximumWidth && end > start)
                     break;
                 used = next;
                 if (value == ' ')
                     lastSpace = end;
-                ++end;
+                end=nextEnd;
             }
             if (end < text.length && lastSpace != size_t.max && lastSpace >= start)
             {
@@ -103,12 +109,12 @@ final class FontRenderer
         const up = cross(forward, right).normalized();
         enum float pixelScale = 0.025f;
         float cursor = -cast(float) width(value) * 0.5f;
-        foreach (ubyte code; cast(const(ubyte)[]) value)
+        foreach (dchar code; visualText(value))
         {
             if (code != ' ')
             {
-                const visibleWidth = advances[code] > 1
-                    ? advances[code] - 1 : 1;
+                const g=glyph(code);
+                const visibleWidth = g.width;
                 const left = cursor;
                 const rightEdge = cursor + visibleWidth;
                 const bottom = -4.0f;
@@ -118,18 +124,13 @@ final class FontRenderer
                     return anchor + right * (x * pixelScale)
                         + up * (y * pixelScale);
                 }
-                const cellX = code & 15;
-                const cellY = code >> 4;
-                const u0 = cast(float) (cellX * 8) / 128.0f;
-                const u1 = cast(float) (cellX * 8 + visibleWidth) / 128.0f;
-                const v0 = cast(float) (cellY * 8) / 128.0f;
-                const v1 = cast(float) (cellY * 8 + 8) / 128.0f;
+                const u0=g.u0,u1=g.u1,v0=g.v0,v1=g.v1;
                 appendQuad(output, point(left,bottom), point(rightEdge,bottom),
                     point(rightEdge,top), point(left,top), Vec2(u0,v1),
                     Vec2(u1,v1), Vec2(u1,v0), Vec2(u0,v0), color, color,
                     color, color);
             }
-            cursor += advances[code];
+            cursor += glyph(code).advance;
         }
         return output;
     }
@@ -158,32 +159,37 @@ final class FontRenderer
     }
 
 private:
+    FontGlyph glyph(dchar code) const
+    {
+        if(auto found=code in glyphs)return *found;
+        if(glyphs.length){if(auto fallback=cast(dchar)'?' in glyphs)return *fallback;}
+        if(code>=256)code='?';
+        const width=advances[code]>1?advances[code]-1:1;
+        return FontGlyph(cast(float)(code&15)/16,cast(float)(code>>4)/16,
+            cast(float)((code&15)*8+width)/128,cast(float)((code>>4)*8+8)/128,width,advances[code]);
+    }
     void appendText(ref Vertex[] output, string text, int x, int y,
         float logicalWidth, float logicalHeight, Color color) const
     {
         int cursorX = x;
-        foreach (ubyte value; cast(const(ubyte)[]) text)
+        foreach (dchar value; visualText(text))
         {
             if (value != ' ')
                 appendGlyph(output, value, cursorX, y, logicalWidth, logicalHeight, color);
-            cursorX += advances[value];
+            cursorX += glyph(value).advance;
         }
     }
 
-    void appendGlyph(ref Vertex[] output, ubyte code, int x, int y,
+    void appendGlyph(ref Vertex[] output, dchar code, int x, int y,
         float logicalWidth, float logicalHeight, Color color) const
     {
-        const visibleWidth = advances[code] > 1 ? advances[code] - 1 : 1;
+        const g=glyph(code);
+        const visibleWidth = g.width;
         const left = cast(float) x / logicalWidth * 2.0f - 1.0f;
         const right = cast(float) (x + visibleWidth) / logicalWidth * 2.0f - 1.0f;
         const top = 1.0f - cast(float) y / logicalHeight * 2.0f;
         const bottom = 1.0f - cast(float) (y + glyphHeight) / logicalHeight * 2.0f;
-        const cellX = code & 15;
-        const cellY = code >> 4;
-        const u0 = cast(float) (cellX * 8) / 128.0f;
-        const u1 = cast(float) (cellX * 8 + visibleWidth) / 128.0f;
-        const v0 = cast(float) (cellY * 8) / 128.0f;
-        const v1 = cast(float) (cellY * 8 + 8) / 128.0f;
+        const u0=g.u0,u1=g.u1,v0=g.v0,v1=g.v1;
         appendQuad(output,
             Vec3(left, bottom, 0), Vec3(right, bottom, 0),
             Vec3(right, top, 0), Vec3(left, top, 0),
@@ -194,6 +200,13 @@ private:
 
 unittest
 {
+    FontGlyph[dchar] glyphs;
+    glyphs['?']=FontGlyph(0,0,1,1,3,4);
+    glyphs['é']=FontGlyph(0,0,1,1,5,6);
+    glyphs['中']=FontGlyph(0,0,1,1,7,8);
+    auto unicodeFont=new FontRenderer(ImageData(128,128,new ubyte[128*128*4]),glyphs);
+    assert(unicodeFont.width("é中")==14);
+    assert(unicodeFont.wrap("é中",6)==["é","中"]);
     // Unsigned atlas coordinates must still compare above the -1 sentinel.
     // Check both the default atlas and a higher-resolution pack atlas.
     foreach(scale;[1u,2u])

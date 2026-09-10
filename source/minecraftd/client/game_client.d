@@ -67,7 +67,7 @@ final class GameClient
         }
 
         const paths = platformPaths();
-        auto options = new OptionsMenuState(paths.userData);
+        auto options = new OptionsMenuState(paths.userData,paths.resources);
         scope (exit) destroy(options);
         auto window = new GameWindow("Minecraft: D Edition",
             GameWindow.defaultWidth,GameWindow.defaultHeight,0,

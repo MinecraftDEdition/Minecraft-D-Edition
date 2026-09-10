@@ -2,6 +2,10 @@ $ErrorActionPreference = 'Stop'
 Set-Location (Join-Path $PSScriptRoot '..')
 New-Item -ItemType Directory -Force test-output/resourcepacks | Out-Null
 $directx = Join-Path $env:LOCALAPPDATA 'dub/packages/directx-d/0.14.1/directx-d/src'
+& dmd '-i' '-Isource' '-of=test-output/languages_smoke.exe' tests/languages_smoke.d
+if ($LASTEXITCODE -ne 0) { throw 'Language test compilation failed' }
+& './test-output/languages_smoke.exe'
+if ($LASTEXITCODE -ne 0) { throw 'Language tests failed' }
 & dmd '-i' '-Isource' '-of=test-output/resource_packs_smoke.exe' tests/resource_packs_smoke.d
 if ($LASTEXITCODE -ne 0) { throw 'Resource pack test compilation failed' }
 & './test-output/resource_packs_smoke.exe'

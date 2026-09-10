@@ -61,7 +61,7 @@ foreach ($file in Get-ChildItem -LiteralPath $RuntimeRoot -Recurse -File |
     if ($excluded -contains $relative) { continue }
     if ($relative -match '(^|/)(saves|screenshots|resourcepacks|eos-cache|cache)(/|$)' -or
         $relative -in @('data/options.txt', 'data/eos.local.json',
-            'data/server_entry.txt', 'data/window_state.txt', 'data/resource-packs.json',
+            'data/server_entry.txt', 'data/window_state.txt', 'data/resource-packs.json', 'data/languages.json',
             'data/account_session.token')) {
         throw "User-owned file was accidentally staged for updating: $relative"
     }

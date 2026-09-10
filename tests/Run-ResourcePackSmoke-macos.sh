@@ -9,6 +9,8 @@ mkdir -p "$out/MacOS" "$out/Frameworks"
 # The platform bridge deliberately finds MoltenVK relative to the executable,
 # just as it does inside the shipped app bundle.
 cp "$deps/lib/libMoltenVK.dylib" "$out/Frameworks/libMoltenVK.dylib"
+ldc2 -i -I"$repo/source" "$repo/tests/languages_smoke.d" -of="$out/languages"
+"$out/languages"
 ldc2 -i -I"$repo/source" "$repo/tests/resource_packs_smoke.d" -of="$out/packs"
 "$out/packs"
 ldc2 -i -I"$repo/source" "$repo/tests/texture_animation_smoke.d" \
@@ -28,3 +30,5 @@ ldc2 -i --d-version=CORRECT_ABI -I"$repo/source" -J"$repo/shaders" \
     -L-rpath -L"$deps/lib" -L-rpath -L"$deps" -of="$out/MacOS/menu"
 cd "$build/bundle/Minecraft D Edition.app/Contents/Resources"
 "$out/MacOS/menu"
+"$out/MacOS/menu" - zh_cn
+"$out/MacOS/menu" - ar_sa

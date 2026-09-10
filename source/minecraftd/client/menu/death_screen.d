@@ -1,4 +1,5 @@
 module minecraftd.client.menu.death_screen;
+import minecraftd.game.resources.languages : tr;
 
 import std.conv : to;
 
@@ -103,7 +104,7 @@ final class DeathScreenRenderer
             Color(80.0f/255.0f,0,0,96.0f/255.0f),
             Color(128.0f/255.0f,48.0f/255.0f,48.0f/255.0f,160.0f/255.0f));
 
-        const title = state.hardcore ? "Game Over!" : "You Died!";
+        const title = state.hardcore ? tr("deathScreen.title.hardcore","Game Over!") : tr("deathScreen.title","You Died!");
         // Vanilla renders the title with a 2x pose-stack scale at y=30.
         const halfWidth = logicalWidth * 0.5f;
         const halfHeight = logicalHeight * 0.5f;
@@ -126,10 +127,10 @@ final class DeathScreenRenderer
 
         const enabled = state.buttonsEnabled;
         button(frame, center-100, firstY, 200,
-            state.hardcore ? "Spectate World" : "Respawn",
+            state.hardcore ? tr("deathScreen.spectate","Spectate World") : tr("deathScreen.respawn","Respawn"),
             hovered == DeathAction.respawn, enabled, logicalWidth,
             logicalHeight, textures, font, fontTexture);
-        button(frame, center-100, firstY+24, 200, "Title Screen",
+        button(frame, center-100, firstY+24, 200, tr("deathScreen.titleScreen","Title Screen"),
             hovered == DeathAction.titleScreen, enabled, logicalWidth,
             logicalHeight, textures, font, fontTexture);
     }

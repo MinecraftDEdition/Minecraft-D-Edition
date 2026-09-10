@@ -1,4 +1,6 @@
 module minecraftd.client.menu.inventory_menu;
+import minecraftd.game.resources.languages : tr;
+import minecraftd.game.resources.languages : translatedItem;
 
 import core.stdc.math:atanf;
 import std.ascii : toLower;
@@ -59,20 +61,20 @@ string creativeTabName(CreativeTab tab)
 {
     final switch(tab)
     {
-        case CreativeTab.buildingBlocks:return "Building Blocks";
-        case CreativeTab.coloredBlocks:return "Colored Blocks";
-        case CreativeTab.naturalBlocks:return "Natural Blocks";
-        case CreativeTab.functionalBlocks:return "Functional Blocks";
-        case CreativeTab.redstoneBlocks:return "Redstone Blocks";
-        case CreativeTab.savedHotbars:return "Saved Hotbars";
-        case CreativeTab.searchItems:return "Search Items";
-        case CreativeTab.toolsAndUtilities:return "Tools & Utilities";
-        case CreativeTab.combat:return "Combat";
-        case CreativeTab.foodAndDrinks:return "Food & Drinks";
-        case CreativeTab.ingredients:return "Ingredients";
-        case CreativeTab.spawnEggs:return "Spawn Eggs";
-        case CreativeTab.operatorUtilities:return "Operator Utilities";
-        case CreativeTab.survivalInventory:return "Survival Inventory";
+        case CreativeTab.buildingBlocks:return tr("itemGroup.buildingBlocks","Building Blocks");
+        case CreativeTab.coloredBlocks:return tr("itemGroup.coloredBlocks","Colored Blocks");
+        case CreativeTab.naturalBlocks:return tr("itemGroup.natural","Natural Blocks");
+        case CreativeTab.functionalBlocks:return tr("itemGroup.functional","Functional Blocks");
+        case CreativeTab.redstoneBlocks:return tr("itemGroup.redstone","Redstone Blocks");
+        case CreativeTab.savedHotbars:return tr("itemGroup.hotbar","Saved Hotbars");
+        case CreativeTab.searchItems:return tr("itemGroup.search","Search Items");
+        case CreativeTab.toolsAndUtilities:return tr("itemGroup.tools","Tools & Utilities");
+        case CreativeTab.combat:return tr("itemGroup.combat","Combat");
+        case CreativeTab.foodAndDrinks:return tr("itemGroup.foodAndDrink","Food & Drinks");
+        case CreativeTab.ingredients:return tr("itemGroup.ingredients","Ingredients");
+        case CreativeTab.spawnEggs:return tr("itemGroup.spawnEggs","Spawn Eggs");
+        case CreativeTab.operatorUtilities:return tr("itemGroup.op","Operator Utilities");
+        case CreativeTab.survivalInventory:return tr("itemGroup.inventory","Survival Inventory");
     }
 }
 
@@ -147,7 +149,7 @@ final class InventoryMenuState
         if(creativeTab==CreativeTab.searchItems)
         {
             foreach(item;creativeCatalog)
-                if(searchInput.length==0||containsIgnoreCase(itemName(item),searchInput))
+                if(searchInput.length==0||containsIgnoreCase(translatedItem(itemName(item)),searchInput))
                     result~=item;
             return result;
         }
@@ -226,17 +228,9 @@ final class InventoryMenuState
 
 private bool containsIgnoreCase(string value,string query)
 {
-    if(query.length==0)return true;
-    if(query.length>value.length)return false;
-    foreach(start;0..value.length-query.length+1)
-    {
-        bool matches=true;
-        foreach(offset;0..query.length)
-            if(toLower(value[start+offset])!=toLower(query[offset]))
-            {matches=false;break;}
-        if(matches)return true;
-    }
-    return false;
+    import std.uni : asLowerCase;
+    import std.algorithm : canFind;
+    return canFind(asLowerCase(value),asLowerCase(query));
 }
 
 final class InventoryMenuRenderer
@@ -518,7 +512,8 @@ static void stationSlotPosition(ubyte station,int index,int left,int top,out int
         const left=(cast(int)lw-imageWidth)/2,top=(cast(int)lh-imageHeight)/2;
         appendSolid(frame,textures.white,0,0,cast(int)lw,cast(int)lh,lw,lh,Color(0,0,0,.65f));
         appendSprite(frame,textures.stationBackgrounds[inv.station-1],left,top,imageWidth,imageHeight,lw,lh);
-        const title=inv.station==1?"Crafting":(inv.station==2?"Furnace":"Enchant");
+        const title=inv.station==1?tr("container.crafting","Crafting")
+            :(inv.station==2?tr("container.furnace","Furnace"):tr("container.enchant","Enchant"));
         frame.append(font.buildText(title,left+8,top+5,lw,lh,Color(.25f,.25f,.25f,1)),
             fontTexture,Mat4.identity(),DrawLayer.overlay);
         const count=inv.station==1?10:(inv.station==2?3:2);
@@ -992,10 +987,10 @@ private:
         int mouseY,float width,float height,uint background,uint frameTexture,
         const FontRenderer font,uint fontTexture)
     {
-        const first=itemName(stack.item);
+        const first=translatedItem(itemName(stack.item));
         import minecraftd.game.item.inventory:durability;
         import std.conv:to;
-        string[] lines=[itemName(stack.item),itemCategory(stack.item)];
+        string[] lines=[translatedItem(itemName(stack.item)),itemCategory(stack.item)];
         if(stack.enchantment)
         {
             immutable string[4] names=["","Efficiency","Sharpness","Unbreaking"];

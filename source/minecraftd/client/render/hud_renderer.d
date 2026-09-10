@@ -1,4 +1,5 @@
 module minecraftd.client.render.hud_renderer;
+import minecraftd.game.resources.languages : translatedItem;
 
 import core.stdc.math : ceilf;
 import std.conv : to;
@@ -99,7 +100,7 @@ final class HudRenderer
         const scale=guiScale(viewportWidth,viewportHeight);
         const logicalWidth=cast(float)viewportWidth/scale;
         const logicalHeight=cast(float)viewportHeight/scale;
-        const label=itemName(selected.item);
+        const label=translatedItem(itemName(selected.item));
         if(!label.length)return;
         float alpha=(remainingTicks-partialTick)*256.0f/10.0f;
         if(alpha>255)alpha=255;

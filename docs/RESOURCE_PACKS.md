@@ -27,6 +27,9 @@ selection, or Default if the previous selection also cannot load.
 
 Supported for assets that D Edition currently uses:
 
+Language selection and JSON/legacy language overrides are described in
+[LANGUAGES.md](LANGUAGES.md).
+
 - Standard, case-sensitive `assets/<namespace>/...` paths in ZIP and folder packs.
 - Block, item, entity and other existing PNG texture replacements, including higher
   resolutions. The existing bitmap font atlas scales its character measurements.

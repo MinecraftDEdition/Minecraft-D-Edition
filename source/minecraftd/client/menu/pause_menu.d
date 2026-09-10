@@ -1,4 +1,5 @@
 module minecraftd.client.menu.pause_menu;
+import minecraftd.game.resources.languages : tr;
 
 import minecraftd.client.render.font_renderer : FontRenderer;
 import minecraftd.client.render.mesh : Color, DrawLayer, FrameMesh, Vertex,
@@ -139,12 +140,12 @@ final class PauseMenuRenderer
                 break;
         }
 
-        centered(frame, "Game Menu", 30, logicalWidth, logicalHeight,
+        centered(frame, tr("menu.game","Game Menu"), 30, logicalWidth, logicalHeight,
             textures, font, fontTexture, Color(1,1,1,1));
-        button(frame, center-100, firstY, 200, "Back to Game",
+        button(frame, center-100, firstY, 200, tr("menu.returnToGame","Back to Game"),
             hovered == PauseAction.resume, true, logicalWidth, logicalHeight,
             textures, font, fontTexture);
-        button(frame, center-100, firstY+24, 200, "Options...",
+        button(frame, center-100, firstY+24, 200, tr("menu.options","Options..."),
             hovered == PauseAction.options, true, logicalWidth, logicalHeight,
             textures, font, fontTexture);
         const publishLabel = state.published
@@ -154,7 +155,7 @@ final class PauseMenuRenderer
         button(frame, center-100, firstY+48, 200, publishLabel,
             hovered == PauseAction.publish, canPublish,
             logicalWidth, logicalHeight, textures, font, fontTexture);
-        button(frame, center-100, firstY+84, 200, "Save & Quit",
+        button(frame, center-100, firstY+84, 200, tr("menu.returnToMenu","Save & Quit"),
             hovered == PauseAction.quit, true, logicalWidth, logicalHeight,
             textures, font, fontTexture);
 
@@ -180,7 +181,7 @@ private:
             logicalWidth, logicalHeight, textures, font, fontTexture,
             Color(0.8f,0.8f,0.8f,1));
         const buttonY = cast(int)logicalHeight / 2 + 30;
-        button(frame, center-102, buttonY, 100, "Yes",
+        button(frame, center-102, buttonY, 100, tr("gui.yes","Yes"),
             hovered == PauseAction.confirmPublish, true, logicalWidth,
             logicalHeight, textures, font, fontTexture);
         button(frame, center+2, buttonY, 100, "No",
@@ -204,7 +205,7 @@ private:
             logicalHeight, textures, font, fontTexture);
         const eosInvitation = state.address.length > 10
             && state.address[0 .. 10] == "mcd://eos/";
-        centered(frame, eosInvitation ? "Private EOS Invitation" : "Server Address",
+        centered(frame, eosInvitation ? "Private EOS Invitation" : tr("addServer.enterIp","Server Address"),
             copyY + 27, logicalWidth,
             logicalHeight, textures, font, fontTexture,
             Color(0.8f,0.8f,0.8f,1));
@@ -215,7 +216,7 @@ private:
             logicalWidth, logicalHeight, Color(0.02f,0.02f,0.02f,1));
         text(frame, fitMiddle(state.address, 190, font), center-95, copyY+45, logicalWidth,
             logicalHeight, font, fontTexture, Color(1,1,1,1));
-        button(frame, center-100, copyY+72, 200, "Cancel",
+        button(frame, center-100, copyY+72, 200, tr("gui.cancel","Cancel"),
             hovered == PauseAction.cancelSubscreen, true, logicalWidth,
             logicalHeight, textures, font, fontTexture);
         if (state.notice.length)

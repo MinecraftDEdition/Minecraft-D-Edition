@@ -34,6 +34,7 @@ struct ResourceFilter { string namespacePattern=".*", pathPattern=".*"; }
 struct PackMount
 {
     string id;
+    string[string] languageNames;
     string[] roots; // highest-priority matching overlay first, then base
     string[string] files; // case-sensitive resource locations on every OS
     ResourceFilter[] filters;
@@ -49,6 +50,7 @@ struct PackMount
 struct ResourcePack
 {
     string id,source,root,description,icon,warning,error;
+    string[string] languageNames;
     string[] overlays;
     ResourceFilter[] filters;
     bool archive;
@@ -125,6 +127,13 @@ private void metadata(ref ResourcePack pack,string text)
         if(matchesFormat(overlay,"formats"))pack.overlays=directory.str~pack.overlays;
     }
     const filters=member(member(document,"filter"),"block");
+    const languages=member(document,"language");
+    if(languages.type==JSONType.object)foreach(code,definition;languages.object)
+    {
+        const name=member(definition,"name"),region=member(definition,"region");
+        if(name.type==JSONType.string)
+            pack.languageNames[code.toLower.replace("-","_")]=name.str~(region.type==JSONType.string?" ("~region.str~")":"");
+    }
     if(filters.type==JSONType.array)foreach(entry;filters.array)
     {
         ResourceFilter filter;
@@ -264,6 +273,7 @@ final class ResourcePackRepository
             catch(Exception failure)
             { notice=id~": "~failure.msg;enforce(!strict,notice);continue; }
             PackMount mount;mount.id=id;mount.filters=pack.filters.dup;
+            mount.languageNames=pack.languageNames.dup;
             foreach(overlay;pack.overlays)mount.roots~=buildPath(pack.root,overlay);
             mount.roots~=pack.root;
             try { indexFiles(mount);addCompatibilityAliases(mount.files); }

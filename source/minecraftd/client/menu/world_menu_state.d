@@ -1,4 +1,5 @@
 module minecraftd.client.menu.world_menu_state;
+import minecraftd.game.resources.languages : tr;
 
 import std.conv : to;
 import std.file : getcwd;
@@ -63,7 +64,7 @@ final class WorldMenuState
     void resetDraft()
     {
         draft = WorldSettings.init;
-        draft.name = "New World";
+        draft.name = tr("selectWorld.newWorld","New World");
         draft.seed = 0;
         draft.folder = "";
         seedInput = "";
@@ -268,9 +269,11 @@ final class WorldMenuState
 
     string modeLabel() const
     {
-        if (draft.hardcore) return "Hardcore";
+        if (draft.hardcore) return tr("options.difficulty.hardcore","Hardcore");
         import minecraftd.world.world_settings : gameModeName;
-        return gameModeName(draft.gameMode);
+        import std.string : toLower;
+        const name=gameModeName(draft.gameMode);
+        return tr("gameMode."~name.toLower,name);
     }
 
     void cycleDifficulty()
@@ -282,7 +285,7 @@ final class WorldMenuState
     string prepareFolder()
     {
         draft.name = strip(draft.name);
-        if (!draft.name.length) draft.name = "New World";
+        if (!draft.name.length) draft.name = tr("selectWorld.newWorld","New World");
         if (editing) return editingDirectory;
         draft.folder = uniqueWorldFolder(root, safeFolderName(draft.name));
         import minecraftd.world.world_settings : savesDirectory;

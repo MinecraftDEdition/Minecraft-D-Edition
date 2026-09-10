@@ -4,6 +4,7 @@ dist/
 test-output/
 resourcepacks/
 data/resource-packs.json
+data/languages.json
 __pycache__/
 *.pyc
 *.exe

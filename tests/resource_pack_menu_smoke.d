@@ -30,7 +30,7 @@ void main(string[] args)
         version(Windows)rmdirRecurse("\\\\?\\"~root);
         else rmdirRecurse(root);
     }
-    auto options=new OptionsMenuState(root);
+    auto options=new OptionsMenuState(root,getcwd());
     foreach(name;["Warm Stone.zip","Classic Grass.zip"])
     {
         auto zip=new ZipArchive();
@@ -46,7 +46,7 @@ void main(string[] args)
     }
     options.open(false);options.activate(OptionsAction.resourcePacksMenu);
     options.resourcePacks.toggle("Warm Stone.zip");
-    if(args.length>1)
+    if(args.length>1&&args[1]!="-")
     {
         copy(args[1],buildPath(options.resourcePacks.folder,"Compatibility.zip"));
         options.resourcePacks.refresh();
@@ -54,6 +54,17 @@ void main(string[] args)
     }
     options.resourcePacks.applied=options.resourcePacks.selected.dup;
     options.resourcePacks.mounts(true);
+    if(args.length>2)
+    {
+        options.languages.configure(options.resourcePacks.mounts(true));options.languages.select(args[2]);
+        assert(options.languages.selected==args[2]);
+        if(args[2]=="ar_sa")
+        {
+            import minecraftd.client.render.text_layout : visualText;
+            assert(visualText("אבג")=="גבא");
+            assert(visualText("سلام")!="سلام");
+        }
+    }
     auto world=new World();scope(exit)destroy(world);
     version(Windows)
     {
@@ -78,6 +89,11 @@ void main(string[] args)
     renderer.preparePackIcons();
     renderer.renderOptionsScreen(-1,-1,0);
     if(args.length>1)renderer.renderTitleScreen(-1,-1,0);
+    if(args.length>3)
+    {
+        options.screen=OptionsScreen.language;
+        renderer.renderOptionsScreen(-1,-1,0);
+    }
     version(Windows)
     {
     auto image=renderer.captureTestFrame();

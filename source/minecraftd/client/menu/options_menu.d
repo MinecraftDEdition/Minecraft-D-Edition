@@ -7,6 +7,7 @@ import std.path : buildPath;
 import std.string : indexOf, splitLines, strip;
 import std.algorithm : canFind;
 import minecraftd.game.resources.resource_packs : ResourcePackRepository;
+import minecraftd.game.resources.languages : LanguageService, tr, translatedLabel;
 
 import minecraftd.client.render.font_renderer : FontRenderer;
 import minecraftd.client.render.mesh : Color, DrawLayer, FrameMesh, Vertex, appendQuad;
@@ -31,7 +32,7 @@ final class OptionsMenuRenderer
             if(spec.action==OptionsAction.none || !spec.enabled
                 || spec.kind==WidgetKind.heading || spec.kind==WidgetKind.display) continue;
             const area=widgetRect(spec,width,height,state);
-            if((spec.row==100 || (area.y>=contentTop(state.screen)
+            if((footer(spec) || (area.y>=contentTop(state.screen)
                 && area.y+area.height<=height-32))
                 && area.contains(mouseX/scale,mouseY/scale)) return spec.action;
         }
@@ -54,17 +55,23 @@ final class OptionsMenuRenderer
             const message=state.resourcePacks.notice.length?state.resourcePacks.notice:"Top pack wins. Missing textures use Default.";
             centered(frame,shortText(message,cast(int)width-12,font),22,width,height,font,fontTexture,Color(.8f,.8f,.8f,1));
         }
+        if(state.screen==OptionsScreen.language)
+        {
+            const message=state.languages.notice.length?state.languages.notice
+                :tr("minecraft_d.language.packHint","* = supplied by a resource pack");
+            centered(frame,shortText(message,cast(int)width-12,font),22,width,height,font,fontTexture,Color(.8f,.8f,.8f,1));
+        }
         foreach(spec;widgetsFor(state))
         {
             const area=widgetRect(spec,cast(int)width,cast(int)height,state);
-            if(spec.row!=100 && (area.y<contentTop(state.screen)
+            if(!footer(spec) && (area.y<contentTop(state.screen)
                 || area.y+area.height>cast(int)height-32)) continue;
             if(spec.kind==WidgetKind.heading)
             {
                 text(frame,spec.fixedLabel,area.x,area.y+6,width,height,font,fontTexture,Color(1,1,1,1));
                 continue;
             }
-            const value=spec.fixedLabel.length?spec.fixedLabel:label(spec.action,state);
+            const value=shortText(spec.fixedLabel.length?spec.fixedLabel:label(spec.action,state),area.width-8,font);
             if(spec.kind==WidgetKind.pack)
             {
                 const packIndex=(cast(int)spec.action-cast(int)OptionsAction.packBase)/3;
@@ -97,7 +104,8 @@ private:
     static string shortText(string value,int maxWidth,const FontRenderer font)
     {
         if(font.width(value)<=maxWidth)return value;
-        while(value.length&&font.width(value~"...")>maxWidth)value=value[0..$-1];
+        import std.array : popBack;
+        while(value.length&&font.width(value~"...")>maxWidth)value.popBack();
         return value~"...";
     }
     static void appendScrollBar(ref FrameMesh frame,const OptionsMenuState state,
@@ -200,6 +208,7 @@ enum OptionsAction : ushort
     highContrastBlockOutlines, openPackFolder, telemetryCollection,
     showCredits, showAttribution, showLicensing,
     packBase=1024,
+    languageAutomatic=2047,languageBase=2048,
 }
 
 struct OptionsTextureSet
@@ -239,15 +248,17 @@ final class OptionsMenuState
     int scrollRow;
     OptionsAction bindingCapture;
     ResourcePackRepository resourcePacks;
+    LanguageService languages;
 
     private string storagePath;
     private string[string] extra;
     private OptionsScreen[] history;
 
-    this(string projectRoot)
+    this(string projectRoot,string resourceRoot="")
     {
         storagePath = buildPath(projectRoot, "data", "options.txt");
         resourcePacks=new ResourcePackRepository(projectRoot);
+        languages=new LanguageService(projectRoot,resourceRoot.length?resourceRoot:projectRoot);
         load();
         constrain();
     }
@@ -438,6 +449,15 @@ final class OptionsMenuState
 
     void activate(OptionsAction a)
     {
+        if(a==OptionsAction.languageAutomatic)
+        {languages.automatic();resourcePacks.reloadRequested=true;return;}
+        if(cast(int)a>=cast(int)OptionsAction.languageBase)
+        {
+            const index=cast(int)a-cast(int)OptionsAction.languageBase;
+            if(index<languages.available.length)
+            {languages.select(languages.available[index].code);resourcePacks.reloadRequested=true;}
+            return;
+        }
         if(cast(int)a>=cast(int)OptionsAction.packBase)
         {
             const raw=cast(int)a-cast(int)OptionsAction.packBase,index=raw/3;
@@ -609,11 +629,11 @@ private WidgetSpec[] widgetsFor(const OptionsMenuState state)
             add(OptionsAction.telemetryMenu,6,0); add(OptionsAction.creditsMenu,6,1);
             add(OptionsAction.done,100,0,true); break;
         case OptionsScreen.online:
-            heading("Friends List",0); add(OptionsAction.friendsList,1,0,false,WidgetKind.button,false); add(OptionsAction.allowFriendRequests,1,1,false,WidgetKind.button,false);
+            heading(tr("gui.friends.open.narration","Friends List"),0); add(OptionsAction.friendsList,1,0,false,WidgetKind.button,false); add(OptionsAction.allowFriendRequests,1,1,false,WidgetKind.button,false);
             add(OptionsAction.inGameNotification,2,0,false,WidgetKind.button,false); add(OptionsAction.sharePresence,2,1,false,WidgetKind.button,false);
             add(OptionsAction.xboxSettings,3,0,true,WidgetKind.button,false);
-            heading("Servers",4); add(OptionsAction.allowServerListing,5,0,true,WidgetKind.button,false);
-            heading("Realms",6); add(OptionsAction.realmsNotifications,7,0,true,WidgetKind.button,false);
+            heading(tr("options.online.servers.header","Servers"),4); add(OptionsAction.allowServerListing,5,0,true,WidgetKind.button,false);
+            heading(tr("options.online.realms.header","Realms"),6); add(OptionsAction.realmsNotifications,7,0,true,WidgetKind.button,false);
             add(OptionsAction.done,100,0,true); break;
         case OptionsScreen.skin:
             add(OptionsAction.cape,0,0,false,WidgetKind.button,false); add(OptionsAction.jacket,0,1);
@@ -633,13 +653,13 @@ private WidgetSpec[] widgetsFor(const OptionsMenuState state)
             add(OptionsAction.musicFrequency,8,0,false,WidgetKind.button,false); add(OptionsAction.musicToast,8,1,false,WidgetKind.button,false);
             add(OptionsAction.done,100,0,true); break;
         case OptionsScreen.video:
-            heading("Display",0); add(OptionsAction.fullscreenResolution,1,0,true,WidgetKind.slider,false);
+            heading(tr("options.video.display.header","Display"),0); add(OptionsAction.fullscreenResolution,1,0,true,WidgetKind.slider,false);
             add(OptionsAction.maxFramerate,2,0,false,WidgetKind.slider); add(OptionsAction.vsync,2,1);
             add(OptionsAction.inactivityFpsLimit,3,0,false,WidgetKind.button,false); add(OptionsAction.guiScale,3,1,false,WidgetKind.button,false);
             add(OptionsAction.fullscreen,4,0); add(OptionsAction.exclusiveFullscreen,4,1,false,WidgetKind.button,false);
             add(OptionsAction.brightness,5,0,false,WidgetKind.slider); add(OptionsAction.graphicsApi,5,1);
             version (OSX) add(OptionsAction.highDpiRendering,6,0,true);
-            heading("Quality & Performance",7); add(OptionsAction.graphicsPreset,8,0); add(OptionsAction.biomeBlend,8,1,false,WidgetKind.slider);
+            heading(tr("options.video.quality.header","Quality & Performance"),7); add(OptionsAction.graphicsPreset,8,0); add(OptionsAction.biomeBlend,8,1,false,WidgetKind.slider);
             add(OptionsAction.renderDistance,9,0,false,WidgetKind.slider); add(OptionsAction.chunkBuilder,9,1,false,WidgetKind.button,false);
             add(OptionsAction.simulationDistance,10,0,false,WidgetKind.slider); add(OptionsAction.smoothLighting,10,1);
             add(OptionsAction.clouds,11,0); add(OptionsAction.particles,11,1);
@@ -648,7 +668,7 @@ private WidgetSpec[] widgetsFor(const OptionsMenuState state)
             add(OptionsAction.cloudDistance,14,0,false,WidgetKind.slider); add(OptionsAction.cutoutLeaves,14,1,false,WidgetKind.button,false);
             add(OptionsAction.improvedTransparency,15,0,false,WidgetKind.button,false); add(OptionsAction.textureFiltering,15,1,false,WidgetKind.button,false);
             add(OptionsAction.anisotropicFiltering,16,0,false,WidgetKind.slider); add(OptionsAction.weatherRadius,16,1,false,WidgetKind.slider);
-            heading("Preferences",17); add(OptionsAction.autosaveIndicator,18,0,false,WidgetKind.button,false); add(OptionsAction.vignette,18,1,false,WidgetKind.button,false);
+            heading(tr("options.video.preferences.header","Preferences"),17); add(OptionsAction.autosaveIndicator,18,0,false,WidgetKind.button,false); add(OptionsAction.vignette,18,1,false,WidgetKind.button,false);
             add(OptionsAction.attackIndicator,19,0,false,WidgetKind.button,false); add(OptionsAction.chunkFade,19,1,false,WidgetKind.slider);
             add(OptionsAction.done,100,0,true); break;
         case OptionsScreen.controls:
@@ -667,15 +687,15 @@ private WidgetSpec[] widgetsFor(const OptionsMenuState state)
             add(OptionsAction.controllerMenu,2,0,true);
             add(OptionsAction.done,100,0,true); break;
         case OptionsScreen.keyboardMouse:
-            heading("Movement",0); add(OptionsAction.bindForward,1,0); add(OptionsAction.bindLeft,1,1);
+            heading(tr("key.category.minecraft.movement","Movement"),0); add(OptionsAction.bindForward,1,0); add(OptionsAction.bindLeft,1,1);
             add(OptionsAction.bindBack,2,0); add(OptionsAction.bindRight,2,1);
             add(OptionsAction.bindJump,3,0); add(OptionsAction.bindSneak,3,1);
-            add(OptionsAction.bindSprint,4,0); heading("Gameplay",5);
+            add(OptionsAction.bindSprint,4,0); heading(tr("key.category.minecraft.gameplay","Gameplay"),5);
             add(OptionsAction.bindAttack,6,0); add(OptionsAction.bindUse,6,1);
             add(OptionsAction.bindPickBlock,7,0); add(OptionsAction.bindDrop,7,1);
             add(OptionsAction.bindInventory,8,0);
-            heading("Multiplayer",9); add(OptionsAction.bindChat,10,0); add(OptionsAction.bindFriends,10,1,false,WidgetKind.button,false);
-            heading("Miscellaneous",11); add(OptionsAction.bindPerspective,12,0);
+            heading(tr("menu.multiplayer","Multiplayer"),9); add(OptionsAction.bindChat,10,0); add(OptionsAction.bindFriends,10,1,false,WidgetKind.button,false);
+            heading(tr("key.category.minecraft.misc","Miscellaneous"),11); add(OptionsAction.bindPerspective,12,0);
             add(OptionsAction.bindHotbar1,13,0); add(OptionsAction.bindHotbar2,13,1);
             add(OptionsAction.bindHotbar3,14,0); add(OptionsAction.bindHotbar4,14,1);
             add(OptionsAction.bindHotbar5,15,0); add(OptionsAction.bindHotbar6,15,1);
@@ -694,9 +714,14 @@ private WidgetSpec[] widgetsFor(const OptionsMenuState state)
             add(OptionsAction.invertControllerY,7,0,true);
             add(OptionsAction.done,100,0,true); break;
         case OptionsScreen.language:
-            heading("Search",0); display("English (US)",1,0);
-            add(OptionsAction.selectedLanguage,2,0,true,WidgetKind.button,false);
-            add(OptionsAction.fontMenu,3,0); add(OptionsAction.done,3,1); break;
+            r~=WidgetSpec(OptionsAction.languageAutomatic,0,0,true,true,WidgetKind.button,
+                tr("minecraft_d.language.automatic","Automatic")~" ("~state.languages.detected~")");
+            foreach(index,language;state.languages.available)
+                r~=WidgetSpec(cast(OptionsAction)(cast(int)OptionsAction.languageBase+index),
+                    cast(int)index+1,0,true,true,WidgetKind.button,
+                    (language.code==state.languages.selected?"> ":"")~language.name
+                    ~(language.suppliedByPack?" *":""));
+            add(OptionsAction.done,100,0,true);break;
         case OptionsScreen.font:
             add(OptionsAction.forceUnicodeFont,0,0,false,WidgetKind.button,false); add(OptionsAction.japaneseGlyphVariants,0,1,false,WidgetKind.button,false);
             add(OptionsAction.done,100,0,true); break;
@@ -764,7 +789,7 @@ private WidgetSpec[] widgetsFor(const OptionsMenuState state)
 private OptionRect widgetRect(WidgetSpec spec,int width,int height,const OptionsMenuState state)
 {
     const center=width/2,left=center-154,right=center+2;
-    if(spec.row==100)
+    if(footer(spec))
     {
         if(state.screen==OptionsScreen.resourcePacks&&!spec.fullWidth)
             return OptionRect(spec.column==0?left:right,height-28,152,20);
@@ -797,13 +822,15 @@ private int maximumScrollRow(uint viewportWidth,uint viewportHeight,
 {
     int width=cast(int)viewportWidth,height=cast(int)viewportHeight;
     if(!alreadyLogical){const scale=guiScale(viewportWidth,viewportHeight);width/=scale;height/=scale;}
-    int maxRow; foreach(spec;widgetsFor(state))if(spec.row!=100)
+    int maxRow; foreach(spec;widgetsFor(state))if(!footer(spec))
     { const lastRow=spec.row+(spec.kind==WidgetKind.pack?1:0);if(lastRow>maxRow)maxRow=lastRow; }
     const visible=(height-contentTop(state.screen)-34)/24;
     return clampInt(maxRow-visible+1,0,maxRow);
 }
 
 private int contentTop(OptionsScreen screen){return screen==OptionsScreen.main?29:38;}
+private bool footer(WidgetSpec spec)
+{return spec.row==100&&cast(int)spec.action<cast(int)OptionsAction.languageBase;}
 
 private OptionsScreen destinationScreen(OptionsAction a)
 {
@@ -825,53 +852,56 @@ private string screenTitle(OptionsScreen s)
 {
     final switch(s)
     {
-        case OptionsScreen.main:return "Options"; case OptionsScreen.online:return "Online Options";
-        case OptionsScreen.skin:return "Skin Customization"; case OptionsScreen.sounds:return "Music & Sound Options";
-        case OptionsScreen.video:return "Video Settings"; case OptionsScreen.controls:return "Controls";
-        case OptionsScreen.mouse:return "Mouse Settings"; case OptionsScreen.keyBinds:return "Key Binds";
+        case OptionsScreen.main:return tr("options.title","Options"); case OptionsScreen.online:return tr("options.online.title","Online Options");
+        case OptionsScreen.skin:return tr("options.skinCustomisation.title","Skin Customization"); case OptionsScreen.sounds:return tr("options.sounds.title","Music & Sound Options");
+        case OptionsScreen.video:return tr("options.videoTitle","Video Settings"); case OptionsScreen.controls:return tr("controls.title","Controls");
+        case OptionsScreen.mouse:return tr("options.mouse_settings.title","Mouse Settings"); case OptionsScreen.keyBinds:return tr("controls.keybinds.title","Key Binds");
         case OptionsScreen.keyboardMouse:return "Keyboard & Mouse"; case OptionsScreen.controller:return "Controller";
-        case OptionsScreen.language:return "Language"; case OptionsScreen.font:return "Font Settings";
-        case OptionsScreen.chat:return "Chat Settings"; case OptionsScreen.resourcePacks:return "Select Resource Packs";
-        case OptionsScreen.accessibility:return "Accessibility Settings"; case OptionsScreen.telemetry:return "Telemetry Data";
+        case OptionsScreen.language:return tr("options.language","Language"); case OptionsScreen.font:return tr("options.font.title","Font Settings");
+        case OptionsScreen.chat:return tr("options.chat.title","Chat Settings"); case OptionsScreen.resourcePacks:return tr("resourcePack.title","Select Resource Packs");
+        case OptionsScreen.accessibility:return tr("options.accessibility.title","Accessibility Settings"); case OptionsScreen.telemetry:return "Telemetry Data";
         case OptionsScreen.credits:return "Credits & Attribution";
     }
 }
 
 private string label(OptionsAction a,const OptionsMenuState s)
+{return translatedLabel(rawLabel(a,s));}
+
+private string rawLabel(OptionsAction a,const OptionsMenuState s)
 {
-    string toggle(string n,bool v){return n~": "~(v?"ON":"OFF");}
+    string toggle(string n,bool v){return n~": "~(v?tr("options.on","ON"):tr("options.off","OFF"));}
     string volume(string n,float v){return v<=.001f?n~": OFF":format("%s: %s%%",n,cast(int)(v*100));}
     string percent(string n,float v){return format("%s: %s%%",n,cast(int)(v*100));}
     string choice(string n,string[] values,int selected)
     {return n~": "~values[clampInt(selected,0,cast(int)values.length-1)];}
     switch(a)
     {
-        case OptionsAction.done:return "Done";
+        case OptionsAction.done:return tr("addServer.add","Done");
         case OptionsAction.fov:return cast(int)s.fov==70?"FOV: Normal":(cast(int)s.fov==110?"FOV: Quake Pro":"FOV: "~to!string(cast(int)s.fov));
-        case OptionsAction.onlineMenu:return "Online..."; case OptionsAction.skinMenu:return "Skin Customization...";
-        case OptionsAction.soundsMenu:return "Music & Sounds..."; case OptionsAction.videoMenu:return "Video Settings...";
-        case OptionsAction.controlsMenu:return "Controls..."; case OptionsAction.languageMenu:return "Language...";
-        case OptionsAction.chatMenu:return "Chat Settings..."; case OptionsAction.resourcePacksMenu:return "Resource Packs...";
-        case OptionsAction.accessibilityMenu:return "Accessibility Settings..."; case OptionsAction.telemetryMenu:return "Telemetry Data...";
-        case OptionsAction.creditsMenu:return "Credits & Attribution..."; case OptionsAction.mouseMenu:return "Mouse Settings...";
-        case OptionsAction.keyBindsMenu:return "Key Binds..."; case OptionsAction.fontMenu:return "Font Settings...";
+        case OptionsAction.onlineMenu:return tr("options.online","Online..."); case OptionsAction.skinMenu:return tr("options.skinCustomisation","Skin Customization...");
+        case OptionsAction.soundsMenu:return tr("options.sounds","Music & Sounds..."); case OptionsAction.videoMenu:return tr("options.video","Video Settings...");
+        case OptionsAction.controlsMenu:return tr("options.controls","Controls..."); case OptionsAction.languageMenu:return tr("options.language","Language...");
+        case OptionsAction.chatMenu:return tr("options.chat","Chat Settings..."); case OptionsAction.resourcePacksMenu:return tr("options.resourcepack","Resource Packs...");
+        case OptionsAction.accessibilityMenu:return tr("options.accessibility","Accessibility Settings..."); case OptionsAction.telemetryMenu:return tr("options.telemetry","Telemetry Data...");
+        case OptionsAction.creditsMenu:return tr("options.credits_and_attribution","Credits & Attribution..."); case OptionsAction.mouseMenu:return tr("options.mouse_settings","Mouse Settings...");
+        case OptionsAction.keyBindsMenu:return tr("controls.keybinds","Key Binds..."); case OptionsAction.fontMenu:return tr("options.font","Font Settings...");
         case OptionsAction.keyboardMouseMenu:return "Keyboard & Mouse"; case OptionsAction.controllerMenu:return "Controller";
-        case OptionsAction.masterVolume:return volume("Master Volume",s.masterVolume);
-        case OptionsAction.soundVolume:return volume("Blocks",s.soundVolume);
-        case OptionsAction.fullscreen:return toggle("Fullscreen",s.fullscreen);
-        case OptionsAction.viewBobbing:return toggle("View Bobbing",s.viewBobbing);
-        case OptionsAction.entityShadows:return toggle("Entity Shadows",s.entityShadows);
-        case OptionsAction.invertMouseX:return toggle("Invert Mouse X",s.invertMouseX);
-        case OptionsAction.invertMouseY:return toggle("Invert Mouse Y",s.invertMouse);
-        case OptionsAction.allowCursorChanges:return toggle("Allow Cursor Changes",s.allowCursorChanges);
-        case OptionsAction.musicVolume:return volume("Music",s.number("soundCategory_music",1));
-        case OptionsAction.recordVolume:return volume("Jukebox/Note Blocks",s.number("soundCategory_record",1));
-        case OptionsAction.weatherVolume:return volume("Weather",s.number("soundCategory_weather",1));
-        case OptionsAction.hostileVolume:return volume("Hostile Mobs",s.number("soundCategory_hostile",1));
-        case OptionsAction.neutralVolume:return volume("Friendly Mobs",s.number("soundCategory_neutral",1));
-        case OptionsAction.playerVolume:return volume("Players",s.number("soundCategory_player",1));
-        case OptionsAction.ambientVolume:return volume("Ambient/Environment",s.number("soundCategory_ambient",1));
-        case OptionsAction.voiceVolume:return volume("Narrator/Voice",s.number("soundCategory_voice",1));
+        case OptionsAction.masterVolume:return volume(tr("soundCategory.master","Master Volume"),s.masterVolume);
+        case OptionsAction.soundVolume:return volume(tr("soundCategory.block","Blocks"),s.soundVolume);
+        case OptionsAction.fullscreen:return toggle(tr("options.fullscreen","Fullscreen"),s.fullscreen);
+        case OptionsAction.viewBobbing:return toggle(tr("options.viewBobbing","View Bobbing"),s.viewBobbing);
+        case OptionsAction.entityShadows:return toggle(tr("options.entityShadows","Entity Shadows"),s.entityShadows);
+        case OptionsAction.invertMouseX:return toggle(tr("options.invertMouseX","Invert Mouse X"),s.invertMouseX);
+        case OptionsAction.invertMouseY:return toggle(tr("options.invertMouseY","Invert Mouse Y"),s.invertMouse);
+        case OptionsAction.allowCursorChanges:return toggle(tr("options.allowCursorChanges","Allow Cursor Changes"),s.allowCursorChanges);
+        case OptionsAction.musicVolume:return volume(tr("soundCategory.music","Music"),s.number("soundCategory_music",1));
+        case OptionsAction.recordVolume:return volume(tr("soundCategory.record","Jukebox/Note Blocks"),s.number("soundCategory_record",1));
+        case OptionsAction.weatherVolume:return volume(tr("soundCategory.weather","Weather"),s.number("soundCategory_weather",1));
+        case OptionsAction.hostileVolume:return volume(tr("soundCategory.hostile","Hostile Mobs"),s.number("soundCategory_hostile",1));
+        case OptionsAction.neutralVolume:return volume(tr("soundCategory.neutral","Friendly Mobs"),s.number("soundCategory_neutral",1));
+        case OptionsAction.playerVolume:return volume(tr("soundCategory.player","Players"),s.number("soundCategory_player",1));
+        case OptionsAction.ambientVolume:return volume(tr("soundCategory.ambient","Ambient/Environment"),s.number("soundCategory_ambient",1));
+        case OptionsAction.voiceVolume:return volume(tr("soundCategory.voice","Narrator/Voice"),s.number("soundCategory_voice",1));
         case OptionsAction.uiVolume:return volume("UI",s.number("soundCategory_ui",1));
         case OptionsAction.audioDevice:return "Device: System Default";
         case OptionsAction.fullscreenResolution:return "Fullscreen Resolution: Current";
@@ -881,19 +911,19 @@ private string label(OptionsAction a,const OptionsMenuState s)
         case OptionsAction.graphicsApi:return s.integer("graphicsApi",0)==1
             ? "Graphics API: Vulkan (restart)" : "Graphics API: DirectX 12 (restart)";
         case OptionsAction.maxFramerate:return "Max Framerate: "~to!string(s.integer("maxFps",260))~" fps";
-        case OptionsAction.brightness:return percent("Brightness",s.number("gamma",.5f));
+        case OptionsAction.brightness:return percent(tr("options.gamma","Brightness"),s.number("gamma",.5f));
         case OptionsAction.biomeBlend:
             const blend=s.integer("biomeBlendRadius",5); return format("Biome Blend: %sx%s",blend,blend);
         case OptionsAction.renderDistance:return "Render Distance: "~to!string(s.integer("renderDistance",6))~" Chunks";
         case OptionsAction.simulationDistance:return "Simulation Distance: "~to!string(s.integer("simulationDistance",5))~" Chunks";
         case OptionsAction.mipmapLevels:return "Mipmap Levels: "~to!string(s.integer("mipmapLevels",4));
-        case OptionsAction.entityDistance:return percent("Entity Distance",s.number("entityDistanceScaling",1));
+        case OptionsAction.entityDistance:return percent(tr("options.entityDistanceScaling","Entity Distance"),s.number("entityDistanceScaling",1));
         case OptionsAction.menuBackgroundBlur:return "Menu Background Blur: "~to!string(s.integer("menuBackgroundBlurriness",5));
         case OptionsAction.cloudDistance:return "Cloud Distance: "~to!string(s.integer("renderCloudsDistance",64))~" Chunks";
         case OptionsAction.anisotropicFiltering:return "Anisotropic Filtering: "~to!string(s.integer("maxAnisotropy",4))~"x";
         case OptionsAction.weatherRadius:return "Weather Effect Radius: "~to!string(s.integer("weatherRadius",10))~" Blocks";
-        case OptionsAction.chunkFade:return s.number("chunkFade",.75f)<=.01f?"Chunk Fade: None":format("Chunk Fade: %.2f seconds",s.number("chunkFade",.75f));
-        case OptionsAction.sensitivity:return percent("Sensitivity",s.mouseSensitivity);
+        case OptionsAction.chunkFade:return s.number("chunkFade",.75f)<=.01f?tr("options.chunkFade.none","Chunk Fade: None"):format("Chunk Fade: %.2f seconds",s.number("chunkFade",.75f));
+        case OptionsAction.sensitivity:return percent(tr("options.sensitivity","Sensitivity"),s.mouseSensitivity);
         case OptionsAction.controllerSensitivity:
             return percent("Controller Sensitivity",
                 s.number("controllerSensitivity",.15f));
@@ -902,45 +932,45 @@ private string label(OptionsAction a,const OptionsMenuState s)
                 s.number("controllerDeadzone",.05f));
         case OptionsAction.scrollSensitivity:return format("Scroll Sensitivity: %.2f",s.number("mouseWheelSensitivity",1));
         case OptionsAction.sprintWindow:return "Sprint Window: "~to!string(s.integer("sprintWindow",7));
-        case OptionsAction.chatOpacity:return percent("Chat Text Opacity",s.number("chatOpacity",1));
-        case OptionsAction.textBackgroundOpacity:return percent("Text Background Opacity",s.number("textBackgroundOpacity",.5f));
-        case OptionsAction.chatScale:return percent("Chat Text Size",s.number("chatScale",1));
-        case OptionsAction.lineSpacing:return percent("Line Spacing",s.number("chatLineSpacing",0));
-        case OptionsAction.chatDelay:return s.number("chatDelay",0)<=.01f?"Chat Delay: None":format("Chat Delay: %.1f seconds",s.number("chatDelay",0));
+        case OptionsAction.chatOpacity:return percent(tr("options.chat.opacity","Chat Text Opacity"),s.number("chatOpacity",1));
+        case OptionsAction.textBackgroundOpacity:return percent(tr("options.accessibility.text_background_opacity","Text Background Opacity"),s.number("textBackgroundOpacity",.5f));
+        case OptionsAction.chatScale:return percent(tr("options.chat.scale","Chat Text Size"),s.number("chatScale",1));
+        case OptionsAction.lineSpacing:return percent(tr("options.chat.line_spacing","Line Spacing"),s.number("chatLineSpacing",0));
+        case OptionsAction.chatDelay:return s.number("chatDelay",0)<=.01f?tr("options.chat.delay_none","Chat Delay: None"):format("Chat Delay: %.1f seconds",s.number("chatDelay",0));
         case OptionsAction.chatWidth:return "Width: "~to!string(cast(int)(40+s.number("chatWidth",1)*280))~"px";
         case OptionsAction.focusedHeight:return "Focused Height: "~to!string(cast(int)(20+s.number("chatHeightFocused",1)*160))~"px";
         case OptionsAction.unfocusedHeight:return "Unfocused Height: "~to!string(cast(int)(20+s.number("chatHeightUnfocused",.44f)*160))~"px";
         case OptionsAction.notificationTime:return format("Notification Time: %.1fx",s.number("notificationTime",1));
-        case OptionsAction.distortionEffects:return percent("Distortion Effects",s.number("screenEffectScale",1));
-        case OptionsAction.fovEffects:return percent("FOV Effects",s.number("fovEffectScale",1));
-        case OptionsAction.darknessPulsing:return percent("Darkness Pulsing",s.number("darknessEffectScale",1));
-        case OptionsAction.damageTilt:return percent("Damage Tilt",s.number("damageTiltStrength",1));
-        case OptionsAction.glintSpeed:return percent("Glint Speed",s.number("glintSpeed",.5f));
-        case OptionsAction.glintStrength:return percent("Glint Strength",s.number("glintStrength",.75f));
-        case OptionsAction.panoramaSpeed:return percent("Panorama Scroll Speed",s.number("panoramaSpeed",1));
-        case OptionsAction.sharePresence:return choice("Visibility",["Hidden","Limited","Full"],s.integer("sharePresence",2));
-        case OptionsAction.mainHand:return choice("Main Hand",["Left","Right"],s.integer("mainHand",1));
-        case OptionsAction.musicFrequency:return choice("Music Frequency",["Default","Frequent","Constant"],s.integer("musicFrequency",0));
-        case OptionsAction.musicToast:return choice("Music Toast",["Never","Pause Menu","Pause Menu and Toast"],s.integer("musicToast",0));
-        case OptionsAction.inactivityFpsLimit:return choice("Reduce FPS when",["AFK","Minimized"],s.integer("inactivityFpsLimit",0));
-        case OptionsAction.guiScale:return choice("GUI Scale",["Auto","1","2","3","4"],s.integer("guiScale",0));
-        case OptionsAction.graphicsPreset:return choice("Preset",["Fast","Fancy","Fabulous!","Custom"],s.integer("graphicsPreset",1));
-        case OptionsAction.chunkBuilder:return choice("Chunk Builder",["Threaded","Semi Blocking","Fully Blocking"],s.integer("prioritizeChunkUpdates",1));
-        case OptionsAction.smoothLighting:return choice("Smooth Lighting",["OFF","Minimum","Maximum"],s.integer("ao",2));
-        case OptionsAction.clouds:return choice("Clouds",["OFF","Fast","Fancy"],s.integer("renderClouds",s.clouds?2:0));
-        case OptionsAction.particles:return choice("Particles",["All","Decreased","Minimal"],s.integer("particles",0));
-        case OptionsAction.textureFiltering:return choice("Texture Filtering",["None","RGSS","Anisotropic"],s.integer("textureFiltering",1));
-        case OptionsAction.attackIndicator:return choice("Attack Indicator",["OFF","Crosshair","Hotbar"],s.integer("attackIndicator",1));
-        case OptionsAction.sneakMode:return choice("Sneak",["Hold","Toggle"],s.integer("sneakMode",0));
-        case OptionsAction.sprintMode:return choice("Sprint",["Hold","Toggle"],s.integer("sprintMode",0));
-        case OptionsAction.attackMode:return choice("Attack/Destroy",["Hold","Toggle"],s.integer("attackMode",0));
-        case OptionsAction.useMode:return choice("Use Item/Place Block",["Hold","Toggle"],s.integer("useMode",0));
-        case OptionsAction.chatVisibility:return choice("Chat",["Shown","Commands Only","Hidden"],s.integer("chatVisibility",0));
-        case OptionsAction.narrator:return choice("Narrator",["OFF","Narrates All","Narrates Chat","Narrates System"],s.integer("narrator",0));
-        case OptionsAction.textBackgroundMode:return choice("Text Background",["Chat","Everywhere"],s.integer("textBackgroundMode",0));
+        case OptionsAction.distortionEffects:return percent(tr("options.screenEffectScale","Distortion Effects"),s.number("screenEffectScale",1));
+        case OptionsAction.fovEffects:return percent(tr("options.fovEffectScale","FOV Effects"),s.number("fovEffectScale",1));
+        case OptionsAction.darknessPulsing:return percent(tr("options.darknessEffectScale","Darkness Pulsing"),s.number("darknessEffectScale",1));
+        case OptionsAction.damageTilt:return percent(tr("options.damageTiltStrength","Damage Tilt"),s.number("damageTiltStrength",1));
+        case OptionsAction.glintSpeed:return percent(tr("options.glintSpeed","Glint Speed"),s.number("glintSpeed",.5f));
+        case OptionsAction.glintStrength:return percent(tr("options.glintStrength","Glint Strength"),s.number("glintStrength",.75f));
+        case OptionsAction.panoramaSpeed:return percent(tr("options.accessibility.panorama_speed","Panorama Scroll Speed"),s.number("panoramaSpeed",1));
+        case OptionsAction.sharePresence:return choice(tr("options.sharePresence","Visibility"),[tr("gui.socialInteractions.status_hidden","Hidden"),tr("options.sharePresence.limited","Limited"),tr("options.sharePresence.all","Full")],s.integer("sharePresence",2));
+        case OptionsAction.mainHand:return choice(tr("options.mainHand","Main Hand"),[tr("options.mainHand.left","Left"),tr("options.mainHand.right","Right")],s.integer("mainHand",1));
+        case OptionsAction.musicFrequency:return choice(tr("options.music_frequency","Music Frequency"),[tr("options.gamma.default","Default"),tr("options.music_frequency.frequent","Frequent"),tr("options.music_frequency.constant","Constant")],s.integer("musicFrequency",0));
+        case OptionsAction.musicToast:return choice(tr("options.musicToast","Music Toast"),[tr("options.musicToast.never","Never"),tr("options.musicToast.pauseMenu","Pause Menu"),tr("options.musicToast.pauseMenuAndToast","Pause Menu and Toast")],s.integer("musicToast",0));
+        case OptionsAction.inactivityFpsLimit:return choice(tr("options.inactivityFpsLimit","Reduce FPS when"),[tr("options.inactivityFpsLimit.afk","AFK"),tr("options.inactivityFpsLimit.minimized","Minimized")],s.integer("inactivityFpsLimit",0));
+        case OptionsAction.guiScale:return choice(tr("options.guiScale","GUI Scale"),[tr("options.guiScale.auto","Auto"),"1","2","3","4"],s.integer("guiScale",0));
+        case OptionsAction.graphicsPreset:return choice(tr("options.graphics.preset","Preset"),[tr("options.clouds.fast","Fast"),tr("options.clouds.fancy","Fancy"),tr("options.graphics.fabulous","Fabulous!"),tr("options.graphics.custom","Custom")],s.integer("graphicsPreset",1));
+        case OptionsAction.chunkBuilder:return choice(tr("options.prioritizeChunkUpdates","Chunk Builder"),[tr("options.prioritizeChunkUpdates.none","Threaded"),tr("options.prioritizeChunkUpdates.byPlayer","Semi Blocking"),tr("options.prioritizeChunkUpdates.nearby","Fully Blocking")],s.integer("prioritizeChunkUpdates",1));
+        case OptionsAction.smoothLighting:return choice(tr("options.ao","Smooth Lighting"),[tr("options.off","OFF"),tr("options.ao.min","Minimum"),tr("options.ao.max","Maximum")],s.integer("ao",2));
+        case OptionsAction.clouds:return choice(tr("options.renderClouds","Clouds"),[tr("options.off","OFF"),tr("options.clouds.fast","Fast"),tr("options.clouds.fancy","Fancy")],s.integer("renderClouds",s.clouds?2:0));
+        case OptionsAction.particles:return choice(tr("options.particles","Particles"),[tr("gui.all","All"),tr("options.particles.decreased","Decreased"),tr("options.particles.minimal","Minimal")],s.integer("particles",0));
+        case OptionsAction.textureFiltering:return choice(tr("options.textureFiltering","Texture Filtering"),[tr("gui.none","None"),tr("options.textureFiltering.rgss","RGSS"),tr("options.textureFiltering.anisotropic","Anisotropic")],s.integer("textureFiltering",1));
+        case OptionsAction.attackIndicator:return choice(tr("options.attackIndicator","Attack Indicator"),[tr("options.off","OFF"),tr("options.attack.crosshair","Crosshair"),tr("options.attack.hotbar","Hotbar")],s.integer("attackIndicator",1));
+        case OptionsAction.sneakMode:return choice(tr("key.sneak","Sneak"),[tr("options.key.hold","Hold"),tr("options.key.toggle","Toggle")],s.integer("sneakMode",0));
+        case OptionsAction.sprintMode:return choice(tr("key.sprint","Sprint"),[tr("options.key.hold","Hold"),tr("options.key.toggle","Toggle")],s.integer("sprintMode",0));
+        case OptionsAction.attackMode:return choice(tr("key.attack","Attack/Destroy"),[tr("options.key.hold","Hold"),tr("options.key.toggle","Toggle")],s.integer("attackMode",0));
+        case OptionsAction.useMode:return choice(tr("key.use","Use Item/Place Block"),[tr("options.key.hold","Hold"),tr("options.key.toggle","Toggle")],s.integer("useMode",0));
+        case OptionsAction.chatVisibility:return choice(tr("options.accessibility.text_background.chat","Chat"),[tr("options.chat.visibility.full","Shown"),tr("options.chat.visibility.system","Commands Only"),tr("gui.socialInteractions.status_hidden","Hidden")],s.integer("chatVisibility",0));
+        case OptionsAction.narrator:return choice(tr("options.narrator","Narrator"),[tr("options.off","OFF"),tr("options.narrator.all","Narrates All"),tr("options.narrator.chat","Narrates Chat"),tr("options.narrator.system","Narrates System")],s.integer("narrator",0));
+        case OptionsAction.textBackgroundMode:return choice(tr("options.accessibility.text_background","Text Background"),[tr("options.accessibility.text_background.chat","Chat"),tr("options.accessibility.text_background.everywhere","Everywhere")],s.integer("textBackgroundMode",0));
         case OptionsAction.telemetryCollection:return "Data Collection: None";
         case OptionsAction.selectedLanguage:return "English (US)"; case OptionsAction.openPackFolder:return "Open Pack Folder";
-        case OptionsAction.resetKeys:return "Reset Keys"; case OptionsAction.xboxSettings:return "Xbox Settings...";
+        case OptionsAction.resetKeys:return tr("controls.resetAll","Reset Keys"); case OptionsAction.xboxSettings:return tr("options.online.xboxSettings","Xbox Settings...");
         case OptionsAction.showCredits:return "Credits"; case OptionsAction.showAttribution:return "Attribution";
         case OptionsAction.showLicensing:return "Licensing";
         default:
@@ -1025,19 +1055,19 @@ private string bindingName(OptionsAction a)
 {
     switch(a)
     {
-        case OptionsAction.bindForward:return"Forward"; case OptionsAction.bindBack:return"Back";
-        case OptionsAction.bindLeft:return"Left"; case OptionsAction.bindRight:return"Right";
-        case OptionsAction.bindJump:return"Jump"; case OptionsAction.bindSneak:return"Sneak";
-        case OptionsAction.bindSprint:return"Sprint"; case OptionsAction.bindAttack:return"Attack/Destroy";
-        case OptionsAction.bindUse:return"Use Item/Place Block"; case OptionsAction.bindPickBlock:return"Pick Block";
-        case OptionsAction.bindDrop:return"Drop Selected Item";
-        case OptionsAction.bindInventory:return"Open/Close Inventory"; case OptionsAction.bindChat:return"Open Chat";
-        case OptionsAction.bindFriends:return"Friends List"; case OptionsAction.bindPerspective:return"Toggle Perspective";
-        case OptionsAction.bindHotbar1:return"Hotbar Slot 1"; case OptionsAction.bindHotbar2:return"Hotbar Slot 2";
-        case OptionsAction.bindHotbar3:return"Hotbar Slot 3"; case OptionsAction.bindHotbar4:return"Hotbar Slot 4";
-        case OptionsAction.bindHotbar5:return"Hotbar Slot 5"; case OptionsAction.bindHotbar6:return"Hotbar Slot 6";
-        case OptionsAction.bindHotbar7:return"Hotbar Slot 7"; case OptionsAction.bindHotbar8:return"Hotbar Slot 8";
-        case OptionsAction.bindHotbar9:return"Hotbar Slot 9"; default:return"";
+        case OptionsAction.bindForward:return"Forward"; case OptionsAction.bindBack:return tr("gui.back","Back");
+        case OptionsAction.bindLeft:return tr("options.mainHand.left","Left"); case OptionsAction.bindRight:return tr("options.mainHand.right","Right");
+        case OptionsAction.bindJump:return tr("key.jump","Jump"); case OptionsAction.bindSneak:return tr("key.sneak","Sneak");
+        case OptionsAction.bindSprint:return tr("key.sprint","Sprint"); case OptionsAction.bindAttack:return tr("key.attack","Attack/Destroy");
+        case OptionsAction.bindUse:return tr("key.use","Use Item/Place Block"); case OptionsAction.bindPickBlock:return tr("key.pickItem","Pick Block");
+        case OptionsAction.bindDrop:return tr("key.drop","Drop Selected Item");
+        case OptionsAction.bindInventory:return tr("key.inventory","Open/Close Inventory"); case OptionsAction.bindChat:return tr("key.chat","Open Chat");
+        case OptionsAction.bindFriends:return tr("gui.friends.open.narration","Friends List"); case OptionsAction.bindPerspective:return tr("key.togglePerspective","Toggle Perspective");
+        case OptionsAction.bindHotbar1:return tr("key.hotbar.1","Hotbar Slot 1"); case OptionsAction.bindHotbar2:return tr("key.hotbar.2","Hotbar Slot 2");
+        case OptionsAction.bindHotbar3:return tr("key.hotbar.3","Hotbar Slot 3"); case OptionsAction.bindHotbar4:return tr("key.hotbar.4","Hotbar Slot 4");
+        case OptionsAction.bindHotbar5:return tr("key.hotbar.5","Hotbar Slot 5"); case OptionsAction.bindHotbar6:return tr("key.hotbar.6","Hotbar Slot 6");
+        case OptionsAction.bindHotbar7:return tr("key.hotbar.7","Hotbar Slot 7"); case OptionsAction.bindHotbar8:return tr("key.hotbar.8","Hotbar Slot 8");
+        case OptionsAction.bindHotbar9:return tr("key.hotbar.9","Hotbar Slot 9"); default:return"";
     }
 }
 
@@ -1047,13 +1077,13 @@ private string virtualKeyName(int key)
     switch(key)
     {
         case 0x01:return"Button 1"; case 0x02:return"Button 2"; case 0x04:return"Button 3";
-        case 0x08:return"Backspace"; case 0x09:return"Tab"; case 0x0D:return"Enter";
-        case 0x10:return"Left Shift"; case 0x11:return"Left Control"; case 0x12:return"Alt";
-        case 0x1B:return"Escape"; case 0x20:return"Space"; case 0x25:return"Left Arrow";
-        case 0x26:return"Up Arrow"; case 0x27:return"Right Arrow"; case 0x28:return"Down Arrow";
+        case 0x08:return tr("key.keyboard.backspace","Backspace"); case 0x09:return tr("key.keyboard.tab","Tab"); case 0x0D:return tr("key.keyboard.enter","Enter");
+        case 0x10:return tr("key.keyboard.left.shift","Left Shift"); case 0x11:return tr("key.keyboard.left.control","Left Control"); case 0x12:return"Alt";
+        case 0x1B:return tr("key.keyboard.escape","Escape"); case 0x20:return tr("key.keyboard.space","Space"); case 0x25:return tr("key.keyboard.left","Left Arrow");
+        case 0x26:return tr("key.keyboard.up","Up Arrow"); case 0x27:return tr("key.keyboard.right","Right Arrow"); case 0x28:return tr("key.keyboard.down","Down Arrow");
         case 0x70:return"F1"; case 0x71:return"F2"; case 0x72:return"F3"; case 0x73:return"F4";
         case 0x74:return"F5"; case 0x75:return"F6"; case 0x76:return"F7"; case 0x77:return"F8";
-        case 0x78:return"F9"; case 0x79:return"F10"; case 0x7A:return"F11"; case 0x7B:return"F12";
+        case 0x78:return"F9"; case 0x79:return tr("key.keyboard.f10","F10"); case 0x7A:return tr("key.keyboard.f11","F11"); case 0x7B:return tr("key.keyboard.f12","F12");
         default:return"Key "~to!string(key);
     }
 }
@@ -1098,28 +1128,28 @@ private string booleanName(OptionsAction a)
 {
     switch(a)
     {
-        case OptionsAction.friendsList:return"Friends List"; case OptionsAction.allowFriendRequests:return"Allow Requests";
-        case OptionsAction.inGameNotification:return"In-Game Notification"; case OptionsAction.allowServerListing:return"Allow Server Listings";
-        case OptionsAction.realmsNotifications:return"Realms News & Invites"; case OptionsAction.cape:return"Cape";
-        case OptionsAction.jacket:return"Jacket"; case OptionsAction.leftSleeve:return"Left Sleeve";
-        case OptionsAction.rightSleeve:return"Right Sleeve"; case OptionsAction.leftPantLeg:return"Left Pant Leg";
-        case OptionsAction.rightPantLeg:return"Right Pant Leg"; case OptionsAction.hat:return"Hat";
-        case OptionsAction.subtitles:return"Closed Captions"; case OptionsAction.directionalAudio:return"Directional Audio";
-        case OptionsAction.vsync:return"VSync"; case OptionsAction.highDpiRendering:return"Retina Rendering";
-        case OptionsAction.cutoutLeaves:return"See-Through Leaves";
-        case OptionsAction.improvedTransparency:return"Improved Transparency"; case OptionsAction.autosaveIndicator:return"Autosave Indicator";
-        case OptionsAction.vignette:return"Show Vignette"; case OptionsAction.autoJump:return"Auto-Jump";
-        case OptionsAction.operatorItemsTab:return"Operator Items Tab"; case OptionsAction.discreteScrolling:return"Discrete Scrolling";
-        case OptionsAction.rawInput:return"Raw Input"; case OptionsAction.forceUnicodeFont:return"Force Unicode Font";
+        case OptionsAction.friendsList:return tr("gui.friends.open.narration","Friends List"); case OptionsAction.allowFriendRequests:return tr("options.allowFriendRequests","Allow Requests");
+        case OptionsAction.inGameNotification:return tr("options.inGameNotification","In-Game Notification"); case OptionsAction.allowServerListing:return tr("options.allowServerListing","Allow Server Listings");
+        case OptionsAction.realmsNotifications:return tr("options.realmsNotifications","Realms News & Invites"); case OptionsAction.cape:return tr("options.modelPart.cape","Cape");
+        case OptionsAction.jacket:return tr("options.modelPart.jacket","Jacket"); case OptionsAction.leftSleeve:return tr("options.modelPart.left_sleeve","Left Sleeve");
+        case OptionsAction.rightSleeve:return tr("options.modelPart.right_sleeve","Right Sleeve"); case OptionsAction.leftPantLeg:return tr("options.modelPart.left_pants_leg","Left Pant Leg");
+        case OptionsAction.rightPantLeg:return tr("options.modelPart.right_pants_leg","Right Pant Leg"); case OptionsAction.hat:return tr("options.modelPart.hat","Hat");
+        case OptionsAction.subtitles:return tr("options.showSubtitles","Closed Captions"); case OptionsAction.directionalAudio:return tr("options.directionalAudio","Directional Audio");
+        case OptionsAction.vsync:return tr("options.vsync","VSync"); case OptionsAction.highDpiRendering:return"Retina Rendering";
+        case OptionsAction.cutoutLeaves:return tr("options.cutoutLeaves","See-Through Leaves");
+        case OptionsAction.improvedTransparency:return tr("options.improvedTransparency","Improved Transparency"); case OptionsAction.autosaveIndicator:return tr("options.autosaveIndicator","Autosave Indicator");
+        case OptionsAction.vignette:return tr("options.vignette","Show Vignette"); case OptionsAction.autoJump:return tr("options.autoJump","Auto-Jump");
+        case OptionsAction.operatorItemsTab:return tr("options.operatorItemsTab","Operator Items Tab"); case OptionsAction.discreteScrolling:return tr("options.discrete_mouse_scroll","Discrete Scrolling");
+        case OptionsAction.rawInput:return tr("options.rawMouseInput","Raw Input"); case OptionsAction.forceUnicodeFont:return tr("options.forceUnicodeFont","Force Unicode Font");
         case OptionsAction.invertControllerY:return"Invert Controller Y-Axis";
-        case OptionsAction.japaneseGlyphVariants:return"Japanese Glyph Variants"; case OptionsAction.chatColors:return"Colors";
-        case OptionsAction.webLinks:return"Web Links"; case OptionsAction.promptLinks:return"Prompt on Links";
-        case OptionsAction.commandSuggestions:return"Command Suggestions"; case OptionsAction.hideMatchedNames:return"Hide Matched Names";
-        case OptionsAction.reducedDebugInfo:return"Reduced Debug Info"; case OptionsAction.secureChat:return"Only Show Secure Chat";
-        case OptionsAction.saveUnsentChats:return"Save Unsent Chats"; case OptionsAction.highContrast:return"High Contrast";
-        case OptionsAction.hideSkyFlashes:return"Hide Sky Flashes"; case OptionsAction.monochromeLogo:return"Monochrome Logo";
-        case OptionsAction.hideSplashTexts:return"Hide Splash Texts"; case OptionsAction.narratorHotkey:return"Narrator Hotkey";
-        case OptionsAction.rotateWithMinecarts:return"Rotate with Minecarts"; case OptionsAction.highContrastBlockOutlines:return"High Contrast Block Outlines";
+        case OptionsAction.japaneseGlyphVariants:return tr("options.japaneseGlyphVariants","Japanese Glyph Variants"); case OptionsAction.chatColors:return tr("options.chat.color","Colors");
+        case OptionsAction.webLinks:return tr("options.chat.links","Web Links"); case OptionsAction.promptLinks:return tr("options.chat.links.prompt","Prompt on Links");
+        case OptionsAction.commandSuggestions:return tr("options.autoSuggestCommands","Command Suggestions"); case OptionsAction.hideMatchedNames:return tr("options.hideMatchedNames","Hide Matched Names");
+        case OptionsAction.reducedDebugInfo:return tr("options.reducedDebugInfo","Reduced Debug Info"); case OptionsAction.secureChat:return tr("options.onlyShowSecureChat","Only Show Secure Chat");
+        case OptionsAction.saveUnsentChats:return tr("options.chat.drafts","Save Unsent Chats"); case OptionsAction.highContrast:return tr("options.accessibility.high_contrast","High Contrast");
+        case OptionsAction.hideSkyFlashes:return tr("options.hideLightningFlashes","Hide Sky Flashes"); case OptionsAction.monochromeLogo:return tr("options.darkMojangStudiosBackgroundColor","Monochrome Logo");
+        case OptionsAction.hideSplashTexts:return tr("options.hideSplashTexts","Hide Splash Texts"); case OptionsAction.narratorHotkey:return tr("options.accessibility.narrator_hotkey","Narrator Hotkey");
+        case OptionsAction.rotateWithMinecarts:return tr("options.rotateWithMinecart","Rotate with Minecarts"); case OptionsAction.highContrastBlockOutlines:return tr("options.accessibility.high_contrast_block_outline","High Contrast Block Outlines");
         default:return"";
     }
 }

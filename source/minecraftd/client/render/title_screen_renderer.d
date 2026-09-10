@@ -1,4 +1,5 @@
 module minecraftd.client.render.title_screen_renderer;
+import minecraftd.game.resources.languages : tr;
 
 import minecraftd.client.render.font_renderer : FontRenderer;
 import minecraftd.client.menu.multiplayer_menu_state : MultiplayerField,
@@ -163,19 +164,19 @@ final class TitleScreenRenderer
             editionWidth, editionHeight, logicalWidth, logicalHeight,
             Vec2(0, 0), Vec2(1, 1), Color(1, 1, 1, 1));
 
-        appendButton(frame, TitleAction.singleplayer, "Singleplayer", hovered,
+        appendButton(frame, TitleAction.singleplayer, tr("menu.singleplayer","Singleplayer"), hovered,
             cast(int) logicalWidth, cast(int) logicalHeight, textures,
             font, fontTexture);
-        appendButton(frame, TitleAction.multiplayer, "Multiplayer", hovered,
+        appendButton(frame, TitleAction.multiplayer, tr("menu.multiplayer","Multiplayer"), hovered,
             cast(int) logicalWidth, cast(int) logicalHeight, textures,
             font, fontTexture);
-        appendButton(frame, TitleAction.options, "Options...", hovered,
+        appendButton(frame, TitleAction.options, tr("menu.options","Options..."), hovered,
             cast(int) logicalWidth, cast(int) logicalHeight, textures,
             font, fontTexture);
-        appendButton(frame, TitleAction.quit, "Quit Game", hovered,
+        appendButton(frame, TitleAction.quit, tr("menu.quit","Quit Game"), hovered,
             cast(int) logicalWidth, cast(int) logicalHeight, textures,
             font, fontTexture);
-        appendButton(frame, TitleAction.account, "Account", hovered,
+        appendButton(frame, TitleAction.account, tr("minecraft_d.menu.account","Account"), hovered,
             cast(int) logicalWidth, cast(int) logicalHeight, textures,
             font, fontTexture);
 
@@ -270,7 +271,7 @@ final class TitleScreenRenderer
                 w,h,textures,font,fontTexture,!account.busy);
             appendCenteredText(frame,"(Or optionally continue as a guest account)",
                 126,w,h,font,fontTexture,Color(.72f,.72f,.72f,1));
-            appendMenuButton(frame,center-100,148,200,"Cancel",
+            appendMenuButton(frame,center-100,148,200,tr("gui.cancel","Cancel"),
                 hovered==AccountMenuAction.cancel,w,h,textures,font,fontTexture);
             if (account.message.length)
                 appendCenteredText(frame,account.message,180,w,h,font,fontTexture,
@@ -279,7 +280,7 @@ final class TitleScreenRenderer
             return;
         }
 
-        appendMenuButton(frame,center-50,10,100,"Cancel",
+        appendMenuButton(frame,center-50,10,100,tr("gui.cancel","Cancel"),
             hovered==AccountMenuAction.cancel,w,h,textures,font,fontTexture);
         appendText(frame,"Username",center-150,38,w,h,font,fontTexture,
             Color(.75f,.75f,.75f,1));
@@ -328,7 +329,7 @@ final class TitleScreenRenderer
                 appendCenteredText(frame,state.originalUsername~" to "
                     ~state.usernameInput~"?",cast(int)h/2-14,w,h,font,
                     fontTexture,Color(1,1,1,1));
-                appendMenuButton(frame,center-102,cast(int)h/2+18,100,"Yes",
+                appendMenuButton(frame,center-102,cast(int)h/2+18,100,tr("gui.yes","Yes"),
                     hovered==AccountMenuAction.confirmYes,w,h,textures,font,fontTexture);
                 appendMenuButton(frame,center+2,cast(int)h/2+18,100,"No",
                     hovered==AccountMenuAction.confirmNo,w,h,textures,font,fontTexture);
@@ -387,9 +388,9 @@ final class TitleScreenRenderer
         appendMenuBackground(frame, viewportWidth, viewportHeight,
             elapsedSeconds, textures, logicalWidth, logicalHeight);
 
-        appendCenteredText(frame, "Play Multiplayer", 20, logicalWidth,
+        appendCenteredText(frame, tr("multiplayer.title","Play Multiplayer"), 20, logicalWidth,
             logicalHeight, font, fontTexture, Color(1,1,1,1));
-        appendText(frame, "Server Name", center - 150, 53, logicalWidth,
+        appendText(frame, tr("addServer.enterName","Server Name"), center - 150, 53, logicalWidth,
             logicalHeight, font, fontTexture, Color(0.75f,0.75f,0.75f,1));
         appendTextField(frame, center - 150, 64, 300, state.serverName,
             state.activeField == MultiplayerField.serverName,
@@ -397,7 +398,7 @@ final class TitleScreenRenderer
             state.activeField == MultiplayerField.serverName
                 ? state.selectionAnchor : 0,
             logicalWidth, logicalHeight, textures, font, fontTexture);
-        appendText(frame, "Server Address", center - 150, 92, logicalWidth,
+        appendText(frame, tr("addServer.enterIp","Server Address"), center - 150, 92, logicalWidth,
             logicalHeight, font, fontTexture, Color(0.75f,0.75f,0.75f,1));
         appendTextField(frame, center - 150, 103, 300, state.serverAddress,
             state.activeField == MultiplayerField.serverAddress,
@@ -410,7 +411,7 @@ final class TitleScreenRenderer
         appendMenuButton(frame, center - 150, buttonY, 148, "Connect",
             hovered == MultiplayerMenuAction.connect, logicalWidth,
             logicalHeight, textures, font, fontTexture);
-        appendMenuButton(frame, center + 2, buttonY, 148, "Cancel",
+        appendMenuButton(frame, center + 2, buttonY, 148, tr("gui.cancel","Cancel"),
             hovered == MultiplayerMenuAction.cancel, logicalWidth,
             logicalHeight, textures, font, fontTexture);
         if (state.error.length)
@@ -519,13 +520,13 @@ final class TitleScreenRenderer
             appendCenteredText(frame, "Delete World?", cast(int)h/2-32,w,h,font,fontTexture,Color(1,1,1,1));
             const name = state.hasSelection ? state.worlds[state.selected].settings.name : "this world";
             appendCenteredText(frame, "'"~name~"' will be lost forever!",cast(int)h/2-12,w,h,font,fontTexture,Color(1,0.35f,0.35f,1));
-            appendMenuButton(frame,center-102,cast(int)h/2+18,100,"Delete",hovered==WorldMenuAction.confirmDelete,w,h,textures,font,fontTexture);
-            appendMenuButton(frame,center+2,cast(int)h/2+18,100,"Cancel",hovered==WorldMenuAction.cancelDelete,w,h,textures,font,fontTexture);
+            appendMenuButton(frame,center-102,cast(int)h/2+18,100,tr("selectServer.delete","Delete"),hovered==WorldMenuAction.confirmDelete,w,h,textures,font,fontTexture);
+            appendMenuButton(frame,center+2,cast(int)h/2+18,100,tr("gui.cancel","Cancel"),hovered==WorldMenuAction.cancelDelete,w,h,textures,font,fontTexture);
             return;
         }
         if (state.screen == WorldMenuScreen.selection)
         {
-            appendCenteredText(frame,"Select World",18,w,h,font,fontTexture,Color(1,1,1,1));
+            appendCenteredText(frame,tr("selectWorld.title","Select World"),18,w,h,font,fontTexture,Color(1,1,1,1));
             appendImage(frame,textures.white,center-150,42,300,cast(int)h-106,w,h,Vec2(0,0),Vec2(1,1),Color(0,0,0,0.62f));
             foreach (index, entry; state.worlds)
             {
@@ -534,29 +535,29 @@ final class TitleScreenRenderer
                 if (cast(int)index == state.selected)
                     appendImage(frame,textures.white,center-146,y,292,28,w,h,Vec2(0,0),Vec2(1,1),Color(0.35f,0.35f,0.35f,0.8f));
                 appendText(frame,entry.settings.name,center-138,y+4,w,h,font,fontTexture,Color(1,1,1,1));
-                const detail = (entry.settings.hardcore ? "Hardcore" : gameModeName(entry.settings.gameMode))
+                const detail = (entry.settings.hardcore ? tr("options.difficulty.hardcore","Hardcore") : gameModeName(entry.settings.gameMode))
                     ~ ", Seed: " ~ to!string(entry.settings.seed);
                 appendText(frame,detail,center-138,y+16,w,h,font,fontTexture,Color(0.6f,0.6f,0.6f,1));
             }
             if (!state.worlds.length)
                 appendCenteredText(frame,"No worlds found",cast(int)h/2-8,w,h,font,fontTexture,Color(0.7f,0.7f,0.7f,1));
             const first=cast(int)h-52, second=cast(int)h-28;
-            appendMenuButton(frame,center-150,first,148,"Play Selected World",hovered==WorldMenuAction.play,w,h,textures,font,fontTexture,state.hasSelection);
-            appendMenuButton(frame,center+2,first,148,"Create New World",hovered==WorldMenuAction.create,w,h,textures,font,fontTexture);
-            appendMenuButton(frame,center-150,second,72,"Edit",hovered==WorldMenuAction.edit,w,h,textures,font,fontTexture,state.hasSelection);
-            appendMenuButton(frame,center-74,second,72,"Delete",hovered==WorldMenuAction.deleteWorld,w,h,textures,font,fontTexture,state.hasSelection);
-            appendMenuButton(frame,center+2,second,72,"Re-Create",hovered==WorldMenuAction.recreate,w,h,textures,font,fontTexture,state.hasSelection);
-            appendMenuButton(frame,center+78,second,72,"Cancel",hovered==WorldMenuAction.cancel,w,h,textures,font,fontTexture);
+            appendMenuButton(frame,center-150,first,148,tr("selectWorld.select","Play Selected World"),hovered==WorldMenuAction.play,w,h,textures,font,fontTexture,state.hasSelection);
+            appendMenuButton(frame,center+2,first,148,tr("selectWorld.create","Create New World"),hovered==WorldMenuAction.create,w,h,textures,font,fontTexture);
+            appendMenuButton(frame,center-150,second,72,tr("selectServer.edit","Edit"),hovered==WorldMenuAction.edit,w,h,textures,font,fontTexture,state.hasSelection);
+            appendMenuButton(frame,center-74,second,72,tr("selectServer.delete","Delete"),hovered==WorldMenuAction.deleteWorld,w,h,textures,font,fontTexture,state.hasSelection);
+            appendMenuButton(frame,center+2,second,72,tr("selectWorld.recreate","Re-Create"),hovered==WorldMenuAction.recreate,w,h,textures,font,fontTexture,state.hasSelection);
+            appendMenuButton(frame,center+78,second,72,tr("gui.cancel","Cancel"),hovered==WorldMenuAction.cancel,w,h,textures,font,fontTexture);
             return;
         }
-        appendCenteredText(frame,state.editing?"Edit World":"Create New World",12,w,h,font,fontTexture,Color(1,1,1,1));
-        appendTab(frame,center-150,30,98,"Game",state.tab==WorldCreationTab.game,hovered==WorldMenuAction.tabGame,w,h,textures,font,fontTexture);
-        appendTab(frame,center-49,30,98,"World",state.tab==WorldCreationTab.world,hovered==WorldMenuAction.tabWorld,w,h,textures,font,fontTexture);
-        appendTab(frame,center+52,30,98,"More",state.tab==WorldCreationTab.more,hovered==WorldMenuAction.tabMore,w,h,textures,font,fontTexture);
+        appendCenteredText(frame,state.editing?tr("selectWorld.edit.title","Edit World"):tr("selectWorld.create","Create New World"),12,w,h,font,fontTexture,Color(1,1,1,1));
+        appendTab(frame,center-150,30,98,tr("createWorld.tab.game.title","Game"),state.tab==WorldCreationTab.game,hovered==WorldMenuAction.tabGame,w,h,textures,font,fontTexture);
+        appendTab(frame,center-49,30,98,tr("createWorld.tab.world.title","World"),state.tab==WorldCreationTab.world,hovered==WorldMenuAction.tabWorld,w,h,textures,font,fontTexture);
+        appendTab(frame,center+52,30,98,tr("createWorld.tab.more.title","More"),state.tab==WorldCreationTab.more,hovered==WorldMenuAction.tabMore,w,h,textures,font,fontTexture);
         final switch(state.tab)
         {
             case WorldCreationTab.game:
-                appendText(frame,"World Name",center-150,57,w,h,font,fontTexture,Color(.75f,.75f,.75f,1));
+                appendText(frame,tr("selectWorld.enterName","World Name"),center-150,57,w,h,font,fontTexture,Color(.75f,.75f,.75f,1));
                 appendTextField(frame,center-150,68,300,state.draft.name,
                     state.field==WorldField.name,
                     state.field==WorldField.name ? state.cursor : 0,
@@ -564,7 +565,7 @@ final class TitleScreenRenderer
                     w,h,textures,font,fontTexture);
                 appendMenuButton(frame,center-150,105,148,"Game Mode: "~state.modeLabel,hovered==WorldMenuAction.mode,w,h,textures,font,fontTexture);
                 appendMenuButton(frame,center+2,105,148,"Difficulty: "~difficultyName(state.draft.difficulty),hovered==WorldMenuAction.difficulty,w,h,textures,font,fontTexture,!state.draft.hardcore);
-                appendMenuButton(frame,center-150,138,300,"Allow Commands: "~(state.draft.allowCommands?"ON":"OFF"),hovered==WorldMenuAction.commands,w,h,textures,font,fontTexture,!state.draft.hardcore);
+                appendMenuButton(frame,center-150,138,300,"Allow Commands: "~(state.draft.allowCommands?"ON":tr("menu.multiplayerOptions.network.off","OFF")),hovered==WorldMenuAction.commands,w,h,textures,font,fontTexture,!state.draft.hardcore);
                 break;
             case WorldCreationTab.world:
                 appendText(frame,"Seed (blank = random)",center-150,57,w,h,font,fontTexture,Color(.75f,.75f,.75f,1));
@@ -573,22 +574,22 @@ final class TitleScreenRenderer
                     state.field==WorldField.seed ? state.cursor : 0,
                     state.field==WorldField.seed ? state.selectionAnchor : 0,
                     w,h,textures,font,fontTexture);
-                appendMenuButton(frame,center-150,105,300,"World Type: "~(state.draft.worldType==WorldType.normal?"Normal":"Flat"),hovered==WorldMenuAction.worldType,w,h,textures,font,fontTexture,!state.editing);
-                appendMenuButton(frame,center-150,138,148,"Structures: "~(state.draft.generateStructures?"ON":"OFF"),hovered==WorldMenuAction.structures,w,h,textures,font,fontTexture,!state.editing);
-                appendMenuButton(frame,center+2,138,148,"Bonus Chest: "~(state.draft.bonusChest?"ON":"OFF"),hovered==WorldMenuAction.bonusChest,w,h,textures,font,fontTexture,!state.editing);
-                appendMenuButton(frame,center-150,162,148,"Caves: "~(state.draft.generateCaves?"ON":"OFF"),hovered==WorldMenuAction.caves,w,h,textures,font,fontTexture,!state.editing);
-                appendMenuButton(frame,center+2,162,148,"Rivers: "~(state.draft.generateRivers?"ON":"OFF"),hovered==WorldMenuAction.rivers,w,h,textures,font,fontTexture,!state.editing);
-                appendMenuButton(frame,center-150,186,300,"Oceans: "~(state.draft.generateOceans?"ON":"OFF"),hovered==WorldMenuAction.oceans,w,h,textures,font,fontTexture,!state.editing);
+                appendMenuButton(frame,center-150,105,300,"World Type: "~(state.draft.worldType==WorldType.normal?tr("options.difficulty.normal","Normal"):"Flat"),hovered==WorldMenuAction.worldType,w,h,textures,font,fontTexture,!state.editing);
+                appendMenuButton(frame,center-150,138,148,"Structures: "~(state.draft.generateStructures?"ON":tr("menu.multiplayerOptions.network.off","OFF")),hovered==WorldMenuAction.structures,w,h,textures,font,fontTexture,!state.editing);
+                appendMenuButton(frame,center+2,138,148,"Bonus Chest: "~(state.draft.bonusChest?"ON":tr("menu.multiplayerOptions.network.off","OFF")),hovered==WorldMenuAction.bonusChest,w,h,textures,font,fontTexture,!state.editing);
+                appendMenuButton(frame,center-150,162,148,"Caves: "~(state.draft.generateCaves?"ON":tr("menu.multiplayerOptions.network.off","OFF")),hovered==WorldMenuAction.caves,w,h,textures,font,fontTexture,!state.editing);
+                appendMenuButton(frame,center+2,162,148,"Rivers: "~(state.draft.generateRivers?"ON":tr("menu.multiplayerOptions.network.off","OFF")),hovered==WorldMenuAction.rivers,w,h,textures,font,fontTexture,!state.editing);
+                appendMenuButton(frame,center-150,186,300,"Oceans: "~(state.draft.generateOceans?"ON":tr("menu.multiplayerOptions.network.off","OFF")),hovered==WorldMenuAction.oceans,w,h,textures,font,fontTexture,!state.editing);
                 break;
             case WorldCreationTab.more:
-                appendMenuButton(frame,center-150,68,300,"Game Rules",hovered==WorldMenuAction.gameRules,w,h,textures,font,fontTexture);
-                appendMenuButton(frame,center-150,92,300,"Data Packs",hovered==WorldMenuAction.dataPacks,w,h,textures,font,fontTexture,false);
+                appendMenuButton(frame,center-150,68,300,tr("selectWorld.gameRules","Game Rules"),hovered==WorldMenuAction.gameRules,w,h,textures,font,fontTexture);
+                appendMenuButton(frame,center-150,92,300,tr("selectWorld.dataPacks","Data Packs"),hovered==WorldMenuAction.dataPacks,w,h,textures,font,fontTexture,false);
                 appendCenteredText(frame,"Data packs require custom registries and are not active yet.",124,w,h,font,fontTexture,Color(.65f,.65f,.65f,1));
                 break;
         }
         if (state.notice.length) appendCenteredText(frame,state.notice,cast(int)h-42,w,h,font,fontTexture,Color(1,.8f,.3f,1));
-        appendMenuButton(frame,center-150,cast(int)h-28,148,state.editing?"Save Changes":"Create New World",hovered==WorldMenuAction.confirmCreate,w,h,textures,font,fontTexture);
-        appendMenuButton(frame,center+2,cast(int)h-28,148,"Cancel",hovered==WorldMenuAction.cancelCreate,w,h,textures,font,fontTexture);
+        appendMenuButton(frame,center-150,cast(int)h-28,148,state.editing?"Save Changes":tr("selectWorld.create","Create New World"),hovered==WorldMenuAction.confirmCreate,w,h,textures,font,fontTexture);
+        appendMenuButton(frame,center+2,cast(int)h-28,148,tr("gui.cancel","Cancel"),hovered==WorldMenuAction.cancelCreate,w,h,textures,font,fontTexture);
     }
 
     long worldTextCursorAt(uint viewportWidth, uint viewportHeight,
