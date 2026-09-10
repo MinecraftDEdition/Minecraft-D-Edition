@@ -27,7 +27,7 @@ final class FontRenderer
             {
                 const pixel = ((cellY + y) * atlas.width + cellX + x) * 4;
                 if (pixel + 3 < atlas.rgba.length && atlas.rgba[pixel + 3] != 0
-                    && x > right)
+                    && cast(int)x > right)
                     right = cast(int)x;
             }
             advances[code] = cast(ubyte) (right >= 0 ? ((right+1)*8+cellWidth-1)/cellWidth+1 : 4);
@@ -189,5 +189,29 @@ private:
             Vec3(right, top, 0), Vec3(left, top, 0),
             Vec2(u0,v1), Vec2(u1,v1), Vec2(u1,v0), Vec2(u0,v0),
             color, color, color, color);
+    }
+}
+
+unittest
+{
+    // Unsigned atlas coordinates must still compare above the -1 sentinel.
+    // Check both the default atlas and a higher-resolution pack atlas.
+    foreach(scale;[1u,2u])
+    {
+        auto atlas=ImageData(128*scale,128*scale,new ubyte[128*128*4*scale*scale]);
+        foreach(code;[cast(uint)'W',cast(uint)'i'])
+        {
+            const inkWidth=(code=='W'?6u:1u)*scale;
+            foreach(y;0..7*scale)foreach(x;0..inkWidth)
+            {
+                const pixel=(((code>>4)*8*scale+y)*atlas.width
+                    +(code&15)*8*scale+x)*4;
+                atlas.rgba[pixel+3]=255;
+            }
+        }
+        auto font=new FontRenderer(atlas);
+        assert(font.width("W")==7);
+        assert(font.width("i")==2);
+        assert(font.width("Wi W")==20);
     }
 }
