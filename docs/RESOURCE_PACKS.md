@@ -82,3 +82,10 @@ allows Default to load on the same window. Run it after the local-test build and
 `tests/Run-ResourcePackSmoke-macos.sh` runs the same repository, animation and
 renderer recovery tests through MoltenVK after a native Mac app build. The macOS
 test workflow runs this alongside application launch and existing blur checks.
+
+Verified September 10, 2026: the Windows Admin local-test release build, all 37
+unit-test modules, and the resource-pack smoke tests passed. Native Apple Silicon
+pack loading, animation, MoltenVK menu rendering, malformed-texture recovery and
+packaged application launch passed in
+[Mac verification run 34441161767](https://github.com/MinecraftDEdition/Minecraft-D-Edition/actions/runs/34441161767).
+The workflow was dispatched with player-update publication disabled.
