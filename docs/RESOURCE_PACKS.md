@@ -40,7 +40,18 @@ This is **not complete Minecraft Java rendering compatibility**. Custom block/it
 model JSON, custom geometry, Java font providers, shaders, OptiFine/CTM/CIT features,
 and arbitrary sound-event remapping are not implemented. A pack that requires those
 features may load its textures but will not reproduce all of its Java appearance.
-Legacy texture names are not automatically migrated. Bedrock `.mcpack` files are
+Legacy block/item directories and common historical names are resolved through
+virtual aliases. The table covers wood and color families, common terrain,
+plants, rails, doors and tools. Exact paths win within a pack; pack ordering still
+takes precedence over aliases. A pack's standard Minecraft logo/edition texture
+can override D Edition branding, while explicit `minecraft_d` overrides win in
+that same pack. Older split logos and common widget/HUD sheets are converted in
+memory, including buttons, hotbar, hearts, food, air and experience bars. These
+adapters do not edit the ZIP. Windows ZIP caches use extended-length paths.
+The untouched local Geekcraft ZIP has been exercised through the GPU smoke test;
+its logo and panorama were visually checked. This is not a claim that every
+historical texture layout or most published packs have been tested.
+Bedrock `.mcpack` files are
 not supported. Missing resources normally use Default; explicit pack filters can
 block that fallback, and a required blocked resource may prevent a pack from loading.
 

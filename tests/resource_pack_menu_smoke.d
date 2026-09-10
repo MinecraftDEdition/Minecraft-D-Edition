@@ -16,7 +16,7 @@ import minecraftd.client.menu.options_menu;
 import minecraftd.client.render.game_renderer;
 import minecraftd.world.world;
 
-void main()
+void main(string[] args)
 {
     version(Windows)
     {
@@ -24,7 +24,12 @@ void main()
     }
     scope(exit) { version(Windows) CoUninitialize(); }
     const root=buildPath(tempDir(),"mcde-pack-menu-"~randomUUID().toString());
-    mkdirRecurse(root);scope(exit)rmdirRecurse(root);
+    mkdirRecurse(root);
+    scope(exit)
+    {
+        version(Windows)rmdirRecurse("\\\\?\\"~root);
+        else rmdirRecurse(root);
+    }
     auto options=new OptionsMenuState(root);
     foreach(name;["Warm Stone.zip","Classic Grass.zip"])
     {
@@ -41,7 +46,14 @@ void main()
     }
     options.open(false);options.activate(OptionsAction.resourcePacksMenu);
     options.resourcePacks.toggle("Warm Stone.zip");
+    if(args.length>1)
+    {
+        copy(args[1],buildPath(options.resourcePacks.folder,"Compatibility.zip"));
+        options.resourcePacks.refresh();
+        options.resourcePacks.selected=["Compatibility.zip"];
+    }
     options.resourcePacks.applied=options.resourcePacks.selected.dup;
+    options.resourcePacks.mounts(true);
     auto world=new World();scope(exit)destroy(world);
     version(Windows)
     {
@@ -65,6 +77,7 @@ void main()
     scope(exit)destroy(renderer);
     renderer.preparePackIcons();
     renderer.renderOptionsScreen(-1,-1,0);
+    if(args.length>1)renderer.renderTitleScreen(-1,-1,0);
     version(Windows)
     {
     auto image=renderer.captureTestFrame();

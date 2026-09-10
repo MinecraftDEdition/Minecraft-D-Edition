@@ -9,10 +9,11 @@ import std.exception : enforce;
 import std.file : exists, isDir, isFile, isSymlink, dirEntries, SpanMode,
     read, readText, write, mkdirRecurse, getSize;
 import std.json : JSONValue, JSONType, parseJSON;
-import std.path : buildPath, baseName, dirName;
+import std.path : buildPath, baseName, dirName, absolutePath;
 import std.regex : regex, matchFirst;
 import std.string : split, startsWith, endsWith, toLower, replace;
 import std.zip : ZipArchive;
+import minecraftd.game.resources.compatibility : addCompatibilityAliases;
 
 // Java compatibility profile for versioned overlays (1.21.11), independent
 // of D Edition's release number. Advance with future resource-schema imports.
@@ -151,6 +152,7 @@ final class ResourcePackRepository
     {
         folder=buildPath(userRoot,"resourcepacks");
         cache=buildPath(userRoot,"data","cache","resourcepacks");
+        version(Windows)cache="\\\\?\\"~absolutePath(cache).replace("/","\\");
         selectionFile=buildPath(userRoot,"data","resource-packs.json");
         mkdirRecurse(folder);mkdirRecurse(cache);
         if(exists(selectionFile))try
@@ -264,7 +266,7 @@ final class ResourcePackRepository
             PackMount mount;mount.id=id;mount.filters=pack.filters.dup;
             foreach(overlay;pack.overlays)mount.roots~=buildPath(pack.root,overlay);
             mount.roots~=pack.root;
-            try { indexFiles(mount); }
+            try { indexFiles(mount);addCompatibilityAliases(mount.files); }
             catch(Exception failure)
             { notice=id~": "~failure.msg;enforce(!strict,notice);continue; }
             result~=mount;
@@ -299,7 +301,8 @@ final class ResourcePackRepository
         foreach(name,entry;zip.directory)
         {
             if(name.endsWith("/"))continue;
-            const destination=buildPath(pack.root,name);
+            version(Windows)const destination=buildPath(pack.root,name.replace("/","\\"));
+            else const destination=buildPath(pack.root,name);
             mkdirRecurse(dirName(destination));
             enforce(!exists(destination)||!isSymlink(destination),"Resource cache contains a symbolic link");
             auto bytes=zip.expand(entry);

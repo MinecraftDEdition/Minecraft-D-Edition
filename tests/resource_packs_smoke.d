@@ -91,5 +91,31 @@ void main()
     repository.refresh();repository.applied=["filter.zip","lower.zip"];
     resources=new ResourceManager(root,repository.mounts(true));
     assert(resources.findAsset("minecraft","textures/block/stone.png")=="");
-    writeln("ZIP discovery, ordering, overlays, future namespaces, defaults, persistence, and unsafe-path checks passed");
+    zipPack("legacy.zip",["pack.mcmeta":meta,
+        "assets/minecraft/textures/blocks/stone.png":"legacy stone",
+        "assets/minecraft/textures/blocks/grass_top.png":"legacy grass",
+        "assets/minecraft/textures/items/wood_sword.png":"legacy sword",
+        "assets/minecraft/textures/blocks/water_still.png":"legacy water",
+        "assets/minecraft/textures/blocks/water_still.png.mcmeta":"animation",
+        "assets/minecraft/textures/gui/title/minecraft.png":"legacy logo"]);
+    repository.refresh();repository.applied=["legacy.zip","upper.zip"];
+    resources=new ResourceManager(root,repository.mounts(true));
+    assert(readText(resources.resolveAsset("minecraft","textures/block/stone.png"))=="legacy stone");
+    assert(readText(resources.resolveAsset("minecraft","textures/block/grass_block_top.png"))=="legacy grass");
+    assert(readText(resources.resolveAsset("minecraft","textures/item/wooden_sword.png"))=="legacy sword");
+    assert(readText(resources.findAssetMetadata("minecraft","textures/block/water_still.png"))=="animation");
+    assert(readText(resources.resolveAsset("minecraft_d","textures/gui/title/minecraft.png"))=="legacy logo");
+    zipPack("exact.zip",["pack.mcmeta":meta,
+        "assets/minecraft/textures/block/stone.png":"exact stone",
+        "assets/minecraft/textures/blocks/stone.png":"old stone",
+        "assets/minecraft/textures/gui/title/minecraft.png":"Java logo",
+        "assets/minecraft_d/textures/gui/title/minecraft.png":"D logo"]);
+    repository.refresh();repository.applied=["exact.zip"];
+    resources=new ResourceManager(root,repository.mounts(true));
+    assert(readText(resources.resolveAsset("minecraft","textures/block/stone.png"))=="exact stone");
+    assert(readText(resources.resolveAsset("minecraft_d","textures/gui/title/minecraft.png"))=="D logo");
+    repository.applied=["legacy.zip","exact.zip"];
+    resources=new ResourceManager(root,repository.mounts(true));
+    assert(readText(resources.resolveAsset("minecraft_d","textures/gui/title/minecraft.png"))=="legacy logo");
+    writeln("ZIP discovery, ordering, overlays, aliases, future namespaces, defaults, persistence, and unsafe-path checks passed");
 }

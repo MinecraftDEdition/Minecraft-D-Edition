@@ -102,6 +102,7 @@ import minecraftd.client.menu.inventory_menu:CreativeTab,InventoryMenuRenderer,
     InventoryMenuState,InventoryTextureSet;
 import minecraftd.game.resources.resource_manager : ResourceManager;
 import minecraftd.client.render.texture_animation : decodeTextureAnimation;
+import minecraftd.client.render.texture_compatibility : compatibleTexture;
 import minecraftd.game.item.inventory : ItemId, ItemStack, placedBlock,
     firstCatalogItem, lastCatalogItem, sameHeldStack, lastItem, itemTextureName, toolKind;
 import minecraftd.game.entity.player : Player;
@@ -2530,13 +2531,19 @@ private:
         return animation.frames[animation.ticks[0]];
     }
 
+    ImageData compatibleResourceImage(string space,string path)
+    {
+        const resolved=resources.resolveAsset(space,path);
+        return compatibleTexture(images.loadPng(resolved),space,path,resolved);
+    }
+
     uint loadResourceTexture(string space,string path,uint mipmaps)
     {
         import std.conv : to;
         import std.exception : enforce;
         const key=space~":"~path~":"~to!string(mipmaps);
         if(auto found=key in resourceTextureCache)return *found;
-        auto animation=decodeTextureAnimation(images.loadPng(resources.resolveAsset(space,path)),textureMetadata(space,path));
+        auto animation=decodeTextureAnimation(compatibleResourceImage(space,path),textureMetadata(space,path));
         uint[] textures;
         foreach(image;animation.frames)
         {
