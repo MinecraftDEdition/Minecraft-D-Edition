@@ -101,6 +101,7 @@ import minecraftd.client.menu.options_menu : OptionsAction, OptionsMenuRenderer,
 import minecraftd.client.menu.inventory_menu:CreativeTab,InventoryMenuRenderer,
     InventoryMenuState,InventoryTextureSet;
 import minecraftd.game.resources.resource_manager : ResourceManager;
+import minecraftd.client.render.texture_animation : decodeTextureAnimation;
 import minecraftd.game.item.inventory : ItemId, ItemStack, placedBlock,
     firstCatalogItem, lastCatalogItem, sameHeldStack, lastItem, itemTextureName, toolKind;
 import minecraftd.game.entity.player : Player;
@@ -188,6 +189,11 @@ final class GameRenderer
     private GraphicsDevice graphics;
     private TextureManager images;
     private ResourceManager resources;
+    private uint packIconRevision;
+    private uint[string] packIconCache;
+    private uint[string] resourceTextureCache;
+    private uint[][uint] resourceAnimations;
+    private ulong resourceTextureBytes;
     private BlockRenderer blocks;
     private PlayerRenderer players;
     private EntityShadowRenderer entityShadows;
@@ -291,6 +297,7 @@ final class GameRenderer
     this(void* window, uint width, uint height, string projectRoot, World world,
         OptionsMenuState options, GraphicsApi graphicsApi = GraphicsApi.directX12)
     {
+        scope(failure)releaseResources();
         this.width = width;
         this.height = height;
         this.world = world;
@@ -300,7 +307,7 @@ final class GameRenderer
         if(configuredMipmaps>4)configuredMipmaps=4;
         terrainMipmapLevels=cast(uint)configuredMipmaps;
         occlusion=new SoftwareOcclusionCuller();
-        resources = new ResourceManager(projectRoot);
+        resources = new ResourceManager(projectRoot,options.resourcePacks.mounts());
         images = new TextureManager();
         final switch (graphicsApi)
         {
@@ -330,9 +337,8 @@ final class GameRenderer
         waterFlowFrames=loadAnimatedFrames("textures/block/water_flow.png");
         fire0Frames=loadAnimatedFrames("textures/block/fire_0.png");
         fire1Frames=loadAnimatedFrames("textures/block/fire_1.png");
-        const flintImage=images.loadPng(resources.resolveAsset("minecraft",
-            "textures/item/flint_and_steel.png"));
-        const flintTexture=graphics.uploadTexture(flintImage);
+        const flintImage=resourceImage("minecraft","textures/item/flint_and_steel.png");
+        const flintTexture=TextureHandle(loadResourceTexture("minecraft","textures/item/flint_and_steel.png",0));
         blockTextures = BlockTextureSet(
             loadTerrain("textures/block/grass_block_top.png"),
             loadTerrain("textures/block/grass_block_side.png"),
@@ -545,9 +551,9 @@ final class GameRenderer
         foreach(raw;cast(int)ItemId.woodenSword..cast(int)lastItem+1)
         {
             const item=cast(ItemId)raw;
-            const sprite=images.loadPng(resources.resolveAsset("minecraft",
-                "textures/item/"~itemTextureName(item)~".png"));
-            const texture=graphics.uploadTexture(sprite).descriptorIndex;
+            const spritePath="textures/item/"~itemTextureName(item)~".png";
+            const sprite=resourceImage("minecraft",spritePath);
+            const texture=loadResourceTexture("minecraft",spritePath,0);
             blockTextures.itemSprites[cast(ubyte)item]=texture;
             itemMeshes[item]=blocks.buildGeneratedItem(texture,sprite);
         }
@@ -611,6 +617,9 @@ final class GameRenderer
     }
 
     ~this()
+    { releaseResources(); }
+
+    private void releaseResources()
     {
         if (sounds !is null)
         {
@@ -734,6 +743,30 @@ final class GameRenderer
         return optionsMenu.hitTest(width,height,mouseX,mouseY,options);
     }
 
+    void preparePackIcons()
+    {
+        if(packIconRevision==options.resourcePacks.revision)return;
+        packIconRevision=options.resourcePacks.revision;
+        optionsTextures.packIcons.length=options.resourcePacks.packs.length;
+        foreach(i,pack;options.resourcePacks.packs)
+        {
+            optionsTextures.packIcons[i]=whiteTexture;
+            if(!pack.icon.length)continue;
+            if(auto existing=pack.icon in packIconCache)
+                optionsTextures.packIcons[i]=*existing;
+            else if(packIconCache.length<64)try
+            {
+                auto icon=images.loadPng(pack.icon);
+                const texture=graphics.uploadTexture(icon).descriptorIndex;
+                packIconCache[pack.icon]=texture;
+                optionsTextures.packIcons[i]=texture;
+            }catch(Exception){} // A broken optional icon must not hide a pack.
+        }
+    }
+
+    version(Windows) version(BlurSmoke) ImageData captureTestFrame()
+    { return (cast(Dx12Device)graphics).readBlurPixels(true); }
+
     int inventorySlotAt(int mouseX,int mouseY,const InventoryMenuState state,
         bool creative)const
     {
@@ -817,7 +850,7 @@ final class GameRenderer
         frame.clear();
         titleScreen.append(frame, width, height, mouseX, mouseY, elapsedSeconds,
             titleTextures, hudFont, fontTexture);
-        graphics.render(frame);
+        submitFrame();
     }
 
     void renderAccountScreen(int mouseX,int mouseY,float elapsedSeconds,
@@ -840,7 +873,7 @@ final class GameRenderer
                 player,accountSkin.descriptorIndex,1.0f,elapsedSeconds*20.0f,
                 accountSkinModel=="slim");
         }
-        graphics.render(frame);
+        submitFrame();
     }
 
     void syncAccountSkin(const AccountSnapshot account)
@@ -883,7 +916,7 @@ final class GameRenderer
         frame.clear();
         titleScreen.appendMultiplayer(frame, width, height, mouseX, mouseY,
             elapsedSeconds, state, titleTextures, hudFont, fontTexture);
-        graphics.render(frame);
+        submitFrame();
     }
 
     void renderWorldMenu(int mouseX, int mouseY, const WorldMenuState state)
@@ -891,7 +924,7 @@ final class GameRenderer
         frame.clear();
         titleScreen.appendWorldMenu(frame,width,height,mouseX,mouseY,state,
             titleTextures,hudFont,fontTexture);
-        graphics.render(frame);
+        submitFrame();
     }
 
     void renderOptionsScreen(int mouseX, int mouseY, float elapsedSeconds)
@@ -901,7 +934,7 @@ final class GameRenderer
             titleTextures);
         optionsMenu.append(frame,width,height,mouseX,mouseY,options,true,
             optionsTextures,hudFont,fontTexture);
-        graphics.render(frame);
+        submitFrame();
     }
 
     void renderLoadingScreen(string status, int percent)
@@ -909,7 +942,7 @@ final class GameRenderer
         frame.clear();
         titleScreen.appendLoading(frame,width,height,status,percent,
             titleTextures,hudFont,fontTexture);
-        graphics.render(frame);
+        submitFrame();
     }
 
     void simulateTick(LocalPlayer player, MultiplayerClient multiplayer)
@@ -1329,21 +1362,11 @@ final class GameRenderer
         }
         lastOcclusionMilliseconds=cast(float)((monotonicSeconds()
             -occlusionStarted)*1000.0);
-        const portalTexture=portalFrames.length
-            ?portalFrames[cast(size_t)(elapsedSeconds*20.0f)%portalFrames.length]
-            :blockTextures.netherPortal;
-        const waterFrame=cast(size_t)(elapsedSeconds*10.0f);
-        const stillTexture=waterStillFrames.length
-            ?waterStillFrames[waterFrame%waterStillFrames.length]
-            :blockTextures.waterStill;
-        const flowTexture=waterFlowFrames.length
-            ?waterFlowFrames[waterFrame%waterFlowFrames.length]
-            :blockTextures.waterFlow;
-        const fireFrame=cast(size_t)(elapsedSeconds*20.0f);
-        const fire0Texture=fire0Frames.length
-            ?fire0Frames[fireFrame%fire0Frames.length]:blockTextures.dirt;
-        const fire1Texture=fire1Frames.length
-            ?fire1Frames[fireFrame%fire1Frames.length]:fire0Texture;
+        // Animation remapping happens once at submission for every texture,
+        // including ordinary terrain and item resources supplied by packs.
+        const portalTexture=portalFrames[0];
+        const stillTexture=waterStillFrames[0],flowTexture=waterFlowFrames[0];
+        const fire0Texture=fire0Frames[0],fire1Texture=fire1Frames[0];
 
         const targeted=world.rayCast(player.eyePosition(partialTick),
             forwardFromYawPitch(player.yaw,player.pitch),5.0f);
@@ -1657,7 +1680,7 @@ final class GameRenderer
         if(debugVisible)
             appendDebugOverlay(player,debugFps);
         const graphicsStarted=monotonicSeconds();
-        graphics.render(frame);
+        submitFrame();
         lastGraphicsMilliseconds=cast(float)((monotonicSeconds()
             -graphicsStarted)*1000.0);
     }
@@ -2459,33 +2482,12 @@ private:
 
     TextureHandle loadHandle(string relativePath)
     {
-        return graphics.uploadTexture(images.loadPng(resources.resolveAsset("minecraft", relativePath)));
+        return TextureHandle(loadResourceTexture("minecraft",relativePath,0));
     }
 
     uint[] loadAnimatedFrames(string relativePath)
     {
-        auto source = images.loadPng(resources.resolveAsset("minecraft",
-            relativePath));
-        const side = source.width < source.height ? source.width : source.height;
-        const frameCount = source.height / side;
-        uint[] result;
-        foreach (frameIndex; 0 .. frameCount)
-        {
-            ImageData frameImage;
-            frameImage.width = frameImage.height = side;
-            frameImage.rgba.length = cast(size_t) side * side * 4;
-            foreach (row; 0 .. side)
-            {
-                const sourceStart = (cast(size_t)frameIndex*side+row)
-                    * source.width * 4;
-                const destinationStart = cast(size_t) row * side * 4;
-                frameImage.rgba[destinationStart .. destinationStart + side*4]
-                    = source.rgba[sourceStart .. sourceStart + side*4];
-            }
-            result~=graphics.uploadTexture(frameImage,
-                terrainMipmapLevels).descriptorIndex;
-        }
-        return result;
+        return [loadResourceTexture("minecraft",relativePath,terrainMipmapLevels)];
     }
 
     uint load(string relativePath)
@@ -2495,15 +2497,55 @@ private:
 
     uint loadTerrain(string relativePath)
     {
-        return graphics.uploadTexture(images.loadPng(
-            resources.resolveAsset("minecraft",relativePath)),
-            terrainMipmapLevels).descriptorIndex;
+        return loadResourceTexture("minecraft",relativePath,terrainMipmapLevels);
     }
 
     uint loadFrom(string namespaceName, string relativePath)
     {
-        return graphics.uploadTexture(images.loadPng(
-            resources.resolveAsset(namespaceName, relativePath))).descriptorIndex;
+        return loadResourceTexture(namespaceName,relativePath,0);
+    }
+
+    string textureMetadata(string space,string path)
+    {
+        import std.file : readText;
+        const metadata=resources.findAsset(space,path~".mcmeta");
+        return metadata.length?readText(metadata):"";
+    }
+
+    ImageData resourceImage(string space,string path)
+    {
+        auto animation=decodeTextureAnimation(images.loadPng(resources.resolveAsset(space,path)),textureMetadata(space,path));
+        return animation.frames[animation.ticks[0]];
+    }
+
+    uint loadResourceTexture(string space,string path,uint mipmaps)
+    {
+        import std.conv : to;
+        import std.exception : enforce;
+        const key=space~":"~path~":"~to!string(mipmaps);
+        if(auto found=key in resourceTextureCache)return *found;
+        auto animation=decodeTextureAnimation(images.loadPng(resources.resolveAsset(space,path)),textureMetadata(space,path));
+        uint[] textures;
+        foreach(image;animation.frames)
+        {
+            resourceTextureBytes+=image.rgba.length*(mipmaps?4UL:3UL)/3;
+            enforce(resourceTextureBytes<=512UL*1024*1024,"Resource-pack textures exceed the 512 MiB GPU budget");
+            textures~=graphics.uploadTexture(image,mipmaps).descriptorIndex;
+        }
+        const base=textures[animation.ticks[0]];
+        if(animation.ticks.length>1)
+            foreach(index;animation.ticks)resourceAnimations[base]~=textures[index];
+        resourceTextureCache[key]=base;
+        return base;
+    }
+
+    void submitFrame()
+    {
+        const tick=cast(ulong)(monotonicSeconds()*20.0);
+        foreach(ref draw;frame.draws)
+            if(auto animation=draw.textureIndex in resourceAnimations)
+                draw.textureIndex=(*animation)[tick%animation.length];
+        graphics.render(frame);
     }
 }
 

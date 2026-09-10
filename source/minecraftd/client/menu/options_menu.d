@@ -5,6 +5,8 @@ import std.file : exists, readText, write;
 import std.format : format;
 import std.path : buildPath;
 import std.string : indexOf, splitLines, strip;
+import std.algorithm : canFind;
+import minecraftd.game.resources.resource_packs : ResourcePackRepository;
 
 import minecraftd.client.render.font_renderer : FontRenderer;
 import minecraftd.client.render.mesh : Color, DrawLayer, FrameMesh, Vertex, appendQuad;
@@ -47,6 +49,11 @@ final class OptionsMenuRenderer
             width,height,Color(0,0,0,.58f));
         else tiledBackground(frame,textures.menuBackground,width,height);
         centered(frame,screenTitle(state.screen),8,width,height,font,fontTexture,Color(1,1,1,1));
+        if(state.screen==OptionsScreen.resourcePacks)
+        {
+            const message=state.resourcePacks.notice.length?state.resourcePacks.notice:"Top pack wins. Missing textures use Default.";
+            centered(frame,shortText(message,cast(int)width-12,font),22,width,height,font,fontTexture,Color(.8f,.8f,.8f,1));
+        }
         foreach(spec;widgetsFor(state))
         {
             const area=widgetRect(spec,cast(int)width,cast(int)height,state);
@@ -58,6 +65,25 @@ final class OptionsMenuRenderer
                 continue;
             }
             const value=spec.fixedLabel.length?spec.fixedLabel:label(spec.action,state);
+            if(spec.kind==WidgetKind.pack)
+            {
+                const packIndex=(cast(int)spec.action-cast(int)OptionsAction.packBase)/3;
+                const pack=state.resourcePacks.packs[packIndex];
+                const selected=state.resourcePacks.selected.canFind(pack.id);
+                rect(frame,textures.white,area.x,area.y,area.width,area.height,width,height,
+                    pack.error.length?Color(.4f,0,0,.8f):(hovered==spec.action?Color(.25f,.25f,.25f,.85f):Color(0,0,0,.65f)));
+                const icon=packIndex<textures.packIcons.length?textures.packIcons[packIndex]:textures.white;
+                rect(frame,icon,area.x+3,area.y+4,32,32,width,height,Color(1,1,1,1));
+                const textWidth=area.width-42-(selected?18:0);
+                text(frame,shortText((selected?"< ":"> ")~pack.id,textWidth,font),area.x+39,area.y+4,
+                    width,height,font,fontTexture,Color(1,1,1,1));
+                const detail=pack.error.length?pack.error:(pack.warning.length?pack.warning:pack.description);
+                auto lines=font.wrap(detail,textWidth);
+                foreach(i;0..(lines.length>2?2:lines.length))
+                    text(frame,lines[i],area.x+39,area.y+16+cast(int)i*10,width,height,font,fontTexture,
+                        pack.warning.length||pack.error.length?Color(1,.65f,.3f,1):Color(.7f,.7f,.7f,1));
+                continue;
+            }
             if(spec.kind==WidgetKind.slider)
                 sliderButton(frame,area,value,sliderAmount(spec.action,state),
                     hovered==spec.action,width,height,textures,font,fontTexture);
@@ -68,6 +94,12 @@ final class OptionsMenuRenderer
     }
 
 private:
+    static string shortText(string value,int maxWidth,const FontRenderer font)
+    {
+        if(font.width(value)<=maxWidth)return value;
+        while(value.length&&font.width(value~"...")>maxWidth)value=value[0..$-1];
+        return value~"...";
+    }
     static void appendScrollBar(ref FrameMesh frame,const OptionsMenuState state,
         int width,int height,const OptionsTextureSet textures)
     {
@@ -167,14 +199,16 @@ enum OptionsAction : ushort
     hideSplashTexts, narratorHotkey, rotateWithMinecarts,
     highContrastBlockOutlines, openPackFolder, telemetryCollection,
     showCredits, showAttribution, showLicensing,
+    packBase=1024,
 }
 
 struct OptionsTextureSet
 {
     uint button, buttonHighlighted, buttonDisabled, white, menuBackground;
+    uint[] packIcons;
 }
 
-private enum WidgetKind : ubyte { button, slider, heading, display }
+private enum WidgetKind : ubyte { button, slider, heading, display, pack }
 
 private struct OptionRect
 {
@@ -204,6 +238,7 @@ final class OptionsMenuState
     OptionsScreen screen = OptionsScreen.main;
     int scrollRow;
     OptionsAction bindingCapture;
+    ResourcePackRepository resourcePacks;
 
     private string storagePath;
     private string[string] extra;
@@ -212,6 +247,7 @@ final class OptionsMenuState
     this(string projectRoot)
     {
         storagePath = buildPath(projectRoot, "data", "options.txt");
+        resourcePacks=new ResourcePackRepository(projectRoot);
         load();
         constrain();
     }
@@ -230,6 +266,9 @@ final class OptionsMenuState
 
     void back()
     {
+        if(screen==OptionsScreen.resourcePacks)
+            resourcePacks.reloadRequested=resourcePacks.changedOnDisk
+                ||resourcePacks.selected!=resourcePacks.applied;
         if (history.length == 0) close();
         else
         {
@@ -399,7 +438,25 @@ final class OptionsMenuState
 
     void activate(OptionsAction a)
     {
+        if(cast(int)a>=cast(int)OptionsAction.packBase)
+        {
+            const raw=cast(int)a-cast(int)OptionsAction.packBase,index=raw/3;
+            if(index>=resourcePacks.packs.length)return;
+            const id=resourcePacks.packs[index].id;
+            if(raw%3==0)resourcePacks.toggle(id);
+            else resourcePacks.move(id,raw%3==1?-1:1);
+            return;
+        }
+        if(a==OptionsAction.openPackFolder)
+        {
+            import std.process : spawnProcess;
+            version(Windows)spawnProcess(["explorer.exe",resourcePacks.folder]);
+            else version(OSX)spawnProcess(["/usr/bin/open",resourcePacks.folder]);
+            return;
+        }
         const destination = destinationScreen(a);
+        if(destination==OptionsScreen.resourcePacks)
+        { resourcePacks.selected=resourcePacks.applied.dup;resourcePacks.refresh(); }
         if (destination != OptionsScreen.main || a == OptionsAction.onlineMenu)
         { history ~= screen; screen = destination; scrollRow = 0; return; }
         switch (a)
@@ -656,9 +713,27 @@ private WidgetSpec[] widgetsFor(const OptionsMenuState state)
             add(OptionsAction.done,100,0,true); break;
         case OptionsScreen.resourcePacks:
             heading("Available",0,0); heading("Selected",0,1);
-            display("High Contrast (built-in)",1,0); display("Default (built-in)",1,1);
-            display("Programmer Art (built-in)",2,0);
-            add(OptionsAction.openPackFolder,100,0,false,WidgetKind.button,false); add(OptionsAction.done,100,1); break;
+            int availableRow=1,selectedRow=1;
+            foreach(index,pack;state.resourcePacks.packs)
+                if(!state.resourcePacks.selected.canFind(pack.id))
+                {
+                    add(cast(OptionsAction)(cast(int)OptionsAction.packBase+index*3),availableRow,0,
+                        false,WidgetKind.pack,!pack.error.length);
+                    availableRow+=2;
+                }
+            foreach(index,id;state.resourcePacks.selected)
+            {
+                const packIndex=state.resourcePacks.indexOf(id);
+                if(packIndex<0)continue;
+                const action=cast(int)OptionsAction.packBase+packIndex*3;
+                // Small move controls precede the row in hit testing.
+                r~=WidgetSpec(cast(OptionsAction)(action+1),selectedRow,1,false,index>0,WidgetKind.button,"^");
+                r~=WidgetSpec(cast(OptionsAction)(action+2),selectedRow,1,false,index+1<state.resourcePacks.selected.length,WidgetKind.button,"v");
+                add(cast(OptionsAction)action,selectedRow,1,false,WidgetKind.pack);
+                selectedRow+=2;
+            }
+            display("Default (built-in)",selectedRow,1);
+            add(OptionsAction.openPackFolder,100,0); add(OptionsAction.done,100,1); break;
         case OptionsScreen.accessibility:
             add(OptionsAction.narrator,0,0,false,WidgetKind.button,false); add(OptionsAction.controlsMenu,0,1);
             add(OptionsAction.subtitles,1,0,false,WidgetKind.button,false); add(OptionsAction.highContrast,1,1,false,WidgetKind.button,false);
@@ -695,6 +770,19 @@ private OptionRect widgetRect(WidgetSpec spec,int width,int height,const Options
             return OptionRect(spec.column==0?left:right,height-28,152,20);
         return OptionRect(center-100,height-28,200,20);
     }
+    if(state.screen==OptionsScreen.resourcePacks)
+    {
+        const panelWidth=width/2-14;
+        const x=spec.column==0?10:width/2+4;
+        const y=38+(spec.row-state.scrollRow)*24;
+        if(cast(int)spec.action>=cast(int)OptionsAction.packBase)
+        {
+            const part=(cast(int)spec.action-cast(int)OptionsAction.packBase)%3;
+            if(part!=0)return OptionRect(x+panelWidth-18,y+(part==1?1:23),16,18);
+            return OptionRect(x,y,panelWidth-20*(spec.column==1),44);
+        }
+        return OptionRect(x,y,panelWidth,20);
+    }
     if(state.screen==OptionsScreen.main)
     {
         const y=spec.row==0?29:40+spec.row*24;
@@ -709,7 +797,8 @@ private int maximumScrollRow(uint viewportWidth,uint viewportHeight,
 {
     int width=cast(int)viewportWidth,height=cast(int)viewportHeight;
     if(!alreadyLogical){const scale=guiScale(viewportWidth,viewportHeight);width/=scale;height/=scale;}
-    int maxRow; foreach(spec;widgetsFor(state))if(spec.row!=100&&spec.row>maxRow)maxRow=spec.row;
+    int maxRow; foreach(spec;widgetsFor(state))if(spec.row!=100)
+    { const lastRow=spec.row+(spec.kind==WidgetKind.pack?1:0);if(lastRow>maxRow)maxRow=lastRow; }
     const visible=(height-contentTop(state.screen)-34)/24;
     return clampInt(maxRow-visible+1,0,maxRow);
 }

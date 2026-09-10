@@ -2,6 +2,8 @@
 build/
 dist/
 test-output/
+resourcepacks/
+data/resource-packs.json
 __pycache__/
 *.pyc
 *.exe

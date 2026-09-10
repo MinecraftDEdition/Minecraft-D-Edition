@@ -29,7 +29,7 @@ import minecraftd.client.menu.world_menu_state : WorldCreationTab, WorldField,
 import minecraftd.client.menu.pause_menu : PauseAction, PauseMenuState,
     PauseScreen;
 import minecraftd.client.menu.death_screen : DeathAction, DeathScreenState;
-import minecraftd.client.menu.options_menu : OptionsAction, OptionsMenuState;
+import minecraftd.client.menu.options_menu : OptionsAction, OptionsMenuState, OptionsScreen;
 import minecraftd.client.menu.inventory_menu:CreativeTab,InventoryMenuRenderer,
     InventoryMenuState;
 import minecraftd.game.item.inventory:Inventory;
@@ -85,9 +85,74 @@ final class GameClient
         version (OSX) graphicsApi = GraphicsApi.vulkan;
         if (rendererOverride == "vulkan") graphicsApi = GraphicsApi.vulkan;
         else if (rendererOverride == "dx12") graphicsApi = GraphicsApi.directX12;
-        auto renderer = new GameRenderer(window.handle, window.width,
-            window.height, paths.resources, world, options, graphicsApi);
+        GameRenderer renderer;
+        try { renderer=new GameRenderer(window.handle,window.width,
+            window.height,paths.resources,world,options,graphicsApi); }
+        catch(Exception failure)
+        {
+            if(!options.resourcePacks.applied.length)throw failure;
+            options.resourcePacks.applied=[];options.resourcePacks.selected=[];
+            options.resourcePacks.notice="Resource packs could not load; using Default. "~failure.msg;
+            renderer=new GameRenderer(window.handle,window.width,
+                window.height,paths.resources,world,options,graphicsApi);
+            try{options.resourcePacks.save();}catch(Exception){}
+        }
         scope (exit) destroy(renderer);
+        void reloadResourcePacks()
+        {
+            auto repository=options.resourcePacks;
+            if(!repository.reloadRequested)return;
+            repository.reloadRequested=false;
+            renderer.renderLoadingScreen("Reloading resource packs",25);
+            auto previous=repository.applied.dup;
+            repository.applied=repository.selected.dup;
+            try { repository.mounts(true); }
+            catch(Exception failure)
+            {
+                repository.applied=previous;
+                repository.notice="Could not apply packs: "~failure.msg;
+                options.active=true;options.screen=OptionsScreen.resourcePacks;
+                return;
+            }
+            destroy(renderer);renderer=null;
+            try
+            {
+                renderer=new GameRenderer(window.handle,window.width,window.height,
+                    paths.resources,world,options,graphicsApi);
+                repository.save();repository.notice="";repository.changedOnDisk=false;
+            }
+            catch(Exception failure)
+            {
+                // Release a failed load's swap chain before restoring resources.
+                if(renderer !is null)destroy(renderer);
+                renderer=null;
+                repository.applied=previous;
+                repository.selected=previous.dup;
+                repository.notice="Pack reload failed; previous packs restored. "~failure.msg;
+                try { renderer=new GameRenderer(window.handle,window.width,window.height,
+                    paths.resources,world,options,graphicsApi); }
+                catch(Exception)
+                {
+                    repository.applied=[];repository.selected=[];
+                    repository.notice="Resource packs could not load; using Default. "~failure.msg;
+                    renderer=new GameRenderer(window.handle,window.width,window.height,
+                        paths.resources,world,options,graphicsApi);
+                }
+                try{repository.save();}catch(Exception){}
+                options.active=true;options.screen=OptionsScreen.resourcePacks;
+            }
+        }
+        bool packsWindowWasFocused=true;
+        void updateResourcePackMenu()
+        {
+            if(options.active&&options.screen==OptionsScreen.resourcePacks)
+            {
+                if(window.focused()&&!packsWindowWasFocused)options.resourcePacks.refresh();
+                renderer.preparePackIcons();
+            }
+            packsWindowWasFocused=window.focused();
+            reloadResourcePacks();
+        }
         auto accounts = new AccountService(paths.userData,paths.cache);
         scope (exit) destroy(accounts);
         auto accountMenu = new AccountMenuState();
@@ -314,6 +379,7 @@ final class GameClient
                         renderer.resize(window.width,window.height);
                     }
                 }
+                updateResourcePackMenu();
                 renderer.renderOptionsScreen(cursor.x,cursor.y,menuTime);
                 continue;
             }
@@ -1582,6 +1648,7 @@ final class GameClient
             if (returnToTitle)
                 break;
 
+            updateResourcePackMenu();
             const controlsActive = window.focused()&&!chat.active && !pauseMenu.active
                 &&!inventoryMenu.active
                 && !deathScreen.active;

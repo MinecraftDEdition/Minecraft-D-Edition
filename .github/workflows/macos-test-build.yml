@@ -121,6 +121,9 @@ jobs:
           MDE_REQUIRE_DISCORD: 1
         run: bash distribution/macos/build_macos.sh
 
+      - name: Verify resource packs and MoltenVK reload recovery
+        run: bash tests/Run-ResourcePackSmoke-macos.sh
+
       - name: Smoke-test application launch
         run: |
           executable='distribution/macos/build/bundle/Minecraft D Edition.app/Contents/MacOS/Minecraft D Edition'

@@ -148,6 +148,8 @@ final class TextureManager
         ImageData image;
         if (FAILED(converter.GetSize(&image.width, &image.height)))
             throw new Exception("Unable to query PNG dimensions: " ~ path);
+        if(!image.width||!image.height||image.width>4096||image.height>4096)
+            throw new Exception("PNG dimensions must be between 1 and 4096: "~path);
         const stride = image.width * 4;
         image.rgba.length = stride * image.height;
         if (FAILED(converter.CopyPixels(null, stride, cast(uint) image.rgba.length, image.rgba.ptr)))

@@ -65,6 +65,7 @@ final class SoundManager
 {
     private void* engine;
     private string projectRoot;
+    private ResourceManager resources;
     private uint randomState = 0xA341316Cu;
     private Vec3 listenerPosition;
     private float listenerYaw;
@@ -86,6 +87,7 @@ final class SoundManager
 
     this(ResourceManager resources)
     {
+        this.resources=resources;
         projectRoot = resources.root();
         engine = mdAudioCreate();
         menuMusic = loadMusic("music.menu", 20, 600, true);
@@ -419,12 +421,9 @@ private:
     {
         MusicDefinition result = MusicDefinition(eventName, [], minimumDelay,
             maximumDelay, replaceCurrent);
-        const path = buildPath(projectRoot, "assets", "minecraft", "sounds.json");
-        if (!exists(path))
-            return result;
         try
         {
-            const root = parseJSON(readText(path));
+            const root = resources.soundDefinitions("minecraft");
             if (root.type != JSONType.object || eventName !in root.object)
                 return result;
             const entry = root.object[eventName];
@@ -542,8 +541,7 @@ private:
                 break;
             }
         }
-        const path = buildPath(projectRoot, "assets", "minecraft", "sounds",
-            selected.path);
+        const path = soundPath(selected.path);
         currentMusicTrackVolume = selected.volume;
         if (mdAudioPlayMusicOgg(engine, nativePath(path), adjustedMusicVolume()) > 0)
         {
@@ -599,8 +597,8 @@ private:
         const adjusted = volume * masterVolume * categoryVolume;
         if (engine is null || adjusted <= 0.0001f)
             return;
-        const path = buildPath(projectRoot, "assets", "minecraft", "sounds",
-            relativePath);
+        const path = soundPath(relativePath);
+        if(!path.length)return;
         mdAudioPlayOgg(engine, nativePath(path), adjusted, pitch, 0.0f,0);
     }
 
@@ -611,11 +609,20 @@ private:
         if (engine is null || masterVolume <= 0.0001f
             || categoryVolume <= 0.0001f)
             return;
-        const path = buildPath(projectRoot, "assets", "minecraft", "sounds",
-            relativePath);
+        const path = soundPath(relativePath);
+        if(!path.length)return;
         mdAudioPlayOggAt(engine, nativePath(path),
             volume * masterVolume * categoryVolume, pitch,
             position.x, position.y, position.z, attenuationDistance);
+    }
+
+    private string soundPath(string id)
+    {
+        import std.string : indexOf;
+        const separator=id.indexOf(':');
+        const space=separator<0?"minecraft":id[0..separator];
+        const name=separator<0?id:id[separator+1..$];
+        return resources.findAsset(space,"sounds/"~name);
     }
 
     version (Windows)

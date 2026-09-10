@@ -15,20 +15,22 @@ final class FontRenderer
 
     this(const ImageData atlas)
     {
+        const cellWidth=atlas.width/16,cellHeight=atlas.height/16;
+        if(!cellWidth||!cellHeight)throw new Exception("Font atlas must contain a 16 by 16 glyph grid");
         foreach (code; 0 .. 256)
         {
-            const cellX = (code & 15) * 8;
-            const cellY = (code >> 4) * 8;
+            const cellX = (code & 15) * cellWidth;
+            const cellY = (code >> 4) * cellHeight;
             int right = -1;
-            foreach (y; 0 .. 8)
-            foreach (x; 0 .. 8)
+            foreach (y; 0 .. cellHeight)
+            foreach (x; 0 .. cellWidth)
             {
                 const pixel = ((cellY + y) * atlas.width + cellX + x) * 4;
                 if (pixel + 3 < atlas.rgba.length && atlas.rgba[pixel + 3] != 0
                     && x > right)
-                    right = x;
+                    right = cast(int)x;
             }
-            advances[code] = cast(ubyte) (right >= 0 ? right + 2 : 4);
+            advances[code] = cast(ubyte) (right >= 0 ? ((right+1)*8+cellWidth-1)/cellWidth+1 : 4);
         }
         advances[' '] = 4;
     }

@@ -51,6 +51,7 @@ final class Dx12Device : GraphicsDevice
     private uint width;
     private uint height;
     private uint frameIndex;
+    version(BlurSmoke) private uint testPresentedFrame;
 
     private IDXGIFactory4 factory;
     private IDXGISwapChain3 swapChain;
@@ -494,35 +495,39 @@ final class Dx12Device : GraphicsDevice
         requireSuccess(swapChain.Present(vsync?1:0,presentFlags),
             "Present frame");
         signalFrame(frameIndex);
+        version(BlurSmoke)testPresentedFrame=frameIndex;
         frameIndex = swapChain.GetCurrentBackBufferIndex();
     }
 
     override void setVsync(bool enabled) { vsync = enabled; }
 
-    version(BlurSmoke) ImageData readBlurPixels()
+    version(BlurSmoke) ImageData readBlurPixels(bool fullFrame=false)
     {
+        const readWidth=fullFrame?width:blurWidth,readHeight=fullFrame?height:blurHeight;
+        auto readTarget=fullFrame?renderTargets[testPresentedFrame]:blurTargets[0];
+        const readState=fullFrame?D3D12_RESOURCE_STATE_PRESENT:D3D12_RESOURCE_STATE_PIXEL_SHADER_RESOURCE;
         waitForGpu();
-        const rowPitch=(blurWidth*4+255)&~255u;
+        const rowPitch=(readWidth*4+255)&~255u;
         auto heap=D3D12_HEAP_PROPERTIES(D3D12_HEAP_TYPE_READBACK,
             D3D12_CPU_PAGE_PROPERTY_UNKNOWN,D3D12_MEMORY_POOL_UNKNOWN,1,1);
         auto desc=D3D12_RESOURCE_DESC(D3D12_RESOURCE_DIMENSION_BUFFER,0,
-            cast(ulong)rowPitch*blurHeight,1,1,1,DXGI_FORMAT_UNKNOWN,
+            cast(ulong)rowPitch*readHeight,1,1,1,DXGI_FORMAT_UNKNOWN,
             DXGI_SAMPLE_DESC(1,0),D3D12_TEXTURE_LAYOUT_ROW_MAJOR,D3D12_RESOURCE_FLAG_NONE);
         ID3D12Resource buffer;
         requireSuccess(device.CreateCommittedResource(&heap,D3D12_HEAP_FLAG_NONE,
             &desc,D3D12_RESOURCE_STATE_COPY_DEST,null,&IID_ID3D12Resource,&buffer),"Blur readback");
         scope(exit)buffer.Release();
         beginCommands();
-        transition(blurTargets[0],D3D12_RESOURCE_STATE_PIXEL_SHADER_RESOURCE,D3D12_RESOURCE_STATE_COPY_SOURCE);
+        transition(readTarget,readState,D3D12_RESOURCE_STATE_COPY_SOURCE);
         D3D12_TEXTURE_COPY_LOCATION source,destination;
-        source.pResource=blurTargets[0];
+        source.pResource=readTarget;
         source.Type=D3D12_TEXTURE_COPY_TYPE_SUBRESOURCE_INDEX;
         destination.pResource=buffer;
         destination.Type=D3D12_TEXTURE_COPY_TYPE_PLACED_FOOTPRINT;
         destination.PlacedFootprint.Footprint=D3D12_SUBRESOURCE_FOOTPRINT(
-            backBufferFormat,blurWidth,blurHeight,1,rowPitch);
+            backBufferFormat,readWidth,readHeight,1,rowPitch);
         list.CopyTextureRegion(&destination,0,0,0,&source,null);
-        transition(blurTargets[0],D3D12_RESOURCE_STATE_COPY_SOURCE,D3D12_RESOURCE_STATE_PIXEL_SHADER_RESOURCE);
+        transition(readTarget,D3D12_RESOURCE_STATE_COPY_SOURCE,readState);
         executeCommands();waitForGpu();
         ID3D12InfoQueue info;
         if(SUCCEEDED(device.QueryInterface(&IID_ID3D12InfoQueue,cast(void**)&info)))
@@ -545,10 +550,10 @@ final class Dx12Device : GraphicsDevice
         requireSuccess(buffer.Map(0,null,cast(void**)&mapped),"Map blur readback");
         scope(exit)buffer.Unmap(0,null);
         ImageData image;
-        image.width=blurWidth;image.height=blurHeight;
-        image.rgba.length=blurWidth*blurHeight*4;
-        foreach(y;0..blurHeight)
-            memcpy(image.rgba.ptr+y*blurWidth*4,mapped+y*rowPitch,blurWidth*4);
+        image.width=readWidth;image.height=readHeight;
+        image.rgba.length=readWidth*readHeight*4;
+        foreach(y;0..readHeight)
+            memcpy(image.rgba.ptr+y*readWidth*4,mapped+y*rowPitch,readWidth*4);
         return image;
     }
 
