@@ -77,3 +77,10 @@ legacy item keys. The resource-pack smoke scripts run it on Windows and macOS.
 Font unit tests cover Unicode measurement/wrapping, and text-layout tests cover
 Hebrew reordering on Windows. GPU menu checks cover real resource-pack loading;
 the Mac script additionally renders Chinese and Arabic selections through MoltenVK.
+
+Verified September 10, 2026: Windows Admin local-test release build, all 40
+unit-test modules, language/resource-pack smoke tests, and visual checks of French,
+Chinese, Arabic and Geekcraft labels. The native Apple Silicon build, language
+tests, Chinese/Arabic MoltenVK runs and application launch passed in
+[Mac run 34538952843](https://github.com/MinecraftDEdition/Minecraft-D-Edition/actions/runs/34538952843).
+Automatic player-update publication was disabled.
