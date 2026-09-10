@@ -39,6 +39,30 @@ final class ResourceManager
     string findAsset(string namespaceName,string path) const
     { try{return resolveAsset(namespaceName,path);}catch(Exception){return "";} }
 
+    /// Metadata may override the winning resource from above, but must not
+    /// leak upward from a lower pack whose image was replaced.
+    string findAssetMetadata(string namespaceName,string path) const
+    {
+        enforce(safeResourcePath(namespaceName)&&!namespaceName.canFind('/')
+            &&safeResourcePath(path),"Invalid resource location");
+        const key=namespaceName~"/"~path,metadataKey=key~".mcmeta";
+        string candidate;
+        bool blocked;
+        foreach(pack;packs)
+        {
+            if(!candidate.length&&!blocked)
+            {
+                if(auto file=metadataKey in pack.files)candidate=*file;
+                if(pack.blocks(namespaceName,path~".mcmeta"))blocked=true;
+            }
+            if(key in pack.files)return candidate;
+            if(pack.blocks(namespaceName,path))return "";
+        }
+        if(candidate.length||blocked)return candidate;
+        const builtin=buildPath(projectRoot,"assets",namespaceName,path~".mcmeta");
+        return exists(builtin)?builtin:"";
+    }
+
     JSONValue soundDefinitions(string namespaceName) const
     {
         string[] paths;

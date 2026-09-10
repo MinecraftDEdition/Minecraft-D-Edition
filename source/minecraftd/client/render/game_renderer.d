@@ -757,6 +757,18 @@ final class GameRenderer
             else if(packIconCache.length<64)try
             {
                 auto icon=images.loadPng(pack.icon);
+                // Menu thumbnails should not retain full-resolution pack art.
+                if(icon.width>128||icon.height>128)
+                {
+                    auto thumbnail=ImageData(128,128,new ubyte[128*128*4]);
+                    foreach(y;0..128)foreach(x;0..128)
+                    {
+                        const source=((y*icon.height/128)*icon.width+x*icon.width/128)*4;
+                        const target=(y*128+x)*4;
+                        thumbnail.rgba[target..target+4]=icon.rgba[source..source+4];
+                    }
+                    icon=thumbnail;
+                }
                 const texture=graphics.uploadTexture(icon).descriptorIndex;
                 packIconCache[pack.icon]=texture;
                 optionsTextures.packIcons[i]=texture;
@@ -2508,7 +2520,7 @@ private:
     string textureMetadata(string space,string path)
     {
         import std.file : readText;
-        const metadata=resources.findAsset(space,path~".mcmeta");
+        const metadata=resources.findAssetMetadata(space,path);
         return metadata.length?readText(metadata):"";
     }
 

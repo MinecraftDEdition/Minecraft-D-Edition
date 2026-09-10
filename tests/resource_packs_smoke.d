@@ -14,6 +14,7 @@ void main()
     scope(exit)rmdirRecurse(root);
     const builtin=buildPath(root,"assets","minecraft","textures","block","stone.png");
     write(builtin,"default");
+    write(builtin~".mcmeta",`{"animation":{"frametime":2}}`);
     auto repository=new ResourcePackRepository(root);
     void zipPack(string name,string[string] files)
     {
@@ -39,6 +40,7 @@ void main()
     repository.applied=repository.selected.dup;
     auto resources=new ResourceManager(root,repository.mounts(true));
     assert(readText(resources.resolveAsset("minecraft","textures/block/stone.png"))=="upper");
+    assert(resources.findAssetMetadata("minecraft","textures/block/stone.png")=="");
     assert(readText(resources.resolveAsset("future","textures/entity/new.png"))=="future entity");
     repository.move("upper.zip",1);repository.applied=repository.selected.dup;
     resources=new ResourceManager(root,repository.mounts(true));
@@ -54,6 +56,13 @@ void main()
     repository.applied=[];
     resources=new ResourceManager(root,repository.mounts());
     assert(readText(resources.resolveAsset("minecraft","textures/block/stone.png"))=="default");
+    assert(readText(resources.findAssetMetadata("minecraft","textures/block/stone.png"))
+        ==readText(builtin~".mcmeta"));
+    zipPack("metadata.zip",["pack.mcmeta":meta,
+        "assets/minecraft/textures/block/stone.png.mcmeta":"higher metadata"]);
+    repository.refresh();repository.applied=["metadata.zip","upper.zip"];
+    resources=new ResourceManager(root,repository.mounts(true));
+    assert(readText(resources.findAssetMetadata("minecraft","textures/block/stone.png"))=="higher metadata");
     foreach(path;["../secret","a/../../secret","a\\b","C:/escape","/absolute","a//b"])
         assert(!safeResourcePath(path));
     enum overlayMeta=`{"pack":{"min_format":75,"max_format":75,"description":"Overlay"},"overlays":{"entries":[{"directory":"new","min_format":75,"max_format":75}]}}`;
