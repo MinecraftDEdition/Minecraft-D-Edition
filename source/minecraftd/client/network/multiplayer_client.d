@@ -1,4 +1,5 @@
 module minecraftd.client.network.multiplayer_client;
+import minecraftd.game.entity.zombie : ZombieState, ZombieSound, ZombieSoundEvent, maximumZombies;
 
 unittest
 {
@@ -397,6 +398,11 @@ final class MultiplayerClient
     private PickupEvent[] pickupEvents;
     private CriticalHitEvent[] criticalHitEvents;
     private ClientDroppedItem[uint] droppedItemById;
+    private ZombieState[] zombieStates;
+    private ZombieSoundEvent[] zombieSounds;
+    const(ZombieState)[] zombies() const { return zombieStates; }
+    ZombieSoundEvent[] consumeZombieSounds()
+    {auto result=zombieSounds;zombieSounds=null;return result;}
     private uint localDamageEventId;
     private bool dimensionTravelPending;
 
@@ -439,6 +445,7 @@ final class MultiplayerClient
         clearPendingTerrain();
         localDamageEventId = 0;
         droppedItemById.clear();
+        zombieStates=null;zombieSounds=null;
         foreach (remote; remoteById) destroy(remote);
         remoteById.clear();
     }
@@ -476,12 +483,12 @@ final class MultiplayerClient
         PacketWriter writer;
         writer.putU8(cast(ubyte)(wholeStack
             ? PlayerActionType.dropStack : PlayerActionType.dropItem));
-        writer.putU8(selectedSlot);
+        writer.putU16(selectedSlot);
         writer.putU8(0);
         connection.send(GamePacketType.playerAction, writer.data);
     }
 
-    void requestInventoryAction(PlayerActionType action, ubyte target = 0,
+    void requestInventoryAction(PlayerActionType action, ushort target = 0,
         ubyte auxiliary = 0)
     {
         if (!connected() || !loginComplete) return;
@@ -544,7 +551,7 @@ final class MultiplayerClient
             pendingInventoryChanges~=PredictedInventoryChange(before,after);
         PacketWriter writer;
         writer.putU8(cast(ubyte)action);
-        writer.putU8(target);
+        writer.putU16(target);
         writer.putU8(auxiliary);
         connection.send(GamePacketType.playerAction,writer.data);
     }
@@ -555,7 +562,7 @@ final class MultiplayerClient
             return;
         PacketWriter writer;
         writer.putU8(cast(ubyte) PlayerActionType.respawn);
-        writer.putU8(0);
+        writer.putU16(0);
         writer.putU8(0);
         connection.send(GamePacketType.playerAction, writer.data);
     }
@@ -797,8 +804,26 @@ private:
         DroppedItemState[] items;
         foreach (_; 0 .. itemCount)
             items ~= reader.readDroppedItem();
+        const zombieCount=reader.readU16();
+        if(zombieCount>maximumZombies)return;
+        ZombieState[] incomingZombies;
+        foreach(_;0..zombieCount)incomingZombies~=reader.readZombie();
         if (!reader.valid)
             return;
+        foreach(z;incomingZombies)
+            foreach(old;zombieStates)
+                if(old.id==z.id)
+                {
+                    if(zombieSounds.length>=256)break;
+                    if(z.deathSerial!=old.deathSerial)
+                        zombieSounds~=ZombieSoundEvent(ZombieSound.death,z.position);
+                    else if(z.hurtSerial!=old.hurtSerial)
+                        zombieSounds~=ZombieSoundEvent(ZombieSound.hurt,z.position);
+                    else if(z.ambientSerial!=old.ambientSerial)
+                        zombieSounds~=ZombieSoundEvent(ZombieSound.ambient,z.position);
+                    break;
+                }
+        zombieStates=incomingZombies;
 
         serverTick = tickValue;
         serverPaused = pausedValue;
@@ -1061,6 +1086,7 @@ private:
         pendingInventoryChanges.length=0;
         clearPendingTerrain();
         droppedItemById.clear();
+        zombieStates=null;zombieSounds=null;
         foreach (remote; remoteById) destroy(remote);
         remoteById.clear();
         blockEvents.length = 0;
@@ -1161,4 +1187,27 @@ unittest
 
     remote.advanceInterpolation(1.0f);
     assert(remote.interpolatedPosition(0.0f) == state.position);
+}
+
+
+unittest
+{
+    auto world=new World();scope(exit)destroy(world);
+    auto player=new LocalPlayer();
+    auto client=new MultiplayerClient(null,world,player);
+    ZombieState zombie;zombie.id=1;
+    void snapshot()
+    {
+        PacketWriter w;w.putU32(1);w.putU32(0);w.putBool(false);
+        w.putU16(0);w.putU16(0);w.putU16(1);w.putZombie(zombie);
+        client.handleSnapshot(w.data);
+    }
+    snapshot();assert(client.zombies.length==1);
+    assert(!client.consumeZombieSounds().length);
+    zombie.hurtSerial=1;snapshot();snapshot();
+    auto sounds=client.consumeZombieSounds();
+    assert(sounds.length==1&&sounds[0].sound==ZombieSound.hurt);
+    zombie.deathSerial=1;zombie.health=0;snapshot();
+    sounds=client.consumeZombieSounds();
+    assert(sounds.length==1&&sounds[0].sound==ZombieSound.death);
 }

@@ -134,7 +134,7 @@ final class PlayerRenderer
         float walkSpeed, float attackProgress, bool crouching,
         float ageInTicks, SkinLayers layers, bool holdingItem = false,
         bool mainHandRight = true, bool swimming = false,
-        bool slimArms = false)
+        bool slimArms = false, bool zombiePose = false)
     {
         Vertex[] result;
         const yaw = bodyYawDegrees * DEG_TO_RAD;
@@ -150,8 +150,17 @@ final class PlayerRenderer
         float leftArmY = 0.0f;
         float rightArmZ = -(cosf(ageInTicks * 0.09f) * 0.05f + 0.05f);
         float leftArmZ = -rightArmZ;
-        rightArmX -= sinf(ageInTicks * 0.067f) * 0.05f;
-        leftArmX += sinf(ageInTicks * 0.067f) * 0.05f;
+        if(zombiePose)
+        {
+            // Idle holds both arms forward. Other animation deltas still run.
+            rightArmX+=PI*.5f;leftArmX+=PI*.5f;
+            rightArmZ=leftArmZ=0;
+        }
+        else
+        {
+            rightArmX -= sinf(ageInTicks * 0.067f) * 0.05f;
+            leftArmX += sinf(ageInTicks * 0.067f) * 0.05f;
+        }
         if(swimming)
         {
             const stroke=cosf(ageInTicks*0.25f);
@@ -250,11 +259,13 @@ final class PlayerRenderer
             slimArms ? rightSlimArmUvs() : rightArmUvs());
         addPart(result, modelPosition, yaw, leftArmCenter, armSize,
             leftShoulder, Vec3(leftArmX, leftArmY, leftArmZ),
-            slimArms ? leftSlimArmUvs() : leftArmUvs());
+            zombiePose ? mirroredUvs(rightArmUvs()) :
+                (slimArms ? leftSlimArmUvs() : leftArmUvs()));
         addPart(result, modelPosition, yaw, rightLegCenter, Vec3(0.25f,0.75f,0.25f),
             rightHip, Vec3(rightLegX, 0, 0), rightLegUvs());
         addPart(result, modelPosition, yaw, leftLegCenter, Vec3(0.25f,0.75f,0.25f),
-            leftHip, Vec3(leftLegX, 0, 0), leftLegUvs());
+            leftHip, Vec3(leftLegX, 0, 0),
+            zombiePose ? mirroredUvs(rightLegUvs()) : leftLegUvs());
 
         // Second-layer cubes are 0.25 skin pixels larger on each side;
         // Java's hat layer uses 0.5 pixels. Transparent texels are clipped by
@@ -545,6 +556,12 @@ final class PlayerRenderer
     }
 
 private:
+    static BoxUvs mirroredUvs(BoxUvs original)
+    {
+        UvRect flip(UvRect r){return UvRect(r.right,r.top,r.left,r.bottom);}
+        return BoxUvs(flip(original.front),flip(original.back),
+            flip(original.right),flip(original.left),flip(original.top),flip(original.bottom));
+    }
     void addPart(ref Vertex[] output, Vec3 playerPosition, float yaw,
         Vec3 center, Vec3 size, Vec3 pivot, Vec3 rotation, BoxUvs uvs)
     {
@@ -728,4 +745,19 @@ unittest
     auto darkArm=classic.dup;
     renderer.applyPosedLight(darkArm,Mat4.identity(),0.25f);
     assert(darkArm[0].color[0] < classic[0].color[0]);
+}
+
+
+unittest
+{
+    auto renderer=new PlayerRenderer();
+    auto idle=renderer.buildSteve(Vec3(0,0,0),0,0,0,0,0,0,false,0,
+        SkinLayers.classic(),false,true,false,false,true);
+    auto later=renderer.buildSteve(Vec3(0,0,0),0,0,0,0,0,0,false,80,
+        SkinLayers.classic(),false,true,false,false,true);
+    auto attack=renderer.buildSteve(Vec3(0,0,0),0,0,0,0,0,.5f,false,0,
+        SkinLayers.classic(),false,true,false,false,true);
+    assert(idle==later,"Idle must keep the zombie arm pose fixed");
+    assert(idle!=attack,"Non-idle animations must still affect the arms");
+    foreach(vertex;idle)assert(vertex.uv[1]<=.5f,"Zombie limbs use mirrored upper-half UVs");
 }

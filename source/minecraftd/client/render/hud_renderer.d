@@ -294,7 +294,7 @@ private:
         float logicalWidth, float logicalHeight, float scaleX, float scaleY,
         const BlockTextureSet textures)
     {
-        if(auto sprite=cast(ubyte)item in textures.itemSprites)
+        if(auto sprite=cast(ushort)item in textures.itemSprites)
         {
             Vertex[] output;
             const l=(x+8-8*scaleX)/logicalWidth*2-1;

@@ -1,4 +1,5 @@
 module minecraftd.client.audio.sound_manager;
+import minecraftd.game.entity.zombie : ZombieSound;
 
 import std.path : buildPath;
 import std.file : exists, readText;
@@ -74,6 +75,8 @@ final class SoundManager
     private float playerVolume = 1.0f;
     private float uiVolume = 1.0f;
     private float musicVolume = 1.0f;
+    private float hostileVolume=1;
+    private MusicDefinition[3] zombieSounds;
     private bool directionalAudio = true;
     private MusicDefinition menuMusic;
     private MusicDefinition overworldMusic;
@@ -90,6 +93,9 @@ final class SoundManager
         this.resources=resources;
         projectRoot = resources.root();
         engine = mdAudioCreate();
+        zombieSounds[0]=loadMusic("entity.zombie.ambient",0,0,false);
+        zombieSounds[1]=loadMusic("entity.zombie.hurt",0,0,false);
+        zombieSounds[2]=loadMusic("entity.zombie.death",0,0,false);
         menuMusic = loadMusic("music.menu", 20, 600, true);
         overworldMusic = loadMusic("music.game", 12_000, 24_000, false);
         // This game's current Nether is the Nether Wastes-style netherrack
@@ -123,8 +129,9 @@ final class SoundManager
     }
 
     void setVolumes(float master, float effects, float players = 1.0f,
-        float ui = 1.0f, float music = 1.0f, bool directional = true)
+        float ui = 1.0f, float music = 1.0f, bool directional = true, float hostile = 1.0f)
     {
+        hostileVolume=clamp(hostile,0.0f,1.0f);
         masterVolume = clamp(master, 0.0f, 1.0f);
         soundVolume = clamp(effects, 0.0f, 1.0f);
         playerVolume = clamp(players,0.0f,1.0f);
@@ -169,6 +176,25 @@ final class SoundManager
         const path = blockStepPath(type.family);
         playAt(path, position,
             type.volume * 0.25f, type.pitch * 0.5f);
+    }
+
+    void playZombie(ZombieSound kind,Vec3 position)
+    {
+        auto definition=zombieSounds[cast(size_t)kind];
+        int weight;
+        foreach(track;definition.tracks)weight+=track.weight;
+        if(weight<=0)return;
+        auto choice=randomInt(0,weight-1);
+        foreach(track;definition.tracks)
+        {
+            choice-=track.weight;
+            if(choice<0)
+            {
+                playAt(track.path,position,track.volume,
+                    1+(randomFloat()-randomFloat())*.2f,hostileVolume);
+                return;
+            }
+        }
     }
 
     void playPlayerHurt()

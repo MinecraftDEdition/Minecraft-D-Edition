@@ -11,6 +11,8 @@ mkdir -p "$out/MacOS" "$out/Frameworks"
 cp "$deps/lib/libMoltenVK.dylib" "$out/Frameworks/libMoltenVK.dylib"
 ldc2 -i -I"$repo/source" "$repo/tests/languages_smoke.d" -of="$out/languages"
 "$out/languages"
+ldc2 -i -I"$repo/source" "$repo/tests/zombie_network_smoke.d" -of="$out/zombies"
+"$out/zombies"
 ldc2 -i -I"$repo/source" "$repo/tests/resource_packs_smoke.d" -of="$out/packs"
 "$out/packs"
 ldc2 -i -I"$repo/source" "$repo/tests/texture_animation_smoke.d" \

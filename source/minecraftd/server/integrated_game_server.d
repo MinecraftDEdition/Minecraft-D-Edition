@@ -20,6 +20,7 @@ import minecraftd.game.item.inventory : Inventory, ItemId, ItemStack, bareHandDr
     blockItem, lastBlockItem = lastItem, maximumStackSize, placedBlock,
     foodDefinition, damageStack, weaponDamage, durability;
 import minecraftd.game.entity.player : Player;
+import minecraftd.game.entity.zombie : ZombieState, maximumZombies;
 import minecraftd.game.item.workstations;
 import minecraftd.network.chat_protocol : sanitizeChat;
 import minecraftd.network.game_protocol : DroppedItemState, GamePacketType,
@@ -180,6 +181,8 @@ final class IntegratedGameServer
     private World netherWorld;
     private ServerPlayer[uint] players;
     private DroppedItemState[] droppedItems;
+    private ZombieState[] zombies;
+    private uint nextZombieId=1;
     private uint nextPlayerId = 1;
     private uint nextItemId = 1;
     private uint serverTick;
@@ -246,6 +249,7 @@ private:
         savedNetherRevision = netherWorld.contentRevision;
         savedWorldRevision = world.contentRevision;
         loadFurnaces();
+        loadZombies();
         listener = new TcpSocket();
         listener.setOption(SocketOptionLevel.SOCKET, SocketOption.REUSEADDR, 1);
         // A port of zero lets Windows allocate a distinct endpoint per world,
@@ -321,6 +325,7 @@ public:
         foreach (player; players){closeInventory(player);destroy(player);}
         world.save();
         saveFurnaces();
+        saveZombies();
         netherWorld.save();
         destroy(netherWorld);
         destroy(world);
@@ -444,6 +449,7 @@ private:
             tickPlayerFire(serverPlayer);
 
         tickDroppedItems();
+        tickZombies();
         tickWorkstations();
         foreach(serverPlayer;players)tickEating(serverPlayer);
         if (serverTick % 5 == 0)
@@ -561,7 +567,7 @@ private:
                     {
                         PacketReader reader = PacketReader(packet.payload);
                         const action = cast(PlayerActionType) reader.readU8();
-                        const target = reader.readU8();
+                        const target = reader.readU16();
                         const auxiliary = reader.readU8();
                         if(reader.valid&&(action==PlayerActionType.stationClick
                             ||action==PlayerActionType.enchantItem))
@@ -729,7 +735,7 @@ private:
         serverPlayer.acknowledgedInput = input.sequence;
         const attackedPlayer = input.attackPressed
             && player.gameMode != GameMode.spectator
-            && attackPlayer(serverPlayer);
+            && (attackZombie(serverPlayer) || attackPlayer(serverPlayer));
         updateMining(serverPlayer, input.down(inputAttack) && !attackedPlayer,
             input.attackPressed && !attackedPlayer);
         if (input.usePressed && player.gameMode != GameMode.adventure
@@ -940,7 +946,7 @@ string furnaceKey(ServerPlayer p)
     {
         furnaces[furnaceKey(p)]=p.player.inventory;
     }
-    void stationAction(ServerPlayer p,PlayerActionType action,ubyte target,ubyte auxiliary)
+    void stationAction(ServerPlayer p,PlayerActionType action,ushort target,ubyte auxiliary)
     {
         auto inv=&p.player.inventory;
         if(!inv.station||p.player.health<=0)return;
@@ -1024,7 +1030,7 @@ string furnaceKey(ServerPlayer p)
             {
                 Inventory inv;inv.station=2;inv.burnTicks=to!ushort(cols[1]);inv.cookTicks=to!ushort(cols[2]);
                 foreach(i;0..3){const pair=cols[i+3].split(",");if(pair.length!=2)continue;
-                    inv.work[i]=ItemStack(cast(ItemId)to!ubyte(pair[0]),to!ubyte(pair[1]));}
+                    inv.work[i]=ItemStack(cast(ItemId)to!ushort(pair[0]),to!ubyte(pair[1]));}
                 furnaces[cols[0].idup]=inv;
             }
             catch(Exception){}
@@ -1062,6 +1068,92 @@ string furnaceKey(ServerPlayer p)
             return;
         player.inventory.pickBlock(blockItem(hit.block), player.selectedSlot,
             true);
+    }
+
+    bool attackZombie(ServerPlayer attacker)
+    {
+        const origin=attacker.player.eyePosition(1);
+        const direction=forwardFromYawPitch(attacker.player.yaw,attacker.player.pitch);
+        float closest=3;
+        size_t target=zombies.length;
+        foreach(i,ref zombie;zombies)
+        {
+            if(zombie.dimension!=attacker.dimension||zombie.health<=0)continue;
+            float distance;
+            if(rayIntersects(origin,direction,zombie.bounds(),3,distance)&&distance<closest)
+            {closest=distance;target=i;}
+        }
+        if(target==zombies.length)return false;
+        const block=worldFor(attacker.dimension).rayCast(origin,direction,3);
+        if(block.hit&&block.distance+.0001f<closest)return false;
+        foreach(candidate;players)
+        {
+            if(candidate.id==attacker.id||candidate.dimension!=attacker.dimension
+                ||candidate.player.health<=0||candidate.player.gameMode==GameMode.spectator)continue;
+            float distance;
+            if(rayIntersects(origin,direction,candidate.player.boundingBox(),3,distance)
+                &&distance<closest)return false;
+        }
+        zombies[target].damage(weaponDamage(attacker.player.inventory.hotbar[
+            attacker.player.selectedSlot]));
+        return true;
+    }
+
+    void saveZombies()
+    {
+        if(!world.saveDirectory.length)return;
+        import std.file : write,rename;
+        PacketWriter writer;
+        writer.putU32(0x5A4F4D01);writer.putU16(cast(ushort)zombies.length);
+        foreach(z;zombies)writer.putZombie(z);
+        const path=buildPath(world.saveDirectory,"zombies.dat");
+        write(path~".tmp",writer.data);rename(path~".tmp",path);
+    }
+
+    void loadZombies()
+    {
+        if(!world.saveDirectory.length)return;
+        import std.file : exists,getSize,read;
+        const path=buildPath(world.saveDirectory,"zombies.dat");
+        if(!exists(path)||getSize(path)>65536)return;
+        auto reader=PacketReader(cast(ubyte[])read(path));
+        if(reader.readU32()!=0x5A4F4D01)return;
+        const count=reader.readU16();if(count>maximumZombies)return;
+        ZombieState[] loaded;
+        bool[uint] seen;
+        uint next=1;
+        foreach(_;0..count)
+        {
+            auto z=reader.readZombie();
+            if(!reader.valid||z.id in seen||z.id==uint.max)return;
+            seen[z.id]=true;
+            if(z.health<=0)continue;
+            z.randomState=z.id*747796405u+z.age+1;
+            z.ambientTime=-80;
+            loaded~=z;
+            if(z.id>=next)next=z.id+1;
+        }
+        if(reader.cursor!=reader.data.length)return;
+        zombies=loaded;nextZombieId=next;
+    }
+
+    void tickZombies()
+    {
+        size_t count;
+        foreach(ref zombie;zombies)
+        {
+            bool active;
+            foreach(p;players)
+                if(p.dimension==zombie.dimension
+                    &&(p.player.position-zombie.position).lengthSquared()
+                        < (p.simulationDistance*16.0f)*(p.simulationDistance*16.0f))
+                    {active=true;break;}
+            // Fixed daytime sky for now; the pause branch runs before this.
+            if(active)zombie.tick(worldFor(zombie.dimension),true);
+            if(zombie.deathTime<20)zombies[count++]=zombie;
+        }
+        zombies.length=count;
+        if(serverTick%100==0)saveZombies();
     }
 
     bool attackPlayer(ServerPlayer attacker)
@@ -1205,6 +1297,25 @@ string furnaceKey(ServerPlayer p)
         const stack = player.inventory.hotbar[slot];
         if (stack.empty())
             return;
+        if(stack.item==ItemId.zombieSpawnEgg)
+        {
+            if(!useHit.hit||zombies.length>=maximumZombies)return;
+            ZombieState zombie;
+            zombie.position=Vec3(useHit.x+.5f,useHit.y+1.0f,useHit.z+.5f);
+            zombie.yaw=player.yaw+180;
+            zombie.dimension=serverPlayer.dimension;
+            if(!useWorld.inBounds(useHit.x,useHit.y+2,useHit.z)
+                ||!useWorld.isUnobstructed(zombie.bounds()))return;
+            foreach(existing;zombies)
+                if(existing.dimension==zombie.dimension
+                    &&existing.bounds().intersects(zombie.bounds()))return;
+            zombie.id=nextZombieId++;
+            zombie.randomState=zombie.id*747796405u+serverTick+1;
+            zombies~=zombie;
+            player.attack(true);
+            if(player.gameMode!=GameMode.creative)player.inventory.removeOne(slot);
+            return;
+        }
         auto activeWorld = worldFor(serverPlayer.dimension);
         if (stack.item == ItemId.flintAndSteel)
         {
@@ -1671,6 +1782,12 @@ string furnaceKey(ServerPlayer p)
             foreach (item; droppedItems)
                 if (item.dimension == (*own).dimension)
                     writer.putDroppedItem(item);
+            ushort visibleZombies;
+            foreach(zombie;zombies)
+                if(zombie.dimension==(*own).dimension)++visibleZombies;
+            writer.putU16(visibleZombies);
+            foreach(zombie;zombies)
+                if(zombie.dimension==(*own).dimension)writer.putZombie(zombie);
             try peer.send(framePacket(GamePacketType.snapshot, writer.data));
             catch (SocketOSException) {}
         }
@@ -2458,4 +2575,37 @@ unittest
     assert(first.player.inventory.hotbar[0].count==1&&first.player.foodLevel==9);
     first.input.useHeld=false;server.tickEating(first);
     assert(!first.player.eatingTicks);
+}
+
+
+unittest
+{
+    import std.file : tempDir,mkdirRecurse,rmdirRecurse;
+    import std.uuid : randomUUID;
+    auto world=new World();auto server=new IntegratedGameServer(world);
+    scope(exit)destroy(server);
+    const root=buildPath(tempDir(),"mcde-zombie-"~randomUUID().toString());
+    mkdirRecurse(root);scope(exit)rmdirRecurse(root);
+    auto p=new ServerPlayer(1,"Tester",Vec3(30.5f,61,30.5f),GameMode.creative,false);
+    server.players[1]=p;
+    p.player.pitch=90;p.player.yaw=0;
+    p.player.inventory.hotbar[0]=ItemStack(ItemId.zombieSpawnEgg,1);
+    world.setBlock(30,60,30,BlockId.stone);
+    server.placeSelectedBlock(p);
+    assert(server.zombies.length==1);
+    assert(server.zombies[0].position==Vec3(30.5f,61,30.5f));
+    assert(p.player.inventory.hotbar[0].count==1);
+    server.placeSelectedBlock(p);assert(server.zombies.length==1); // occupied
+    p.player.position.y=70;server.placeSelectedBlock(p);
+    assert(server.zombies.length==1); // out of reach
+    p.player.position=Vec3(30.5f,61,28);p.player.pitch=0;
+    assert(server.attackZombie(p));assert(server.zombies[0].health==19);
+    assert(server.attackZombie(p));assert(server.zombies[0].health==19);
+    world.setBlock(30,62,29,BlockId.stone);
+    assert(!server.attackZombie(p)); // cannot hit through wall
+    world.saveDirectory=root;
+    server.saveZombies();server.zombies=null;server.loadZombies();
+    assert(server.zombies.length==1&&server.zombies[0].health==19);
+    assert(server.nextZombieId==2);
+    world.saveDirectory="";
 }

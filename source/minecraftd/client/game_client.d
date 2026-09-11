@@ -1385,7 +1385,7 @@ final class GameClient
                                 if(index<items.length)
                                     multiplayer.requestInventoryAction(
                                         PlayerActionType.creativeSetHotbar,
-                                        cast(ubyte)items[index],cast(ubyte)slot);
+                                        cast(ushort)items[index],cast(ubyte)slot);
                             }
                             else if(hovered<Inventory.slotCount)
                                 multiplayer.requestInventoryAction(
@@ -1419,7 +1419,7 @@ final class GameClient
                                 if(index<items.length)
                                     multiplayer.requestInventoryAction(
                                         PlayerActionType.creativeSetCarried,
-                                        cast(ubyte)items[index],button==0?1:64);
+                                        cast(ushort)items[index],button==0?1:64);
                             }
                             else if(creative&&hovered==
                                 InventoryMenuRenderer.creativeTrashSlot)

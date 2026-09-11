@@ -18,7 +18,14 @@ LanguageService activeLanguage;
 string tr(string key,string fallback)
 {return activeLanguage is null?fallback:activeLanguage.text(key,fallback);}
 string translatedItem(string english)
-{return activeLanguage is null?english:activeLanguage.itemText(english);}
+{
+    if(english=="Spawn Zombie")
+    {
+        const label=tr("item.minecraft.zombie_spawn_egg",english);
+        return label=="Zombie Spawn Egg"?english:label;
+    }
+    return activeLanguage is null?english:activeLanguage.itemText(english);
+}
 string translatedLabel(string english)
 {return activeLanguage is null?english:activeLanguage.labelText(english);}
 

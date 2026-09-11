@@ -248,6 +248,8 @@ final class GameRenderer
     private float meshGamma=0.5f;
 
     private TextureHandle steve;
+    private uint zombieTexture;
+    private float zombieUvScaleY=1;
     private TextureHandle accountSkin;
     private string accountSkinPath;
     private string accountSkinModel = "classic";
@@ -394,6 +396,9 @@ final class GameRenderer
         blockTextures.craftingFront=load("textures/block/crafting_table_front.png");
         blockTextures.furnaceFront=load("textures/block/furnace_front.png");
         steve = loadHandle("textures/entity/player/wide/steve.png");
+        zombieTexture=load("textures/entity/zombie/zombie.png");
+        const zombieImage=resourceImage("minecraft","textures/entity/zombie/zombie.png");
+        zombieUvScaleY=cast(float)zombieImage.width/zombieImage.height;
         accountSkin = steve;
         sun = graphics.uploadTexture(images.loadAdditivePngAsAlpha(
             resources.resolveAsset("minecraft", "textures/environment/celestial/sun.png")));
@@ -560,7 +565,7 @@ final class GameRenderer
             const spritePath="textures/item/"~itemTextureName(item)~".png";
             const sprite=resourceImage("minecraft",spritePath);
             const texture=loadResourceTexture("minecraft",spritePath,0);
-            blockTextures.itemSprites[cast(ubyte)item]=texture;
+            blockTextures.itemSprites[cast(ushort)item]=texture;
             itemMeshes[item]=blocks.buildGeneratedItem(texture,sprite);
         }
         foreach (raw; cast(int)firstCatalogItem .. cast(int)lastCatalogItem + 1)
@@ -825,7 +830,8 @@ final class GameRenderer
                 options.number("soundCategory_player",1),
                 options.number("soundCategory_ui",1),
                 options.number("soundCategory_music",1),
-                options.boolean("directionalAudio",false));
+                options.boolean("directionalAudio",false),
+                options.number("soundCategory_hostile",1));
         if(graphics !is null)graphics.setVsync(options.boolean("vsync",true));
         if(blocks !is null)
         {
@@ -965,6 +971,8 @@ final class GameRenderer
 
     void simulateTick(LocalPlayer player, MultiplayerClient multiplayer)
     {
+        foreach(event;multiplayer.consumeZombieSounds())
+            sounds.playZombie(event.sound,event.position);
         const foodCount=player.inventory.hotbar[player.selectedSlot].count;
         if(player.eatingTicks!=previousEatingTicks)
         {
@@ -1420,6 +1428,11 @@ final class GameRenderer
             const playerShadow = EntityShadowStyle.fromFootprint(
                 Player.width, Player.width);
             const itemShadow = EntityShadowStyle(0.15f, 0.75f);
+            foreach(zombie;multiplayer.zombies())
+                if(zombie.deathTime<20)
+                    frame.append(entityShadows.build(zombie.position,playerShadow,
+                        camera.position),entityShadow.descriptorIndex,viewProjection,
+                        DrawLayer.entityShadow,terrainFog);
             foreach (renderItem; multiplayer.droppedItems())
                 frame.append(entityShadows.build(renderItem.interpolatedPosition(),
                     itemShadow, camera.position), entityShadow.descriptorIndex,
@@ -1459,6 +1472,21 @@ final class GameRenderer
             foreach (textureIndex, geometry; *mesh)
                 frame.append(geometry, textureIndex, model * viewProjection,
                     stackLayer(item.item, textureIndex), terrainFog);
+        }
+
+        foreach(zombie;multiplayer.zombies())
+        {
+            if(zombie.deathTime>=20)continue;
+            auto geometry=players.buildSteve(zombie.position,zombie.yaw+180,
+                0,0,0,0,0,false,cast(float)zombie.age,
+                SkinLayers(true,false,false,false,false,false),false,true,false,false,true);
+            foreach(ref vertex;geometry)vertex.uv[1]*=zombieUvScaleY;
+            players.applyDeathPose(geometry,zombie.position,zombie.yaw+180,zombie.deathTime);
+            applyHurtTint(geometry,zombie.hurtTime,zombie.health<=0);
+            players.applyWorldLight(geometry,blocks.lightAt(zombie.position+Vec3(0,1,0)));
+            frame.append(geometry,zombieTexture,viewProjection,DrawLayer.worldDoubleSided,terrainFog);
+            if(zombie.fireTicks>0)
+                appendEntityFire(zombie.position,1.95f,fire1Texture,viewProjection,terrainFog);
         }
 
         foreach (remote; multiplayer.remotePlayers())
@@ -1637,6 +1665,21 @@ final class GameRenderer
         // them as camera-facing text. Sneaking reduces the range to 32 blocks
         // and keeps the label depth-tested; standing labels use the normal
         // 64-block range and remain readable through intervening geometry.
+        foreach(zombie;multiplayer.zombies())
+        {
+            if(zombie.deathTime>=20)continue;
+            auto geometry=players.buildSteve(zombie.position,zombie.yaw+180,
+                0,0,0,0,0,false,cast(float)zombie.age,
+                SkinLayers(true,false,false,false,false,false),false,true,false,false,true);
+            foreach(ref vertex;geometry)vertex.uv[1]*=zombieUvScaleY;
+            players.applyDeathPose(geometry,zombie.position,zombie.yaw+180,zombie.deathTime);
+            applyHurtTint(geometry,zombie.hurtTime,zombie.health<=0);
+            players.applyWorldLight(geometry,blocks.lightAt(zombie.position+Vec3(0,1,0)));
+            frame.append(geometry,zombieTexture,viewProjection,DrawLayer.worldDoubleSided,terrainFog);
+            if(zombie.fireTicks>0)
+                appendEntityFire(zombie.position,1.95f,fire1Texture,viewProjection,terrainFog);
+        }
+
         foreach (remote; multiplayer.remotePlayers())
         {
             if(remote.health<=0&&remote.deathTime>=20)

@@ -280,7 +280,7 @@ void main()
         0, 0, false, 0.0f, 89.0f)));
     PacketWriter dropAction;
     dropAction.putU8(cast(ubyte) PlayerActionType.dropItem);
-    dropAction.putU8(0);
+    dropAction.putU16(0);
     dropAction.putU8(0);
     first.send(GamePacketType.playerAction, dropAction.data);
     bool thrownItemSeen;

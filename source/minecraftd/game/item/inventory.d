@@ -3,7 +3,7 @@ module minecraftd.game.item.inventory;
 import minecraftd.world.block : BlockId, catalogBlockDefinition,
     firstCatalogBlock, isCatalogBlock, lastCatalogBlock;
 
-enum ItemId : ubyte
+enum ItemId : ushort
 {
     none,
     grassBlock,
@@ -69,13 +69,13 @@ enum ItemId : ubyte
     limeTerracotta, greenTerracotta, cyanTerracotta, lightBlueTerracotta,
     blueTerracotta, purpleTerracotta, magentaTerracotta, pinkTerracotta,
     craftingTable, furnace, enchantingTable,
-woodenSword, woodenAxe, woodenPickaxe, woodenShovel, woodenHoe, stoneSword, stoneAxe, stonePickaxe, stoneShovel, stoneHoe, copperSword, copperAxe, copperPickaxe, copperShovel, copperHoe, ironSword, ironAxe, ironPickaxe, ironShovel, ironHoe, goldenSword, goldenAxe, goldenPickaxe, goldenShovel, goldenHoe, diamondSword, diamondAxe, diamondPickaxe, diamondShovel, diamondHoe, netheriteSword, netheriteAxe, netheritePickaxe, netheriteShovel, netheriteHoe, beef, cookedBeef, porkchop, cookedPorkchop, chicken, cookedChicken, mutton, cookedMutton, rabbit, cookedRabbit, cod, cookedCod, apple, bread, stick, coal, ironIngot, copperIngot, goldIngot, diamond, lapisLazuli, rawIron, rawCopper, rawGold, wheat, flint, leather, paper, book, netheriteIngot,
+woodenSword, woodenAxe, woodenPickaxe, woodenShovel, woodenHoe, stoneSword, stoneAxe, stonePickaxe, stoneShovel, stoneHoe, copperSword, copperAxe, copperPickaxe, copperShovel, copperHoe, ironSword, ironAxe, ironPickaxe, ironShovel, ironHoe, goldenSword, goldenAxe, goldenPickaxe, goldenShovel, goldenHoe, diamondSword, diamondAxe, diamondPickaxe, diamondShovel, diamondHoe, netheriteSword, netheriteAxe, netheritePickaxe, netheriteShovel, netheriteHoe, beef, cookedBeef, porkchop, cookedPorkchop, chicken, cookedChicken, mutton, cookedMutton, rabbit, cookedRabbit, cod, cookedCod, apple, bread, stick, coal, ironIngot, copperIngot, goldIngot, diamond, lapisLazuli, rawIron, rawCopper, rawGold, wheat, flint, leather, paper, book, netheriteIngot, zombieSpawnEgg,
 }
 
 enum ItemId firstCatalogItem = ItemId.coarseDirt;
 enum ItemId lastCatalogItem = ItemId.enchantingTable;
-enum ItemId lastItem = ItemId.netheriteIngot;
-static assert(cast(int)lastItem <= 255);
+enum ItemId lastItem = ItemId.zombieSpawnEgg;
+static assert(cast(int)lastItem <= ushort.max);
 enum ItemId lastBlockItem = lastCatalogItem;
 static assert(cast(int)lastCatalogItem <= ubyte.max,
     "Item registry exceeds the current inventory/network ID width");
@@ -120,6 +120,7 @@ enum CreativeItemGroup : ubyte
 
 bool creativeItemInGroup(ItemId item, CreativeItemGroup group)
 {
+    if(item==ItemId.zombieSpawnEgg)return group==CreativeItemGroup.spawnEggs;
     if(item>=ItemId.craftingTable&&item<=ItemId.enchantingTable)
         return group==CreativeItemGroup.functionalBlocks;
     if(item>=ItemId.woodenSword)
@@ -591,6 +592,7 @@ private:
 
 string itemName(ItemId item)
 {
+    if(item==ItemId.zombieSpawnEgg)return "Spawn Zombie";
     if(item>=ItemId.woodenSword&&item<=lastItem)
         return extraItemNames[cast(int)item-cast(int)ItemId.woodenSword];
     switch (item)
@@ -626,11 +628,13 @@ immutable string[] extraItemNames = ["Wooden Sword","Wooden Axe","Wooden Pickaxe
 immutable string[] extraItemTextures = ["wooden_sword","wooden_axe","wooden_pickaxe","wooden_shovel","wooden_hoe","stone_sword","stone_axe","stone_pickaxe","stone_shovel","stone_hoe","copper_sword","copper_axe","copper_pickaxe","copper_shovel","copper_hoe","iron_sword","iron_axe","iron_pickaxe","iron_shovel","iron_hoe","golden_sword","golden_axe","golden_pickaxe","golden_shovel","golden_hoe","diamond_sword","diamond_axe","diamond_pickaxe","diamond_shovel","diamond_hoe","netherite_sword","netherite_axe","netherite_pickaxe","netherite_shovel","netherite_hoe","beef","cooked_beef","porkchop","cooked_porkchop","chicken","cooked_chicken","mutton","cooked_mutton","rabbit","cooked_rabbit","cod","cooked_cod","apple","bread","stick","coal","iron_ingot","copper_ingot","gold_ingot","diamond","lapis_lazuli","raw_iron","raw_copper","raw_gold","wheat","flint","leather","paper","book","netherite_ingot"];
 string itemTextureName(ItemId item)
 {
+    if(item==ItemId.zombieSpawnEgg)return "zombie_spawn_egg";
     return item>=ItemId.woodenSword&&item<=lastItem
         ?extraItemTextures[cast(int)item-cast(int)ItemId.woodenSword]:"";
 }
 string itemIdentifier(ItemId item)
 {
+    if(item==ItemId.zombieSpawnEgg)return "zombie_spawn_egg";
     import std.ascii:toLower;
     string result;
     foreach(c;itemName(item)) result~=c==' '?'_':toLower(c);

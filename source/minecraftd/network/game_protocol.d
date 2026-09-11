@@ -4,6 +4,7 @@ import core.stdc.string : memcpy;
 import minecraftd.common.math3d : Vec3;
 import minecraftd.game.item.inventory : Inventory, ItemId, ItemStack;
 import minecraftd.world.world_settings : DimensionId, GameMode;
+import minecraftd.game.entity.zombie : ZombieState;
 
 enum GamePacketType : ubyte
 {
@@ -27,9 +28,9 @@ enum GamePacketType : ubyte
 }
 
 enum uint maximumGamePacketBytes = 1024 * 1024;
-// 22 adds the expanded shared block/item registry. The wire width remains one
-// byte, but older clients must not interpret the appended IDs as unknown enums.
-enum ushort gameProtocolVersion = 24;
+// 25 adds zombie snapshots and widens item IDs/action targets to 16 bits.
+// Existing numeric IDs are preserved; older wire formats must be rejected.
+enum ushort gameProtocolVersion = 25;
 
 enum ubyte chunkEncodingRaw = 0;
 enum ubyte chunkEncodingRle = 1;
@@ -210,26 +211,26 @@ struct PacketWriter
     {
         foreach (stack; inventory.hotbar)
         {
-            putU8(cast(ubyte) stack.item);
+            putU16(cast(ushort) stack.item);
             putU8(stack.count);
             putU8(stack.popTicks);
             putU16(stack.damage);putU8(stack.enchantment);putU8(stack.enchantmentLevel);
         }
         foreach (stack; inventory.storage)
         {
-            putU8(cast(ubyte) stack.item);
+            putU16(cast(ushort) stack.item);
             putU8(stack.count);
             putU8(stack.popTicks);
             putU16(stack.damage);putU8(stack.enchantment);putU8(stack.enchantmentLevel);
         }
-        putU8(cast(ubyte) inventory.carried.item);
+        putU16(cast(ushort) inventory.carried.item);
         putU8(inventory.carried.count);
         putU8(inventory.carried.popTicks);
         putU16(inventory.carried.damage);putU8(inventory.carried.enchantment);putU8(inventory.carried.enchantmentLevel);
         putU8(inventory.station);
         foreach(stack;inventory.work)
         {
-            putU8(cast(ubyte)stack.item);putU8(stack.count);putU8(stack.popTicks);
+            putU16(cast(ushort)stack.item);putU8(stack.count);putU8(stack.popTicks);
             putU16(stack.damage);putU8(stack.enchantment);putU8(stack.enchantmentLevel);
         }
         putI32(inventory.stationX);putI32(inventory.stationY);putI32(inventory.stationZ);
@@ -266,11 +267,18 @@ struct PacketWriter
     }
     void putDroppedItem(const DroppedItemState item)
     {
-        putU32(item.id); putU8(cast(ubyte) item.item); putU8(item.count);
+        putU32(item.id); putU16(cast(ushort) item.item); putU8(item.count);
         putVec3(item.position); putVec3(item.velocity); putU32(item.age);
         putU32(item.pickupDelay);
         putU8(cast(ubyte) item.dimension);
         putU16(item.damage); putU8(item.enchantment); putU8(item.enchantmentLevel);
+    }
+    void putZombie(const ZombieState z)
+    {
+        putU32(z.id);putVec3(z.position);putF32(z.yaw);
+        putU8(cast(ubyte)z.dimension);putF32(z.health);putU32(z.age);
+        putU16(z.fireTicks);putU8(z.hurtTime);putU8(z.deathTime);
+        putU32(z.ambientSerial);putU32(z.hurtSerial);putU32(z.deathSerial);
     }
 }
 
@@ -346,7 +354,7 @@ struct PacketReader
     }
     ItemStack readStack()
     {
-        return ItemStack(cast(ItemId)readU8(),readU8(),readU8(),readU16(),readU8(),readU8());
+        return ItemStack(cast(ItemId)readU16(),readU8(),readU8(),readU16(),readU8(),readU8());
     }
     NetworkPlayerState readPlayer()
     {
@@ -387,13 +395,27 @@ struct PacketReader
     DroppedItemState readDroppedItem()
     {
         DroppedItemState result;
-        result.id = readU32(); result.item = cast(ItemId) readU8();
+        result.id = readU32(); result.item = cast(ItemId) readU16();
         result.count = readU8(); result.position = readVec3();
         result.velocity = readVec3(); result.age = readU32();
         result.pickupDelay = readU32();
         result.dimension = cast(DimensionId) readU8();
         result.damage=readU16(); result.enchantment=readU8(); result.enchantmentLevel=readU8();
         return result;
+    }
+    ZombieState readZombie()
+    {
+        import std.math : isFinite;
+        ZombieState z;
+        z.id=readU32();z.position=readVec3();z.yaw=readF32();
+        z.dimension=cast(DimensionId)readU8();z.health=readF32();z.age=readU32();
+        z.fireTicks=readU16();z.hurtTime=readU8();z.deathTime=readU8();
+        z.ambientSerial=readU32();z.hurtSerial=readU32();z.deathSerial=readU32();
+        if(!z.id||!isFinite(z.position.x)||!isFinite(z.position.y)
+            ||!isFinite(z.position.z)||!isFinite(z.yaw)||!isFinite(z.health)
+            ||z.health<0||z.health>20||z.fireTicks>160||z.deathTime>20
+            ||z.hurtTime>10||z.dimension>DimensionId.nether)valid=false;
+        return z;
     }
 }
 
@@ -610,4 +632,20 @@ unittest
     assert(!decodeChunkRuns([0, 0, 4], 1, expanded));
     assert(!decodeChunkRuns([0, 2, 4], 1, expanded));
     assert(!decodeChunkRuns([0, 1], 1, expanded));
+}
+
+
+unittest
+{
+    Inventory inv;inv.hotbar[0]=ItemStack(ItemId.zombieSpawnEgg,64);
+    PacketWriter writer;writer.putInventory(inv);
+    ZombieState z;z.id=7;z.position=Vec3(1,70,2);z.fireTicks=120;
+    writer.putZombie(z);
+    auto reader=PacketReader(writer.data);
+    assert(reader.readInventory().hotbar[0].item==ItemId.zombieSpawnEgg);
+    auto decoded=reader.readZombie();
+    assert(reader.valid&&reader.cursor==reader.data.length);
+    assert(decoded.id==7&&decoded.position==z.position&&decoded.fireTicks==120);
+    writer.data.length=0;writer.putZombie(z);writer.data.length--;
+    reader=PacketReader(writer.data);reader.readZombie();assert(!reader.valid);
 }

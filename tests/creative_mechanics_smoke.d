@@ -66,11 +66,11 @@ void main()
     // inventory stacks. Exercise carried-stack, number-key/hotbar, and trash.
     PacketWriter catalogPick;
     catalogPick.putU8(cast(ubyte)PlayerActionType.creativeSetCarried);
-    catalogPick.putU8(cast(ubyte)ItemId.stone);catalogPick.putU8(64);
+    catalogPick.putU16(cast(ushort)ItemId.stone);catalogPick.putU8(64);
     client.send(GamePacketType.playerAction,catalogPick.data);
     PacketWriter catalogHotbar;
     catalogHotbar.putU8(cast(ubyte)PlayerActionType.creativeSetHotbar);
-    catalogHotbar.putU8(cast(ubyte)ItemId.bricks);catalogHotbar.putU8(4);
+    catalogHotbar.putU16(cast(ushort)ItemId.bricks);catalogHotbar.putU8(4);
     client.send(GamePacketType.playerAction,catalogHotbar.data);
     bool catalogActionsApplied;
     foreach(_;0..100)
@@ -95,7 +95,7 @@ void main()
     assert(catalogActionsApplied);
     PacketWriter clearCatalog;
     clearCatalog.putU8(cast(ubyte)PlayerActionType.creativeClearInventory);
-    clearCatalog.putU8(0);clearCatalog.putU8(0);
+    clearCatalog.putU16(0);clearCatalog.putU8(0);
     client.send(GamePacketType.playerAction,clearCatalog.data);
 
     // Aim at the grass ahead, then obtain it through middle-click's
@@ -105,7 +105,7 @@ void main()
     Thread.sleep(80.msecs);
     PacketWriter pick;
     pick.putU8(cast(ubyte) PlayerActionType.pickBlock);
-    pick.putU8(0); pick.putU8(0);
+    pick.putU16(0); pick.putU8(0);
     client.send(GamePacketType.playerAction, pick.data);
     bool pickedSingleBlock;
     foreach (_; 0 .. 100)

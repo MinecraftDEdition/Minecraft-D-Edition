@@ -88,7 +88,7 @@ struct BlockTextureSet
     uint waterFlow;
     uint netherPortal;
     uint flintAndSteel;
-    uint[ubyte] itemSprites;
+    uint[ushort] itemSprites;
     uint[BlockId] catalogSide;
     uint[BlockId] catalogTop;
     uint[BlockId] catalogBottom;
