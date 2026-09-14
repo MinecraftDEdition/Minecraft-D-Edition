@@ -104,8 +104,6 @@ Imported Minecraft assets are for local development only. They are not original 
   a read-only server information screen where the private EOS invitation can
   be copied. If EOS is unavailable, the screen clearly falls back to a LAN-only
   address.
-- On the title screen, `Right Shift + Plus + 1-9` opens that many total local
-  clients for multiplayer testing.
 
 Each singleplayer world binds an authoritative integrated game server to a
 Windows-assigned port. Publishing normally exposes a private
