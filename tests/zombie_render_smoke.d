@@ -8,7 +8,8 @@ import std.stdio : writeln;
 import minecraftd.client.render.graphics_device;
 import minecraftd.client.render.mesh;
 import minecraftd.client.render.texture_manager;
-import minecraftd.client.render.player_renderer;
+import minecraftd.client.render.mob_renderer;
+import minecraftd.game.entity.zombie;
 import minecraftd.common.math3d;
 import minecraftd.platform.windows.dx12.device : Dx12Device;
 import minecraftd.platform.desktop.vulkan.device : VulkanDevice;
@@ -26,20 +27,35 @@ void main()
         GraphicsDevice graphics=vulkan?cast(GraphicsDevice)new VulkanDevice(window,960,540,".")
             :cast(GraphicsDevice)new Dx12Device(window,960,540);
         scope(exit)destroy(graphics);
-        auto images=new TextureManager();auto players=new PlayerRenderer();
+        auto images=new TextureManager();auto mobs=new MobRenderer();
         auto skin=images.loadPng("assets/minecraft/textures/entity/zombie/zombie.png");
         const texture=graphics.uploadTexture(skin);
         auto view=lookToLH(Vec3(0,1,0),Vec3(0,0,1),Vec3(0,1,0))
             *perspectiveFovLH(60*DEG_TO_RAD,960.0f/540,.05f,100);
         FrameMesh frame;
+        const solid=graphics.uploadTexture(ImageData(1,1,[255,255,255,255]));
+        Vertex[] wall;
+        const red=Color(.7f,.15f,.1f,1);
+        appendQuad(wall,Vec3(-2.6f,2.4f,4),Vec3(-.7f,2.4f,4),
+            Vec3(-.7f,-.2f,4),Vec3(-2.6f,-.2f,4),
+            Vec2(0,0),Vec2(1,0),Vec2(1,1),Vec2(0,1),red,red,red,red);
+        frame.append(wall,solid.descriptorIndex,view,DrawLayer.worldDoubleSided);
+        ZombieState[] zombies;
         foreach(i,yaw;[0.0f,90.0f,180.0f])
         {
-            auto mesh=players.buildSteve(Vec3((cast(float)i-1)*1.65f,0,5),yaw,
-                0,0,0,0,0,false,0,SkinLayers(true,false,false,false,false,false),
-                false,true,false,false,true);
-            foreach(ref v;mesh)v.uv[1]*=cast(float)skin.width/skin.height;
-            frame.append(mesh,texture.descriptorIndex,view,DrawLayer.worldDoubleSided);
+            ZombieState z;z.id=cast(uint)i+1;
+            z.position=Vec3((cast(float)i-1)*1.65f,0,5);z.yaw=yaw+180;
+            zombies~=z;
         }
+        mobs.appendWorld(frame,zombies,texture.descriptorIndex,
+            cast(float)skin.width/skin.height,view,FogSettings.init,0,(Vec3 p)=>1.0f);
+        Vertex[] hand;
+        const handColor=Color(.9f,.1f,.1f,1);
+        appendQuad(hand,Vec3(.1f,.1f,.8f),Vec3(.9f,.1f,.8f),
+            Vec3(.9f,-.8f,.8f),Vec3(.1f,-.8f,.8f),
+            Vec2(0,0),Vec2(1,0),Vec2(1,1),Vec2(0,1),
+            handColor,handColor,handColor,handColor);
+        frame.append(hand,solid.descriptorIndex,Mat4.identity(),DrawLayer.viewModel);
         // Copy the full rendered scene through the existing readback surface.
         Vertex[] quad;const white=Color(1,1,1,1);
         appendQuad(quad,Vec3(-1,1,0),Vec3(1,1,0),Vec3(1,-1,0),Vec3(-1,-1,0),
@@ -49,16 +65,21 @@ void main()
         foreach(_;0..3)graphics.render(frame);
         auto pixels=vulkan?(cast(VulkanDevice)graphics).readBlurPixels()
             :(cast(Dx12Device)graphics).readBlurPixels();
-        ubyte[] rgb;size_t green;
+        ubyte[] rgb;size_t green,leftGreen;
         foreach(i;0..pixels.width*pixels.height)
         {
             const p=pixels.rgba[i*4..i*4+4];rgb~=p[0..3];
-            if(p[1]>p[0]*1.2f&&p[1]>p[2]*1.2f)++green;
+            if(p[1]>p[0]*1.2f&&p[1]>p[2]*1.2f)
+            {++green;if(i%pixels.width<pixels.width/3)++leftGreen;}
         }
-        assert(green>500,"Zombie skin must be visible");
+        assert(green>100,"Unoccluded zombie skin must be visible");
+        assert(leftGreen==0,"Opaque terrain must hide the left zombie");
+        const center=((pixels.height*2/3)*pixels.width+pixels.width*3/4)*4;
+        assert(pixels.rgba[center]>150&&pixels.rgba[center+1]<80,
+            "First-person foreground must cover the zombie");
         const name=vulkan?"vulkan":"dx12";
         write("test-output/zombie/"~name~".ppm",
             format("P6\n%s %s\n255\n",pixels.width,pixels.height)~cast(string)rgb);
-        writeln(name," zombie front/side/back rendered");
+        writeln(name," zombie terrain occlusion and first-person foreground passed");
     }
 }

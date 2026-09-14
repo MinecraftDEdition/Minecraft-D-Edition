@@ -1,4 +1,5 @@
 module minecraftd.client.render.game_renderer;
+import minecraftd.client.render.mob_renderer;
 
 unittest
 {
@@ -199,6 +200,7 @@ final class GameRenderer
     private ulong resourceTextureBytes;
     private BlockRenderer blocks;
     private PlayerRenderer players;
+    private minecraftd.client.render.mob_renderer.MobRenderer mobs;
     private EntityShadowRenderer entityShadows;
     private SkyRenderer sky;
     private HudRenderer hud;
@@ -330,6 +332,7 @@ final class GameRenderer
         }
         blocks = new BlockRenderer(world);
         players = new PlayerRenderer();
+        mobs = new MobRenderer();
         entityShadows = new EntityShadowRenderer(world);
         hud = new HudRenderer();
         titleScreen = new TitleScreenRenderer(graphicsApi == GraphicsApi.vulkan
@@ -1474,20 +1477,12 @@ final class GameRenderer
                     stackLayer(item.item, textureIndex), terrainFog);
         }
 
+        mobs.appendWorld(frame,multiplayer.zombies(),zombieTexture,zombieUvScaleY,
+            viewProjection,terrainFog,multiplayer.serverPaused?0:partialTick,
+            (Vec3 position)=>blocks.lightAt(position));
         foreach(zombie;multiplayer.zombies())
-        {
-            if(zombie.deathTime>=20)continue;
-            auto geometry=players.buildSteve(zombie.position,zombie.yaw+180,
-                0,0,0,0,0,false,cast(float)zombie.age,
-                SkinLayers(true,false,false,false,false,false),false,true,false,false,true);
-            foreach(ref vertex;geometry)vertex.uv[1]*=zombieUvScaleY;
-            players.applyDeathPose(geometry,zombie.position,zombie.yaw+180,zombie.deathTime);
-            applyHurtTint(geometry,zombie.hurtTime,zombie.health<=0);
-            players.applyWorldLight(geometry,blocks.lightAt(zombie.position+Vec3(0,1,0)));
-            frame.append(geometry,zombieTexture,viewProjection,DrawLayer.worldDoubleSided,terrainFog);
-            if(zombie.fireTicks>0)
+            if(zombie.fireTicks>0&&zombie.deathTime<20)
                 appendEntityFire(zombie.position,1.95f,fire1Texture,viewProjection,terrainFog);
-        }
 
         foreach (remote; multiplayer.remotePlayers())
         {
@@ -1665,21 +1660,6 @@ final class GameRenderer
         // them as camera-facing text. Sneaking reduces the range to 32 blocks
         // and keeps the label depth-tested; standing labels use the normal
         // 64-block range and remain readable through intervening geometry.
-        foreach(zombie;multiplayer.zombies())
-        {
-            if(zombie.deathTime>=20)continue;
-            auto geometry=players.buildSteve(zombie.position,zombie.yaw+180,
-                0,0,0,0,0,false,cast(float)zombie.age,
-                SkinLayers(true,false,false,false,false,false),false,true,false,false,true);
-            foreach(ref vertex;geometry)vertex.uv[1]*=zombieUvScaleY;
-            players.applyDeathPose(geometry,zombie.position,zombie.yaw+180,zombie.deathTime);
-            applyHurtTint(geometry,zombie.hurtTime,zombie.health<=0);
-            players.applyWorldLight(geometry,blocks.lightAt(zombie.position+Vec3(0,1,0)));
-            frame.append(geometry,zombieTexture,viewProjection,DrawLayer.worldDoubleSided,terrainFog);
-            if(zombie.fireTicks>0)
-                appendEntityFire(zombie.position,1.95f,fire1Texture,viewProjection,terrainFog);
-        }
-
         foreach (remote; multiplayer.remotePlayers())
         {
             if(remote.health<=0&&remote.deathTime>=20)

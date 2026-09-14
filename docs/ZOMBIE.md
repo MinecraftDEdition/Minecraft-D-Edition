@@ -14,9 +14,10 @@ allows up to 128 zombies; simulation runs near players and respects singleplayer
 pause. Both multiplayer clients receive the same authoritative state.
 
 The shared DX12/Vulkan model uses the wide player body, mirrored zombie limb
-UVs, and the zombie head overlay. Idle holds arms at 90 degrees forward;
-walking, attacking, crouching and swimming animation code remains available
-for later development. Idle does not bob the arms. The shared renderer also
+UVs, and the zombie head overlay. Arms stay at 90 degrees forward with the same idle sway as the player.
+Walking, attacking, crouching and swimming do not reposition the prototype's
+arms. `client/render/mob_renderer.d` owns mob geometry and world submission;
+mobs render once before the first-person pass clears depth. The shared renderer also
 serves macOS through MoltenVK.
 
 Resource packs override `minecraft:textures/entity/zombie/zombie.png`,

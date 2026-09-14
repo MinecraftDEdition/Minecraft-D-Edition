@@ -136,6 +136,9 @@ final class PlayerRenderer
         bool mainHandRight = true, bool swimming = false,
         bool slimArms = false, bool zombiePose = false)
     {
+        // The zombie prototype permits only idle arm sway around its fixed pose.
+        if(zombiePose)
+        {walkSpeed=0;attackProgress=0;crouching=false;swimming=false;holdingItem=false;}
         Vertex[] result;
         const yaw = bodyYawDegrees * DEG_TO_RAD;
         const headYaw = headYawDegrees * DEG_TO_RAD;
@@ -152,9 +155,8 @@ final class PlayerRenderer
         float leftArmZ = -rightArmZ;
         if(zombiePose)
         {
-            // Idle holds both arms forward. Other animation deltas still run.
-            rightArmX+=PI*.5f;leftArmX+=PI*.5f;
-            rightArmZ=leftArmZ=0;
+            rightArmX=PI*.5f-sinf(ageInTicks*.067f)*.05f;
+            leftArmX=PI*.5f+sinf(ageInTicks*.067f)*.05f;
         }
         else
         {
@@ -757,7 +759,10 @@ unittest
         SkinLayers.classic(),false,true,false,false,true);
     auto attack=renderer.buildSteve(Vec3(0,0,0),0,0,0,0,0,.5f,false,0,
         SkinLayers.classic(),false,true,false,false,true);
-    assert(idle==later,"Idle must keep the zombie arm pose fixed");
-    assert(idle!=attack,"Non-idle animations must still affect the arms");
+    assert(idle!=later,"Zombie arms must use the player idle sway");
+    assert(idle==attack,"Attacks must not reposition the zombie arms");
+    auto otherPose=renderer.buildSteve(Vec3(0,0,0),0,0,0,15,1,.5f,true,0,
+        SkinLayers.classic(),true,true,true,false,true);
+    assert(idle==otherPose,"Other animation poses must not alter the prototype arms");
     foreach(vertex;idle)assert(vertex.uv[1]<=.5f,"Zombie limbs use mirrored upper-half UVs");
 }
