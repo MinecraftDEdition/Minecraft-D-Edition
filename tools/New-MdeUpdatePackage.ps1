@@ -59,7 +59,10 @@ foreach ($file in Get-ChildItem -LiteralPath $RuntimeRoot -Recurse -File |
     Sort-Object FullName) {
     $relative = Get-RelativeRuntimePath $file.FullName
     if ($excluded -contains $relative) { continue }
-    if ($relative -match '(^|/)(saves|screenshots|resourcepacks|eos-cache|cache)(/|$)' -or
+    # User packs live at the installation root. Minecraft also ships built-in
+    # packs under assets/minecraft/resourcepacks, which are managed assets.
+    if ($relative -match '(^|/)(saves|screenshots|eos-cache|cache)(/|$)' -or
+        $relative -match '^resourcepacks(/|$)' -or
         $relative -in @('data/options.txt', 'data/eos.local.json',
             'data/server_entry.txt', 'data/window_state.txt', 'data/resource-packs.json', 'data/languages.json',
             'data/account_session.token')) {
