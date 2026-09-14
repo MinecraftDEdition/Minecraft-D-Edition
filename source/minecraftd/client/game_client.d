@@ -901,6 +901,7 @@ final class GameClient
 
         double previous = monotonicSeconds();
         double accumulator = 0.0;
+        multiplayer.locallyManagedPause = integratedServer !is null;
         double elapsed = 0.0;
         double debugSampleSeconds = 0.0;
         uint debugSampleFrames;
@@ -909,6 +910,7 @@ final class GameClient
         enum double tickSeconds = 1.0 / 20.0;
         uint inputSequence;
         uint reconnectTicks;
+        bool pauseTransition;
         bool pendingUse;
         bool pendingAttack;
         bool pendingDrop;
@@ -932,12 +934,18 @@ final class GameClient
 
         void setPauseMenu(bool active)
         {
+            pauseTransition = true;
             if (active)
                 pauseMenu.open();
             else
                 pauseMenu.close();
             if (integratedServer !is null)
                 integratedServer.setPaused(active);
+            multiplayer.localPauseActive = active && integratedServer !is null
+                && integratedServer.canPause();
+            pendingAttack = pendingUse = pendingDrop = pendingDropStack = false;
+            pendingFlightToggle = false;
+            window.mouseDelta();
             window.setMouseCapture(!active);
             window.setCursorShape(CursorShape.arrow);
             if (!active)
@@ -1084,6 +1092,8 @@ final class GameClient
             if(window.pressed(VK_F3))
                 debugVisible=!debugVisible;
 
+            multiplayer.localPauseActive = integratedServer !is null
+                && pauseMenu.active && integratedServer.canPause();
             multiplayer.poll(chat);
             // Presence follows authoritative game-mode snapshots live. A
             if(player.inventory.station&&!inventoryMenu.station)
@@ -1128,11 +1138,7 @@ final class GameClient
                 && player.gameMode != player.gameMode.spectator)
             {
                 if (pauseMenu.active)
-                {
-                    pauseMenu.close();
-                    if (integratedServer !is null)
-                        integratedServer.setPaused(false);
-                }
+                    setPauseMenu(false);
                 if (options.active) options.close();
                 if(inventoryMenu.active)setInventoryMenu(false);
                 deathScreen.open(player.hardcore,player.totalExperience,
@@ -1753,19 +1759,30 @@ final class GameClient
                 player.selectedSlot = (player.selectedSlot + 8) % 9;
             if (controlsActive && gamepad.pressed(GamepadButton.dpadRight))
                 player.selectedSlot = (player.selectedSlot + 1) % 9;
+            // Clicks do not need to wait for the next movement tick. They use
+            // the same authoritative reach/inventory rules on the server.
+            if (controlsActive && (pendingAttack || pendingUse))
+            {
+                multiplayer.sendInteraction(pendingAttack, pendingUse);
+                if (pendingAttack && player.gameMode == player.gameMode.creative)
+                    renderer.updateMining(player, true, true);
+                if (pendingUse) player.attack(true);
+                pendingAttack = pendingUse = false;
+            }
             // An open menu only freezes a genuinely singleplayer integrated
             // server. In multiplayer the client keeps ticking and sends neutral
             // input while controls are captured by the menu.
-            const worldPaused = multiplayer.serverPaused;
+            const worldPaused = integratedServer !is null
+                ? multiplayer.localPauseActive : multiplayer.serverPaused;
             // Music and its scheduling clock continue while simulation pauses.
             renderer.tickGameMusic(player.dimension, false);
-            if (worldPaused)
-                accumulator = 0.0;
-            else
+            if (!worldPaused && !(pauseTransition && integratedServer !is null))
             {
                 accumulator += frameSeconds;
                 elapsed += frameSeconds;
             }
+
+            pauseTransition = false;
 
             while (!worldPaused && accumulator >= tickSeconds)
             {
@@ -1901,12 +1918,8 @@ final class GameClient
                 ? uiCursor : Point(0,0);
             const inventoryCursor=inventoryMenu.active
                 ?uiCursor:Point(0,0);
-            // A paused client has no next simulation tick to interpolate
-            // toward. Render the current authoritative endpoint instead of
-            // forcing alpha zero (the stale previous endpoint), which could
-            // leave a newly joined client with only the clear sky and HUD.
-            const renderPartialTick = worldPaused ? 1.0f
-                : cast(float) (accumulator / tickSeconds);
+            // Retain the exact interpolation phase across pause/resume.
+            const renderPartialTick = cast(float) (accumulator / tickSeconds);
             foreach(remote;multiplayer.remotePlayers())
             {
                 const skinPath=accounts.ensureRemoteSkin(remote.accountId,

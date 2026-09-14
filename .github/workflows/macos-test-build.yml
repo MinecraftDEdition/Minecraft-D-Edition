@@ -41,6 +41,11 @@ jobs:
             -Wl,-rpath,"$deps/lib" -Wl,-rpath,"$deps"
           "$RUNNER_TEMP/blur-macos-smoke"
 
+      - name: Verify interaction and pause networking
+        run: |
+          ldc2 -i -Isource tests/interaction_pause_smoke.d -of="$RUNNER_TEMP/interaction-pause"
+          "$RUNNER_TEMP/interaction-pause"
+
       - name: Prepare licensed EOS SDK
         env:
           GH_TOKEN: ${{ github.token }}

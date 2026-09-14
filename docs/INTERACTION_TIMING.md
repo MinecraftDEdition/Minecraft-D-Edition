@@ -1,0 +1,9 @@
+# Interaction and pause timing
+
+Protocol 26 sends first-click attack/use messages once per rendered frame, independently of the 20 Hz movement stream. The server validates the selected slot and finite aim, drains earlier movement packets before ray casting, and uses the existing reach, collision, game-mode and inventory rules. Clicks never synthesize movement ticks. Held mining and accessibility repeat-use remain tick based. Blocks remain authoritative; this change removes the client tick wait without speculative terrain or inventory rollback.
+
+TCP connections use TCP_NODELAY. Client terrain scheduling permits a block delta to pass unrelated columns, but never an earlier snapshot, unload or delta for its own column. Chunk installation remains budgeted and bounded; consumed priority entries release their payloads immediately.
+
+The integrated host reads atomic pause eligibility (one player). Opening the menu freezes local ticks and retains the current interpolation phase immediately. The accumulator is preserved and transition-frame time is excluded. Acknowledgments retire pending prediction while paused, but late snapshots cannot move the frozen local pose. The server completes already queued predicted ticks exactly once instead of acknowledging and discarding them. Resuming does not wait for an old paused snapshot. Joins revoke pause eligibility; shared multiplayer worlds continue ticking with menu controls suppressed.
+
+Validation: full D unit suite; interaction_pause_smoke uses real TCP connections to check clicks without movement ticks, placement, pause queue drain, no repeated movement on resume, and edits observed by a second client while the host menu is open. Client unit tests cover priority terrain ordering and late pause snapshots. The Mac workflow also runs the networking smoke test.

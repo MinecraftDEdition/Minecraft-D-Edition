@@ -49,6 +49,19 @@ unittest
     drain();
     assert(world.getBlock(0,70,0)==BlockId.stone);
     assert(client.terrainBytes==0&&client.terrainHead==0);
+    // Edits to a loaded column must not wait for unrelated chunk downloads.
+    PacketWriter other;
+    other.putI32(8);other.putI32(8);other.putU8(chunkEncodingRaw);
+    other.data~=column.snapshot();
+    foreach (_; 0..4)
+        assert(client.queueTerrain(GamePacket(GamePacketType.chunkData,other.data)));
+    assert(client.queueTerrain(GamePacket(GamePacketType.blockChange,change.data)));
+    client.drainTerrain();
+    assert(world.getBlock(0,70,0)==BlockId.oakPlanks);
+    assert(client.pendingTerrain.length>client.terrainHead);
+    drain();
+    assert(client.terrainBytes==0);
+
     foreach(_;0..MultiplayerClient.maximumTerrainPackets)
         assert(client.queueTerrain(GamePacket(GamePacketType.chunkUnload,unload.data)));
     assert(!client.queueTerrain(GamePacket(GamePacketType.chunkUnload,unload.data)));
@@ -411,6 +424,8 @@ final class MultiplayerClient
     bool loginComplete;
     uint serverTick;
     bool serverPaused;
+    bool locallyManagedPause;
+    bool localPauseActive;
     string localDeathMessage;
     string disconnectReason;
 
@@ -456,6 +471,16 @@ final class MultiplayerClient
             return;
         pendingInputs ~= input;
         connection.sendFramed(encodeInput(input));
+    }
+
+    void sendInteraction(bool attack, bool use)
+    {
+        if (!connected() || !loginComplete || (!attack && !use)) return;
+        PacketWriter writer;
+        writer.putU8(cast(ubyte)localPlayer.selectedSlot);
+        writer.putU8(cast(ubyte)((attack ? 1 : 0) | (use ? 2 : 0)));
+        writer.putF32(localPlayer.yaw); writer.putF32(localPlayer.pitch);
+        connection.send(GamePacketType.interaction, writer.data);
     }
 
     void sendChat(string message)
@@ -639,6 +664,7 @@ final class MultiplayerClient
                 }
                 case GamePacketType.loginRequest,
                      GamePacketType.playerInput,
+                     GamePacketType.interaction,
                      GamePacketType.playerAction,
                      GamePacketType.chatSubmit,
                      GamePacketType.profileUpdate,
@@ -728,8 +754,36 @@ private:
         const started=MonoTime.currTime;
         uint chunks;
         uint operations;
+        // Deltas may pass unrelated terrain, never a snapshot/unload/edit for
+        // their own column. Keep holes until FIFO consumption reaches them.
+        bool[ulong] blocked;
+        foreach (ref packet; pendingTerrain[terrainHead .. $])
+        {
+            if (!packet.payload.length) continue;
+            PacketReader reader = PacketReader(packet.payload);
+            auto x = reader.readI32();
+            auto z = reader.readI32();
+            if (packet.type == GamePacketType.blockChange)
+            {
+                z = reader.readI32();
+                x = chunkCoordinate(x); z = chunkCoordinate(z);
+            }
+            const key = (cast(ulong)cast(uint)x << 32) | cast(uint)z;
+            if (reader.valid && packet.type == GamePacketType.blockChange
+                && !(key in blocked))
+            {
+                handleBlockChange(packet.payload);
+                terrainBytes -= packet.payload.length;
+                packet = GamePacket.init;
+                ++operations;
+            }
+            else blocked[key] = true;
+            if (operations >= 256 || MonoTime.currTime-started >= 3.msecs) break;
+        }
         while(terrainHead<pendingTerrain.length&&operations<256)
         {
+            if (!pendingTerrain[terrainHead].payload.length)
+            { ++terrainHead; continue; }
             const type=pendingTerrain[terrainHead].type;
             if(type==GamePacketType.chunkData&&chunks==1)break;
             auto packet=pendingTerrain[terrainHead];
@@ -911,6 +965,11 @@ private:
             if (input.sequence > acknowledged)
                 remaining ~= input;
         pendingInputs = remaining;
+
+        // Local pause owns the displayed pose. Late snapshots still retire
+        // acknowledged inputs, but cannot rewind a frozen camera or replay
+        // movement until the server has resumed.
+        if (localPauseActive || (locallyManagedPause && serverPaused)) return;
 
         // Rebuild the physical prediction from the last server-approved state.
         // Camera angles and visual animation phases are restored below: those
@@ -1210,4 +1269,24 @@ unittest
     zombie.deathSerial=1;zombie.health=0;snapshot();
     sounds=client.consumeZombieSounds();
     assert(sounds.length==1&&sounds[0].sound==ZombieSound.death);
+}
+
+unittest
+{
+    auto world = new World(); scope(exit) destroy(world);
+    auto player = new LocalPlayer(); scope(exit) destroy(player);
+    auto client = new MultiplayerClient(null,world,player); scope(exit) destroy(client);
+    player.position = Vec3(4,80,4);
+    player.previousPosition = Vec3(3.9f,80,4);
+    player.velocity = Vec3(0.1f,0,0);
+    client.pendingInputs = [PlayerInputCommand(1), PlayerInputCommand(2)];
+    client.locallyManagedPause = client.localPauseActive = true;
+    NetworkPlayerState state; state.position = Vec3(3,80,4);
+    client.reconcileLocal(state,1);
+    assert(player.position==Vec3(4,80,4));
+    assert(player.previousPosition==Vec3(3.9f,80,4));
+    assert(client.pendingInputs.length==1 && client.pendingInputs[0].sequence==2);
+    client.localPauseActive=false; client.serverPaused=true;
+    client.reconcileLocal(state,2);
+    assert(player.position==Vec3(4,80,4) && !client.pendingInputs.length);
 }

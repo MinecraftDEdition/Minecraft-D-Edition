@@ -55,6 +55,7 @@ private final class ServerPeer
     this(Socket socket)
     {
         this.socket = socket;
+        socket.setOption(SocketOptionLevel.TCP, SocketOption.TCP_NODELAY, 1);
         sendMutex = new Mutex();
     }
 
@@ -176,6 +177,7 @@ final class IntegratedGameServer
     private shared bool running;
     private shared bool pauseRequested;
     private shared bool paused;
+    private shared bool pauseAllowed = true;
 
     private World world;
     private World netherWorld;
@@ -293,6 +295,8 @@ public:
         atomicStore(pauseRequested, value);
     }
 
+    bool canPause() const { return atomicLoad(pauseAllowed); }
+
     bool isPaused() const
     {
         return atomicLoad(paused);
@@ -403,21 +407,23 @@ private:
         // The integrated world only freezes while its owner is genuinely the
         // sole player. A join immediately clears the effective pause without
         // requiring the host to close their menu first.
+        atomicStore(pauseAllowed, players.length <= 1);
         const shouldPause = atomicLoad(pauseRequested) && players.length <= 1;
         atomicStore(paused, shouldPause);
 
         if (shouldPause)
         {
-            // Networking remains alive while world time is frozen. Consume and
-            // acknowledge input without applying it so prediction queues do not
-            // grow and held movement cannot burst forward on resume.
+            // Drain pre-pause prediction once; no repeated held-input simulation
+            // runs while paused. Networking remains alive for joins and resume.
             foreach (serverPlayer; players)
             {
                 if (serverPlayer.queuedInputs.length != 0)
                 {
-                    serverPlayer.input = serverPlayer.queuedInputs[$ - 1];
-                    serverPlayer.acknowledgedInput = serverPlayer.input.sequence;
-                    serverPlayer.queuedInputs.length = 0;
+                    // Finish only the ticks already predicted before the menu
+                    // opened. Never acknowledge movement we did not simulate.
+                    auto queued = serverPlayer.queuedInputs;
+                    serverPlayer.queuedInputs = null;
+                    foreach (input; queued) simulateInput(serverPlayer, input);
                 }
                 serverPlayer.input.flags = 0;
                 serverPlayer.input.usePressed = false;
@@ -544,6 +550,38 @@ private:
                         if (valid && input.sequence > newestSequence
                             && (*serverPlayer).queuedInputs.length < 256)
                             (*serverPlayer).queuedInputs ~= input;
+                    }
+                    break;
+                case GamePacketType.interaction:
+                    if (auto found = packet.peer.playerId in players)
+                    {
+                        auto serverPlayer = *found;
+                        PacketReader reader = PacketReader(packet.payload);
+                        const slot = reader.readU8();
+                        const buttons = reader.readU8();
+                        const yaw = reader.readF32(), pitch = reader.readF32();
+                        import std.math : isFinite;
+                        if (!reader.valid || slot >= 9 || buttons == 0 || buttons > 3
+                            || !isFinite(yaw) || !isFinite(pitch)
+                            || (atomicLoad(pauseRequested) && players.length <= 1)) break;
+                        // Honor earlier movement packets before ray casting;
+                        // this click itself does not manufacture a physics tick.
+                        auto queued = serverPlayer.queuedInputs;
+                        serverPlayer.queuedInputs = null;
+                        foreach (input; queued) simulateInput(serverPlayer, input);
+                        auto player = serverPlayer.player;
+                        if (player.health <= 0 || player.gameMode == GameMode.spectator) break;
+                        player.selectedSlot = slot;
+                        player.yaw = yaw; player.pitch = pitch;
+                        if (buttons & 1)
+                        {
+                            player.attack();
+                            const hitEntity = attackZombie(serverPlayer) || attackPlayer(serverPlayer);
+                            if (!hitEntity && player.gameMode == GameMode.creative)
+                                updateMining(serverPlayer, true, true);
+                        }
+                        if ((buttons & 2) && player.gameMode != GameMode.adventure)
+                            placeSelectedBlock(serverPlayer);
                     }
                     break;
                 case GamePacketType.chatSubmit:

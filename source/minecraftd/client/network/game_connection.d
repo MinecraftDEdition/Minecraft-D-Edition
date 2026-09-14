@@ -5,7 +5,7 @@ import core.atomic : atomicLoad, atomicStore;
 import core.sync.mutex : Mutex;
 import core.thread : Thread;
 import std.conv : ConvException, to;
-import std.socket : InternetAddress, SocketOSException, SocketShutdown, TcpSocket;
+import std.socket : InternetAddress, SocketOSException, SocketShutdown, TcpSocket, SocketOption, SocketOptionLevel;
 import std.string : indexOf, startsWith, strip;
 
 version (MCD_EOS)
@@ -157,6 +157,7 @@ final class GameConnection
         sendMutex = new Mutex();
         socket = new TcpSocket(new InternetAddress(host, port));
         scope (failure) socket.close();
+        socket.setOption(SocketOptionLevel.TCP, SocketOption.TCP_NODELAY, 1);
         atomicStore(running, true);
         receiveThread = new Thread({ receiveLoop(); });
         receiveThread.start();
