@@ -55,7 +55,7 @@ import minecraftd.client.render.mesh : Vertex, Color, appendQuad;
 import minecraftd.client.render.texture_manager : ImageData;
 import minecraftd.client.render.world_lighting : WorldLighting;
 import minecraftd.common.math3d : Vec2, Vec3;
-import minecraftd.world.block : isLeaves, BlockId, isFire, isOpaque, isWater, waterHeight;
+import minecraftd.world.block : isLeaves, BlockId, isFire, isOpaque, isSolid, isWater, waterHeight;
 import minecraftd.world.chunk : Chunk, ChunkCoordinate;
 import minecraftd.world.world : World;
 import std.conv : to;
@@ -814,7 +814,7 @@ private:
         }
     }
 
-    static void appendFire(ref FireGeometry result,int x,int y,int z)
+    void appendFire(ref FireGeometry result,int x,int y,int z)
     {
         const color=Color(1,1,1,1);
         const fx=cast(float)x,fy=cast(float)y,fz=cast(float)z;
@@ -851,9 +851,8 @@ private:
             Vec3(fx+0.109f,fy+1.313f,fz+1),
             Vec3(fx+0.109f,fy+1.313f,fz));
 
-        // An unsupported floor fire also receives Java's four cardinal side
-        // variants. Alternating fire_0/fire_1 keeps the authentic animation
-        // variation without introducing a separate per-block model system.
+        // Four upright perimeter sheets supplement the crossed interior.
+        // The world double-sided cutout pipeline renders both faces.
         enum float edge=0.01f;
         flame(result.layer0,Vec3(fx,fy,fz+edge),Vec3(fx+1,fy,fz+edge),
             Vec3(fx+1,fy+sideHigh,fz+edge),Vec3(fx,fy+sideHigh,fz+edge));

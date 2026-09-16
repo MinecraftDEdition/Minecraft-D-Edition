@@ -16,8 +16,8 @@ private final class LightChunk
     ubyte[] sky;
     ubyte[] block;
     enum int border=1;
-    enum int width=Chunk.width+border*2;
-    enum int depth=Chunk.depth+border*2;
+    int width=Chunk.width+border*2;
+    int depth=Chunk.depth+border*2;
 
     bool inside(int x,int y,int z) const
     {
@@ -173,8 +173,9 @@ private:
         auto result=new LightChunk();
         result.signature=signature;result.dimension=world.dimension;
         result.coordinate=coordinate;
-        result.originX=coordinate.x*Chunk.width-LightChunk.border;
-        result.originZ=coordinate.z*Chunk.depth-LightChunk.border;
+        result.originX=coordinate.x*Chunk.width-16;
+        result.width=48;result.depth=48;
+        result.originZ=coordinate.z*Chunk.depth-16;
         int occupiedMin=world.maximumBuildY()+1;
         int occupiedMax=world.minimumBuildY()-1;
         foreach(dz;-1..2)foreach(dx;-1..2)
@@ -193,13 +194,13 @@ private:
         int lightMaximum=occupiedMax<world.maximumBuildY()
             ?occupiedMax+1:world.maximumBuildY();
         result.height=lightMaximum-result.originY+1;
-        const count=cast(size_t)LightChunk.width*LightChunk.depth*result.height;
+        const count=cast(size_t)result.width*result.depth*result.height;
         result.sky.length=count;result.block.length=count;
         if(world.dimension==DimensionId.overworld)
         {
             size_t[] queue;
-            foreach(z;result.originZ..result.originZ+LightChunk.depth)
-            foreach(x;result.originX..result.originX+LightChunk.width)
+            foreach(z;result.originZ..result.originZ+result.depth)
+            foreach(x;result.originX..result.originX+result.width)
             {
                 ubyte level=15;
                 for(int y=result.originY+result.height-1;y>=result.originY;--y)
@@ -210,11 +211,40 @@ private:
                     else if(isWater(cell)&&level>0)--level;
                     const index=result.indexOf(x,y,z);
                     result.sky[index]=level;
-                    if(level>1)queue~=index;
+
                 }
+            }
+            // Only the light frontier can illuminate another cell. Open sky
+            // interiors used to enqueue hundreds of thousands of useless nodes.
+            const plane=result.width*result.depth;
+            foreach(i,level;result.sky)
+            {
+                if(level<=1)continue;
+                const x=i%result.width,z=(i/result.width)%result.depth;
+                if((x>0&&result.sky[i-1]+1<level)
+                    ||(x+1<result.width&&result.sky[i+1]+1<level)
+                    ||(z>0&&result.sky[i-result.width]+1<level)
+                    ||(z+1<result.depth&&result.sky[i+result.width]+1<level)
+                    ||(i>=plane&&result.sky[i-plane]+1<level)
+                    ||(i+plane<result.sky.length&&result.sky[i+plane]+1<level))queue~=i;
             }
             spread(result,result.sky,queue);
         }
+        // Propagate across a full light radius, then retain only the chunk and
+        // its one-cell vertex-sampling border. Neighbor meshes get identical
+        // values without retaining nine chunks of light per cached chunk.
+        auto cropped=new LightChunk();
+        cropped.coordinate=coordinate;cropped.signature=signature;
+        cropped.dimension=result.dimension;
+        cropped.originX=coordinate.x*16-1;cropped.originZ=coordinate.z*16-1;
+        cropped.originY=result.originY;cropped.height=result.height;
+        const compactCount=cast(size_t)cropped.width*cropped.depth*cropped.height;
+        cropped.sky.length=compactCount;cropped.block.length=compactCount;
+        foreach(y;cropped.originY..cropped.originY+cropped.height)
+        foreach(z;cropped.originZ..cropped.originZ+cropped.depth)
+        foreach(x;cropped.originX..cropped.originX+cropped.width)
+            cropped.sky[cropped.indexOf(x,y,z)]=result.sky[result.indexOf(x,y,z)];
+        destroy(result);result=cropped;
         buildBlockLight(result);
         return result;
     }
@@ -227,8 +257,8 @@ private:
         enum int reach=15;
         const minX=result.originX-(reach-1);
         const minZ=result.originZ-(reach-1);
-        const maxX=result.originX+LightChunk.width+(reach-1);
-        const maxZ=result.originZ+LightChunk.depth+(reach-1);
+        const maxX=result.originX+result.width+(reach-1);
+        const maxZ=result.originZ+result.depth+(reach-1);
         int minY=result.originY-(reach-1);
         int maxY=result.originY+result.height+(reach-1);
         if(minY<world.minimumBuildY())minY=world.minimumBuildY();
@@ -283,8 +313,8 @@ private:
             }
         }
         foreach(y;result.originY..result.originY+result.height)
-        foreach(z;result.originZ..result.originZ+LightChunk.depth)
-        foreach(x;result.originX..result.originX+LightChunk.width)
+        foreach(z;result.originZ..result.originZ+result.depth)
+        foreach(x;result.originX..result.originX+result.width)
             result.block[result.indexOf(x,y,z)]=levels[indexOf(x,y,z)];
     }
 
@@ -324,12 +354,14 @@ private:
             foreach(side;0..6)
             {
                 const nx=x+dx[side],ny=y+dy[side],nz=z+dz[side];
-                if(!grid.inside(nx,ny,nz)||isOpaque(world.getBlock(nx,ny,nz)))
-                    continue;
-                const cost=isLeaves(world.getBlock(nx,ny,nz))?2:1;
+                if(!grid.inside(nx,ny,nz))continue;
+                const neighbor=grid.indexOf(nx,ny,nz);
+                if(levels[neighbor]+1>=current)continue;
+                const cell=world.getBlock(nx,ny,nz);
+                if(isOpaque(cell))continue;
+                const cost=isLeaves(cell)?2:1;
                 if(current<=cost)continue;
                 const next=cast(ubyte)(current-cost);
-                const neighbor=grid.indexOf(nx,ny,nz);
                 if(next<=levels[neighbor])continue;
                 levels[neighbor]=next;queue~=neighbor;
             }

@@ -37,8 +37,8 @@ void generateTrees(Chunk target,const WorldSettings settings)
         const tree=d.tree==Tree.oak&&c.biome==Biome.forest&&(random>>24)%5==0?Tree.birch:d.tree;
         const log=cast(BlockId)(cast(int)BlockId.oakLog+cast(int)tree-1);
         const leaves=cast(BlockId)(cast(int)BlockId.oakLeaves+cast(int)tree-1);
-        int height=5+cast(int)((random>>32)%3)+(d.tall?5:0);
-        if(tree==Tree.spruce)height+=3;
+        int height=5+cast(int)((random>>32)%3)+(d.tall?3:0);
+        if(tree==Tree.spruce)height=(d.tall?9:6)+cast(int)((random>>32)%3);
         const wide=tree==Tree.darkOak||tree==Tree.paleOak;
         void put(int px,int py,int pz,BlockId block)
         {
@@ -67,12 +67,13 @@ void generateTrees(Chunk target,const WorldSettings settings)
         }
         if(tree==Tree.spruce)
         {
-            foreach(dy;3..height+2)
+            foreach(dy;2..height+1)
             {
-                const r=dy>=height?1:min(3,1+(height-dy)/3);
-                if(dy%3==0&&dy<height-1)continue;
+                const distance=height-dy;
+                const r=distance==0?0:min(3,1+distance/3);
                 foreach(dz;-r..r+1)foreach(dx;-r..r+1)
-                    if(abs(dx)+abs(dz)<=r+1)put(x+dx,y+dy,z+dz,leaves);
+                    if(r==0||abs(dx)!=r||abs(dz)!=r)
+                        put(x+dx,y+dy,z+dz,leaves);
             }
         }
         else if(tree==Tree.acacia||tree==Tree.cherry)

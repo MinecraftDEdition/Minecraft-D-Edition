@@ -22,7 +22,7 @@ import std.file : exists, mkdirRecurse, read, write;
 import std.path : buildPath;
 import minecraftd.common.aabb : Aabb;
 import minecraftd.common.math3d : Vec3;
-import minecraftd.world.block : BlockId, isFire, isFlammable, isOpaque, isSolid,
+import minecraftd.world.block : BlockId, isFire, isFlammable, isOpaque, isSolid, isLeaves, isNetherPortal,
     isWater, isWaterSource, waterForLevel, waterHeight, waterLevel;
 import minecraftd.world.chunk : Chunk, ChunkCoordinate, chunkCoordinate,
     localCoordinate;
@@ -522,11 +522,16 @@ public:
             ensureChunk(coordinate.x,coordinate.z);
             loaded=coordinate in chunks;
         }
-        if ((*loaded).get(localCoordinate(x),y,localCoordinate(z)) == block)
+        const previous=(*loaded).get(localCoordinate(x),y,localCoordinate(z));
+        if (previous == block)
             return;
         (*loaded).set(localCoordinate(x),y,localCoordinate(z),block);
         dirtyChunks[coordinate]=true;
-        markBlockDirty(coordinate,localCoordinate(x),localCoordinate(z));
+        if(isOpaque(previous)!=isOpaque(block)||isLeaves(previous)!=isLeaves(block)
+            ||isWater(previous)!=isWater(block)||isFire(previous)!=isFire(block)
+            ||isNetherPortal(previous)!=isNetherPortal(block))
+            markChunkAndNeighborsDirty(coordinate);
+        else markBlockDirty(coordinate,localCoordinate(x),localCoordinate(z));
         ++contentRevision;
         ++revision;
     }
@@ -1425,7 +1430,8 @@ private:
         return true;
     }
 
-    bool foreachSolidBlock(Aabb area, scope bool delegate(Aabb) visitor) const
+    bool foreachSolidBlock(Aabb area, scope bool delegate(Aabb) visitor,
+        bool blockUnloaded=false) const
     {
         int minX = cast(int) floorf(area.minX) - 1;
         int minY = cast(int) floorf(area.minY) - 1;
@@ -1439,7 +1445,8 @@ private:
         foreach (z; minZ .. maxZ + 1)
         foreach (x; minX .. maxX + 1)
         {
-            if (!isSolid(getBlock(x,y,z))) continue;
+            if (!isSolid(getBlock(x,y,z))
+                && !(blockUnloaded&&!hasChunk(chunkCoordinate(x),chunkCoordinate(z)))) continue;
             const h=getBlock(x,y,z)==BlockId.enchantingTable?.75f:1.0f;
             if (!visitor(Aabb(x,y,z,x+1.0f,y+h,z+1.0f))) return false;
         }
@@ -1454,14 +1461,14 @@ private:
             if (bounds.maxY <= block.minY || bounds.minY >= block.maxY
                 || bounds.maxZ <= block.minZ || bounds.minZ >= block.maxZ)
                 return true;
-            if (amount > 0 && bounds.maxX <= block.minX
+            if (amount > 0 && bounds.maxX <= block.minX+0.00001f
                 && bounds.maxX + amount > block.minX)
                 amount = block.minX - bounds.maxX;
-            else if (amount < 0 && bounds.minX >= block.maxX
+            else if (amount < 0 && bounds.minX >= block.maxX-0.00001f
                 && bounds.minX + amount < block.maxX)
                 amount = block.maxX - bounds.minX;
             return true;
-        });
+        },true);
         return amount;
     }
 
@@ -1473,14 +1480,14 @@ private:
             if (bounds.maxX <= block.minX || bounds.minX >= block.maxX
                 || bounds.maxZ <= block.minZ || bounds.minZ >= block.maxZ)
                 return true;
-            if (amount > 0 && bounds.maxY <= block.minY
+            if (amount > 0 && bounds.maxY <= block.minY+0.00001f
                 && bounds.maxY + amount > block.minY)
                 amount = block.minY - bounds.maxY;
-            else if (amount < 0 && bounds.minY >= block.maxY
+            else if (amount < 0 && bounds.minY >= block.maxY-0.00001f
                 && bounds.minY + amount < block.maxY)
                 amount = block.maxY - bounds.minY;
             return true;
-        });
+        },true);
         return amount;
     }
 
@@ -1492,14 +1499,14 @@ private:
             if (bounds.maxX <= block.minX || bounds.minX >= block.maxX
                 || bounds.maxY <= block.minY || bounds.minY >= block.maxY)
                 return true;
-            if (amount > 0 && bounds.maxZ <= block.minZ
+            if (amount > 0 && bounds.maxZ <= block.minZ+0.00001f
                 && bounds.maxZ + amount > block.minZ)
                 amount = block.minZ - bounds.maxZ;
-            else if (amount < 0 && bounds.minZ >= block.maxZ
+            else if (amount < 0 && bounds.minZ >= block.maxZ-0.00001f
                 && bounds.minZ + amount < block.maxZ)
                 amount = block.maxZ - bounds.minZ;
             return true;
-        });
+        },true);
         return amount;
     }
 }

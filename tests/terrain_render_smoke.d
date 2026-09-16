@@ -9,6 +9,7 @@ import minecraftd.client.render.graphics_device;
 import minecraftd.client.render.mesh;
 import minecraftd.client.render.texture_manager;
 import minecraftd.client.render.block_renderer;
+import minecraftd.client.render.sky_renderer;
 import minecraftd.common.math3d;
 import minecraftd.world.world;
 import minecraftd.world.world_settings;
@@ -124,6 +125,48 @@ void main()
                 "Leaf holes must discard without writing color");
         }
         writeln(name," cutout opacity and discard passed");
+        // Fire must use depth even when sections arrive in the wrong order.
+        auto nearQuad=quad.dup,farQuad=quad.dup;
+        foreach(ref v;nearQuad)v.position[2]=.2f;
+        foreach(ref v;farQuad)v.position[2]=.8f;
+        const greenTexture=graphics.uploadTexture(ImageData(1,1,[0,255,0,255])).descriptorIndex;
+        const redTexture=graphics.uploadTexture(ImageData(1,1,[255,0,0,255])).descriptorIndex;
+        auto fireFog=FogSettings.init;fireFog.alphaCutoff=.1f;
+        foreach(reverse;[false,true])
+        {
+            frame.clear(Color(0,0,1,1));
+            if(reverse)frame.append(farQuad,redTexture,Mat4.identity(),DrawLayer.worldDoubleSided,fireFog);
+            frame.append(nearQuad,greenTexture,Mat4.identity(),DrawLayer.worldDoubleSided,fireFog);
+            if(!reverse)frame.append(farQuad,redTexture,Mat4.identity(),DrawLayer.worldDoubleSided,fireFog);
+            frame.append(quad,graphics.menuBlurTexture().descriptorIndex,Mat4.identity(),
+                DrawLayer.blurBackdrop,FogSettings.blur(960,540,.01f));
+            foreach(_;0..3)graphics.render(frame);
+            auto sample=vulkan?(cast(VulkanDevice)graphics).readBlurPixels()
+                :(cast(Dx12Device)graphics).readBlurPixels();
+            const i=((sample.height/2)*sample.width+sample.width/2)*4;
+            assert(sample.rgba[i+1]>245&&sample.rgba[i]<5,"Rear fire drew over nearer fire");
+        }
+        writeln(name," fire depth ordering passed");
+        auto sky=new SkyRenderer(ImageData.init);
+        const skyColor=Color(.48f,.70f,1,1),haze=FogSettings.init.color;
+        const skyView=lookToLH(Vec3(0,0,0),Vec3(0,.25f,1).normalized(),Vec3(0,1,0))
+            *perspectiveFovLH(70*DEG_TO_RAD,960.0f/540,.05f,512);
+        const whiteTexture=graphics.uploadTexture(ImageData(1,1,[255,255,255,255])).descriptorIndex;
+        frame.clear(skyColor);
+        frame.append(sky.buildHorizon(Vec3(0,0,0),haze,skyColor),whiteTexture,skyView,DrawLayer.sky);
+        frame.append(quad,graphics.menuBlurTexture().descriptorIndex,Mat4.identity(),
+            DrawLayer.blurBackdrop,FogSettings.blur(960,540,.01f));
+        foreach(_;0..3)graphics.render(frame);
+        auto atmosphere=vulkan?(cast(VulkanDevice)graphics).readBlurPixels()
+            :(cast(Dx12Device)graphics).readBlurPixels();
+        const top=((atmosphere.height/4)*atmosphere.width+atmosphere.width/2)*4;
+        const bottom=((atmosphere.height*3/4)*atmosphere.width+atmosphere.width/2)*4;
+        assert(atmosphere.rgba[bottom]>atmosphere.rgba[top]+20,
+            "Horizon fog must fade into clear sky above");
+        ubyte[] skyRgb;foreach(i;0..atmosphere.width*atmosphere.height)skyRgb~=atmosphere.rgba[i*4..i*4+3];
+        write("test-output/terrain/"~name~"-sky.ppm",
+            format("P6\n%s %s\n255\n",atmosphere.width,atmosphere.height)~cast(string)skyRgb);
+        destroy(sky);writeln(name," horizon fog gradient passed");
     }
 }
 

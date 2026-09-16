@@ -8,13 +8,17 @@ foreach ($test in @('overworld_v2_smoke', 'world_generation_smoke', 'terrain_str
     & "./test-output/terrain/$test.exe"
     if ($LASTEXITCODE -ne 0) { throw "$test failed" }
 }
+$directx = Join-Path $env:LOCALAPPDATA 'dub/packages/directx-d/0.14.1/directx-d/src'
+& dmd '-i' '-O' '-Isource' "-I$directx" '-of=test-output/terrain/environment.exe' tests/environment_smoke.d ole32.lib windowscodecs.lib
+if ($LASTEXITCODE -ne 0) { throw 'Environment regression compilation failed' }
+& './test-output/terrain/environment.exe'
+if ($LASTEXITCODE -ne 0) { throw 'Environment regression failed' }
 if ($SkipRender) { return }
 # The native readback bridge is built by Run-BlurSmoke.ps1.
 if (-not (Test-Path test-output/blur/vulkan_test.obj)) {
     & ./tests/Run-BlurSmoke.ps1
 }
 & ./native/build_vulkan_bridge.ps1
-$directx = Join-Path $env:LOCALAPPDATA 'dub/packages/directx-d/0.14.1/directx-d/src'
 & dmd '-i' '-O' '-version=CORRECT_ABI' '-version=BlurSmoke' '-Isource' "-I$directx" '-Jshaders' `
     '-of=test-output/terrain/render.exe' tests/terrain_render_smoke.d `
     native/dx12_abi_bridge.obj test-output/blur/vulkan_test.obj native/vulkan-1.lib `

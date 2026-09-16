@@ -1213,9 +1213,6 @@ final class GameClient
                 && player.gameMode != player.gameMode.spectator)
             {
                 pendingUse = true;
-                // Predict the main-hand swing immediately. Waiting for the
-                // authoritative placement snapshot made underwater use look
-                // inert even when the block was successfully placed.
                 // The server starts the swing only after use succeeds.
             }
 
@@ -1734,8 +1731,8 @@ final class GameClient
                 && !suppressPrimaryUntilRelease
                 && player.gameMode != player.gameMode.spectator)
             {
-                player.attack();
                 pendingAttack = true;
+                player.attack();
             }
             foreach (slot; 0 .. 9)
             {
@@ -1767,7 +1764,6 @@ final class GameClient
                 multiplayer.sendInteraction(pendingAttack, pendingUse);
                 if (pendingAttack && player.gameMode == player.gameMode.creative)
                     renderer.updateMining(player, true, true);
-                if (pendingUse) player.attack(true);
                 pendingAttack = pendingUse = false;
             }
             // An open menu only freezes a genuinely singleplayer integrated

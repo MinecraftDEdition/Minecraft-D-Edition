@@ -1,12 +1,34 @@
 module minecraftd.client.render.sky_renderer;
 
-import core.stdc.math : floorf;
+import core.stdc.math : floorf, sinf, cosf;
 import minecraftd.client.render.mesh : Vertex, Color, appendQuad;
 import minecraftd.client.render.texture_manager : ImageData;
 import minecraftd.common.math3d : Vec2, Vec3, cross;
 
 final class SkyRenderer
 {
+    /// Camera-centered atmosphere: fog at/below the horizon, clear zenith.
+    Vertex[] buildHorizon(Vec3 cameraPosition,Color fog,Color zenith)
+    {
+        Vertex[] output;
+        enum float radius=450;
+        Vec3 point(float angle,float height)
+        {return cameraPosition+Vec3(cosf(angle)*radius,height,sinf(angle)*radius);}
+        const heights=[-450f,0f,45f,100f,220f,450f];
+        const amounts=[1f,1f,.8f,.4f,0f,0f];
+        Color color(float t)
+        {return Color(zenith.r+(fog.r-zenith.r)*t,zenith.g+(fog.g-zenith.g)*t,
+            zenith.b+(fog.b-zenith.b)*t,1);}
+        foreach(ring;0..heights.length-1)foreach(segment;0..64)
+        {
+            const a=segment*6.2831853f/64,b=(segment+1)*6.2831853f/64;
+            const low=color(amounts[ring]),high=color(amounts[ring+1]);
+            appendQuad(output,point(a,heights[ring]),point(b,heights[ring]),
+                point(b,heights[ring+1]),point(a,heights[ring+1]),
+                Vec2(0,0),Vec2(0,0),Vec2(0,0),Vec2(0,0),low,low,high,high);
+        }
+        return output;
+    }
     private ImageData cloudMask;
 
     this(ImageData cloudMask)

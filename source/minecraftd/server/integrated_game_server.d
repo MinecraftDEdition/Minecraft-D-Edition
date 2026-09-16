@@ -623,8 +623,8 @@ private:
                         player.yaw = yaw; player.pitch = pitch;
                         if (buttons & 1)
                         {
-                            player.attack();
                             const hitEntity = attackZombie(serverPlayer) || attackPlayer(serverPlayer);
+                            player.attack();
                             if (!hitEntity && player.gameMode == GameMode.creative)
                                 updateMining(serverPlayer, true, true);
                         }
@@ -803,7 +803,6 @@ private:
         player.mainHandRight = input.mainHandRight;
         if (input.flightTogglePressed)
             player.toggleFlight();
-        if (input.down(inputAttack) || input.attackPressed) player.attack();
         auto activeWorld = worldFor(serverPlayer.dimension);
         player.simulateTick(activeWorld, input.moveForward, input.moveStrafe,
             input.down(inputJump), input.down(inputCrouch),
@@ -841,6 +840,7 @@ private:
             && (attackZombie(serverPlayer) || attackPlayer(serverPlayer));
         updateMining(serverPlayer, input.down(inputAttack) && !attackedPlayer,
             input.attackPressed && !attackedPlayer);
+        if(input.attackPressed && player.gameMode != GameMode.spectator)player.attack();
         if (input.usePressed && player.gameMode != GameMode.adventure
             && player.gameMode != GameMode.spectator)
             placeSelectedBlock(serverPlayer);
@@ -2288,7 +2288,7 @@ bool executeGameplayCommand(ServerPeer peer,ServerPlayer sender,string message)
         {
             int dx=coordinate.x-centerX;if(dx<0)dx=-dx;
             int dz=coordinate.z-centerZ;if(dz<0)dz=-dz;
-            if(dx>radius+1||dz>radius+1)unloads~=coordinate;
+            if(dx>radius+3||dz>radius+3)unloads~=coordinate;
         }
         foreach(coordinate;unloads)
         {
@@ -2421,7 +2421,7 @@ bool executeGameplayCommand(ServerPeer peer,ServerPlayer sender,string message)
                     serverPlayer.player.position.x));
                 const centerZ=chunkCoordinate(cast(int)floorf(
                     serverPlayer.player.position.z));
-                const radius=cast(int)serverPlayer.viewDistance+2;
+                const radius=cast(int)serverPlayer.viewDistance+4;
                 int dx=coordinate.x-centerX;if(dx<0)dx=-dx;
                 int dz=coordinate.z-centerZ;if(dz<0)dz=-dz;
                 if(dx<=radius&&dz<=radius){keep=true;break;}

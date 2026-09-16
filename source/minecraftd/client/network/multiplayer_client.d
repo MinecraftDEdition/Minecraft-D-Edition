@@ -71,7 +71,7 @@ unittest
 import minecraftd.client.chat.chat_state : ChatMessageKind, ChatState;
 import minecraftd.client.network.game_connection : GameConnection;
 import minecraftd.client.player.local_player : LocalPlayer;
-import minecraftd.common.math3d : Vec3, clamp;
+import minecraftd.common.math3d : Vec3, clamp, forwardFromYawPitch;
 import minecraftd.game.entity.player : Player;
 import minecraftd.game.item.inventory : Inventory, ItemId, ItemStack,
     lastBlockItem = lastItem, maximumStackSize;
@@ -1078,7 +1078,7 @@ private:
             localPlayer.yaw = input.yaw;
             localPlayer.pitch = input.pitch;
             localPlayer.selectedSlot = input.selectedSlot;
-            if (input.down(inputAttack))
+            if (input.attackPressed)
                 localPlayer.attack();
             if (input.flightTogglePressed)
                 localPlayer.toggleFlight();

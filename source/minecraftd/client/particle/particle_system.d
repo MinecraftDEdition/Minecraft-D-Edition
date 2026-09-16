@@ -7,6 +7,7 @@ import minecraftd.common.aabb : Aabb;
 import minecraftd.common.math3d : PI, Vec2, Vec3, cross, forwardFromYawPitch, lerp;
 import minecraftd.game.entity.player : Player;
 import minecraftd.world.block : BlockId;
+import minecraftd.client.render.block_renderer : vegetationTint, Face;
 import minecraftd.world.world : World;
 
 struct ParticleTextureSet
@@ -453,7 +454,7 @@ final class ParticleSystem
         const forward = forwardFromYawPitch(camera.yaw, camera.pitch);
         const right = cross(Vec3(0,1,0), forward).normalized();
         const up = cross(forward, right).normalized();
-        const shade = Color(0.6f, 0.6f, 0.6f, 1.0f);
+
         foreach (particle; particles)
         {
             const center = Vec3(
@@ -463,6 +464,8 @@ final class ParticleSystem
             );
             const horizontal = right * particle.size;
             const vertical = up * particle.size;
+            auto shade = vegetationTint(particle.block, Face.north);
+            shade.r*=0.6f; shade.g*=0.6f; shade.b*=0.6f;
             const texture = textureFor(particle.block);
             auto geometry = texture in result;
             if (geometry is null)
@@ -677,5 +680,28 @@ private:
         float first=randomFloat();
         if(first<0.000001f)first=0.000001f;
         return sqrtf(-2.0f*logf(first))*cosf(2.0f*PI*randomFloat());
+    }
+}
+
+
+unittest
+{
+    auto world=new World();scope(exit)destroy(world);
+    foreach(block;[BlockId.oakLeaves,BlockId.spruceLeaves,BlockId.birchLeaves,
+        BlockId.cherryLeaves,BlockId.paleOakLeaves])
+    {
+        ParticleTextureSet textures;textures.catalog[block]=123;
+        auto particles=new ParticleSystem(world,textures);
+        particles.spawnBlockBreak(0,70,0,block);
+        Camera camera;camera.yaw=0;camera.pitch=0;
+        const geometry=particles.build(camera,1);
+        const tint=vegetationTint(block,Face.north);
+        assert(geometry.length>0);
+        foreach(texture,vertices;geometry)foreach(vertex;vertices)
+        {
+            assert(vertex.color[0]==tint.r*.6f);
+            assert(vertex.color[1]==tint.g*.6f);
+            assert(vertex.color[2]==tint.b*.6f);
+        }
     }
 }

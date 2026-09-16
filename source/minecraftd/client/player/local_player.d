@@ -127,6 +127,11 @@ final class LocalPlayer : Player
             (cosf(yawRadians) * forwardAxis - sinf(yawRadians) * strafeAxis) * speed,
         );
 
+        const floorBlock=world.getBlock(cast(int)floorf(position.x),
+            cast(int)floorf(position.y-.05f),cast(int)floorf(position.z));
+        const slipperiness=floorBlock==BlockId.blueIce?.989f:
+            floorBlock==BlockId.packedIce?.98f:.6f;
+        const iceGround=onGround&&slipperiness>.6f&&!flightActive&&!inWater;
         // Smooth velocity so starts/stops feed naturally into limb and camera animation.
         if(inWater && !flightActive)
         {
@@ -137,6 +142,15 @@ final class LocalPlayer : Player
             velocity.x+=input.x*0.4f;
             velocity.z+=input.z*0.4f;
             velocity+=world.waterFlowAt(position+Vec3(0,0.4f,0))*0.28f;
+        }
+        else if(iceGround)
+        {
+            // Java applies ground acceleration scaled by slipperiness cubed,
+            // then retains 0.91 * slipperiness of horizontal velocity per tick.
+            const acceleration=2.0f*(this.sprinting?1.3f:1.0f)
+                *(crouching?.3f:1.0f)*(.216f/(slipperiness*slipperiness*slipperiness));
+            velocity.x+=(sinf(yawRadians)*forwardAxis+cosf(yawRadians)*strafeAxis)*acceleration;
+            velocity.z+=(cosf(yawRadians)*forwardAxis-sinf(yawRadians)*strafeAxis)*acceleration;
         }
         else
         {
@@ -221,6 +235,11 @@ final class LocalPlayer : Player
             fallDistance = 0.0f;
         }
 
+        if(iceGround)
+        {
+            velocity.x*=.91f*slipperiness;
+            velocity.z*=.91f*slipperiness;
+        }
         if(inWater && !flightActive)
         {
             const drag=this.sprinting?0.9f:0.8f;

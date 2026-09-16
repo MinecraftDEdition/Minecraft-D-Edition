@@ -73,5 +73,26 @@ void main()
     server.setPaused(true);
     click(1);waitFor({return changes==3&&observerChanges==1;});
     assert(!paused,"A host menu must not pause a shared world");
+    uint sequence=2;
+    foreach(buttons;[cast(ubyte)1,cast(ubyte)2])
+    {
+        // Let any previous meaningful interaction finish its animation.
+        foreach(_;0..8)
+        {
+            auto idle=PlayerInputCommand(sequence++,0,0,false,0,-90);
+            a.sendFramed(encodeInput(idle));Thread.sleep(50.msecs);poll();
+        }
+        PacketWriter emptyClick;emptyClick.putU8(0);emptyClick.putU8(buttons);
+        emptyClick.putF32(0);emptyClick.putF32(-90);
+        a.send(GamePacketType.interaction,emptyClick.data);
+        bool swung;
+        foreach(_;0..8)
+        {
+            auto idle=PlayerInputCommand(sequence++,0,0,false,0,-90);
+            a.sendFramed(encodeInput(idle));Thread.sleep(50.msecs);poll();
+            swung=swung||state.attackProgress>0;
+        }
+        assert(swung==(buttons==1),"Air attack must swing; empty use must not");
+    }
     writeln("PASS: frame clicks, placement, pause input drain, stable resume, two-client edits");
 }

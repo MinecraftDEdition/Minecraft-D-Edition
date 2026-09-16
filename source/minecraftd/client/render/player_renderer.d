@@ -143,80 +143,16 @@ final class PlayerRenderer
         const yaw = bodyYawDegrees * DEG_TO_RAD;
         const headYaw = headYawDegrees * DEG_TO_RAD;
         const headPitch = headPitchDegrees * DEG_TO_RAD;
-        // Java model space points Y downward. Ours points Y upward, so X/Z
-        // rotations must be reflected when porting HumanoidModel's angles.
-        float rightArmX = -cosf(walkPosition * 0.6662f + PI) * walkSpeed;
-        float leftArmX = -cosf(walkPosition * 0.6662f) * walkSpeed;
-        float rightLegX = -cosf(walkPosition * 0.6662f) * 1.4f * walkSpeed;
-        float leftLegX = -cosf(walkPosition * 0.6662f + PI) * 1.4f * walkSpeed;
-        float rightArmY = 0.0f;
-        float leftArmY = 0.0f;
-        float rightArmZ = -(cosf(ageInTicks * 0.09f) * 0.05f + 0.05f);
-        float leftArmZ = -rightArmZ;
-        if(zombiePose)
-        {
-            rightArmX=PI*.5f-sinf(ageInTicks*.067f)*.05f;
-            leftArmX=PI*.5f+sinf(ageInTicks*.067f)*.05f;
-        }
-        else
-        {
-            rightArmX -= sinf(ageInTicks * 0.067f) * 0.05f;
-            leftArmX += sinf(ageInTicks * 0.067f) * 0.05f;
-        }
-        if(swimming)
-        {
-            const stroke=cosf(ageInTicks*0.25f);
-            rightArmX=-PI*0.5f+stroke*0.75f;
-            leftArmX=-PI*0.5f+stroke*0.75f;
-            rightArmZ=-0.18f;leftArmZ=0.18f;
-            rightLegX=cosf(ageInTicks*0.3f)*0.3f;
-            leftLegX=-rightLegX;
-        }
-
-        // HumanoidModel ArmPose.ITEM: Java's model Y axis points downward, so
-        // its -PI/10 carrying pitch becomes +PI/10 in our Y-up model space.
-        // Keeping Java's unreflected sign points the hand behind the player.
-        if (holdingItem)
-        {
-            if (mainHandRight)
-                rightArmX = rightArmX * 0.5f + PI / 10.0f;
-            else
-                leftArmX = leftArmX * 0.5f + PI / 10.0f;
-        }
-
-        // HumanoidModel.setupAttackAnimation: twist the chest first, move both
-        // shoulder joints around it, then drive the main arm through the hit.
-        const bodyTwist = sinf(sqrtf(attackProgress) * PI * 2.0f) * 0.2f
-            * (mainHandRight ? 1.0f : -1.0f);
-        rightArmY += bodyTwist;
-        leftArmY += bodyTwist;
-        if (attackProgress > 0.0f)
-        {
-            auto eased = 1.0f - attackProgress;
-            eased = 1.0f - eased * eased * eased * eased;
-            const hit = sinf(eased * PI);
-            const headCompensation = sinf(attackProgress * PI)
-                * -(headPitch - 0.7f) * 0.75f;
-            if(mainHandRight)
-            {
-                rightArmX += hit * 1.2f + headCompensation;
-                rightArmY += bodyTwist;
-                rightArmZ += sinf(attackProgress * PI) * 0.4f;
-            }
-            else
-            {
-                leftArmX += hit * 1.2f + headCompensation;
-                leftArmY += bodyTwist;
-                leftArmZ -= sinf(attackProgress * PI) * 0.4f;
-            }
-        }
-
-        const crouchBodyX = crouching ? -0.5f : 0.0f;
-        if (crouching)
-        {
-            rightArmX -= 0.4f;
-            leftArmX -= 0.4f;
-        }
+        const rightPose=calculateArmPose(true,mainHandRight,holdingItem,headPitchDegrees,
+            walkPosition,walkSpeed,attackProgress,crouching,ageInTicks,swimming,slimArms,zombiePose);
+        const leftPose=calculateArmPose(false,mainHandRight,holdingItem,headPitchDegrees,
+            walkPosition,walkSpeed,attackProgress,crouching,ageInTicks,swimming,slimArms,zombiePose);
+        const rightArmX=rightPose.angles.x,rightArmY=rightPose.angles.y,rightArmZ=rightPose.angles.z;
+        const leftArmX=leftPose.angles.x,leftArmY=leftPose.angles.y,leftArmZ=leftPose.angles.z;
+        const rightLegX=swimming?cosf(ageInTicks*.3f)*.3f:-cosf(walkPosition*.6662f)*1.4f*walkSpeed;
+        const leftLegX=swimming?-rightLegX:-cosf(walkPosition*.6662f+PI)*1.4f*walkSpeed;
+        const bodyTwist=sinf(sqrtf(attackProgress)*PI*2)*.2f*(mainHandRight?1.0f:-1.0f);
+        const crouchBodyX=crouching?-.5f:0.0f;
 
         // ModelPart coordinates are pixels divided by 16. The head pivots at
         // its bottom-center neck joint. Both arm styles pivot at x=+/-5;
@@ -236,10 +172,7 @@ final class PlayerRenderer
         const headCenter = Vec3(0, 1.75f + headDrop, 0);
         const neckPivot = Vec3(0, 1.5f + headDrop, 0);
 
-        auto rightShoulder = Vec3(-cosf(bodyTwist) * 5.0f / 16.0f,
-            1.375f + armDrop, sinf(bodyTwist) * 5.0f / 16.0f);
-        auto leftShoulder = Vec3(cosf(bodyTwist) * 5.0f / 16.0f,
-            1.375f + armDrop, -sinf(bodyTwist) * 5.0f / 16.0f);
+        const rightShoulder=rightPose.shoulder,leftShoulder=leftPose.shoulder;
         const armCenterOffset = (slimArms ? 0.5f : 1.0f) / 16.0f;
         const armSize = Vec3((slimArms ? 3.0f : 4.0f) / 16.0f,
             0.75f, 0.25f);
@@ -481,47 +414,106 @@ final class PlayerRenderer
     /// Attaches an item to the end of the animated main arm rather than to a
     /// fixed point on the torso. This keeps the grip and held model together
     /// during walking, crouching, and the attack swing.
+    struct ArmPose { Vec3 shoulder; Vec3 angles; }
+
+    ArmPose calculateArmPose(bool rightArm,bool mainHandRight,bool holdingItem,
+        float headPitchDegrees,float walkPosition,float walkSpeed,float attackProgress,
+        bool crouching,float ageInTicks,bool swimming,bool slimArms,bool zombiePose=false) const
+    {
+        const headPitch=headPitchDegrees*DEG_TO_RAD;
+        // Java model space points Y downward. Ours points Y upward, so X/Z
+        // rotations must be reflected when porting HumanoidModel's angles.
+        float rightArmX = -cosf(walkPosition * 0.6662f + PI) * walkSpeed;
+        float leftArmX = -cosf(walkPosition * 0.6662f) * walkSpeed;
+        float rightArmY = 0.0f;
+        float leftArmY = 0.0f;
+        float rightArmZ = -(cosf(ageInTicks * 0.09f) * 0.05f + 0.05f);
+        float leftArmZ = -rightArmZ;
+        if(zombiePose)
+        {
+            rightArmX=PI*.5f-sinf(ageInTicks*.067f)*.05f;
+            leftArmX=PI*.5f+sinf(ageInTicks*.067f)*.05f;
+        }
+        else
+        {
+            rightArmX -= sinf(ageInTicks * 0.067f) * 0.05f;
+            leftArmX += sinf(ageInTicks * 0.067f) * 0.05f;
+        }
+        if(swimming)
+        {
+            const stroke=cosf(ageInTicks*0.25f);
+            rightArmX=-PI*0.5f+stroke*0.75f;
+            leftArmX=-PI*0.5f+stroke*0.75f;
+            rightArmZ=-0.18f;leftArmZ=0.18f;
+        }
+
+        // HumanoidModel ArmPose.ITEM: Java's model Y axis points downward, so
+        // its -PI/10 carrying pitch becomes +PI/10 in our Y-up model space.
+        // Keeping Java's unreflected sign points the hand behind the player.
+        if (holdingItem)
+        {
+            if (mainHandRight)
+                rightArmX = rightArmX * 0.5f + PI / 10.0f;
+            else
+                leftArmX = leftArmX * 0.5f + PI / 10.0f;
+        }
+
+        // HumanoidModel.setupAttackAnimation: twist the chest first, move both
+        // shoulder joints around it, then drive the main arm through the hit.
+        const bodyTwist = sinf(sqrtf(attackProgress) * PI * 2.0f) * 0.2f
+            * (mainHandRight ? 1.0f : -1.0f);
+        rightArmY += bodyTwist;
+        leftArmY += bodyTwist;
+        if (attackProgress > 0.0f)
+        {
+            auto eased = 1.0f - attackProgress;
+            eased = 1.0f - eased * eased * eased * eased;
+            const hit = sinf(eased * PI);
+            const headCompensation = sinf(attackProgress * PI)
+                * -(headPitch - 0.7f) * 0.75f;
+            if(mainHandRight)
+            {
+                rightArmX += hit * 1.2f + headCompensation;
+                rightArmY += bodyTwist;
+                rightArmZ += sinf(attackProgress * PI) * 0.4f;
+            }
+            else
+            {
+                leftArmX += hit * 1.2f + headCompensation;
+                leftArmY += bodyTwist;
+                leftArmZ -= sinf(attackProgress * PI) * 0.4f;
+            }
+        }
+
+        if (crouching)
+        {
+            rightArmX -= 0.4f;
+            leftArmX -= 0.4f;
+        }
+
+        const armDrop=(crouching?-3.2f:0.0f)/16.0f-(slimArms?.5f/16.0f:0.0f);
+        const sign=rightArm?-1.0f:1.0f;
+        const shoulder=Vec3(sign*cosf(bodyTwist)*5/16,1.375f+armDrop,
+            -sign*sinf(bodyTwist)*5/16);
+        return ArmPose(shoulder,rightArm?Vec3(rightArmX,rightArmY,rightArmZ)
+            :Vec3(leftArmX,leftArmY,leftArmZ));
+    }
+
     Mat4 thirdPersonHeldItemTransform(bool generated,Vec3 position,
         float bodyYawDegrees,bool rightHand,float walkPosition,float walkSpeed,
         float attackProgress,bool crouching,float ageInTicks,
-        bool slimArms = false,bool handheldTool = false) const
+        bool slimArms = false,bool handheldTool = false,
+        float headPitchDegrees=0,bool swimming=false,bool preserveGeneratedGrip=false) const
     {
-        float armX=rightHand
-            ? -cosf(walkPosition*0.6662f+PI)*walkSpeed
-            : -cosf(walkPosition*0.6662f)*walkSpeed;
-        // Match buildSteve's reflected HumanoidModel ArmPose.ITEM pitch so
-        // the held mesh remains attached to the forward-pointing hand.
-        armX=armX*0.5f+PI/10.0f;
-        float armY=0;
-        float armZ=rightHand
-            ? -(cosf(ageInTicks*0.09f)*0.05f+0.05f)
-            : cosf(ageInTicks*0.09f)*0.05f+0.05f;
-        armX += rightHand ? -sinf(ageInTicks*0.067f)*0.05f
-            : sinf(ageInTicks*0.067f)*0.05f;
-        const bodyTwist=sinf(sqrtf(attackProgress)*PI*2.0f)*0.2f
-            *(rightHand?1.0f:-1.0f);
-        armY+=bodyTwist;
-        if(attackProgress>0)
-        {
-            auto eased=1.0f-attackProgress;
-            eased=1.0f-eased*eased*eased*eased;
-            armX+=sinf(eased*PI)*1.2f;
-            armY+=bodyTwist;
-            armZ+=(rightHand?1.0f:-1.0f)*sinf(attackProgress*PI)*0.4f;
-        }
-        if(crouching)armX-=0.4f;
-        const armDrop=(crouching?-3.2f:0.0f)/16.0f
-            -(slimArms?0.5f/16.0f:0.0f);
-        const rootOffset=crouching?Vec3(0,-0.125f,0):Vec3.init;
-        const shoulder=Vec3(
-            (rightHand?-1.0f:1.0f)*cosf(bodyTwist)*5.0f/16.0f,
-            1.375f+armDrop,
-            (rightHand?1.0f:-1.0f)*sinf(bodyTwist)*5.0f/16.0f);
+        const pose=calculateArmPose(rightHand,rightHand,true,headPitchDegrees,walkPosition,
+            walkSpeed,attackProgress,crouching,ageInTicks,swimming,slimArms);
+        const shoulder=pose.shoulder;
+        const armX=pose.angles.x,armY=pose.angles.y,armZ=pose.angles.z;
+        const rootOffset=crouching?Vec3(0,-.125f,0):Vec3.init;
         const gripOffset=(slimArms?0.5f:1.0f)/16.0f;
         const grip=shoulder+Vec3(rightHand?-gripOffset:gripOffset,
             -10.0f/16.0f,0);
-        const center=grip+(generated?Vec3(0,0.13f,0.055f)
-            :Vec3(rightHand?-0.055f:0.055f,0.04f,0.075f));
+
         const itemPose=generated&&handheldTool
             ? Mat4.translation(Vec3(-.5f,-.5f,-.5f))
                 *Mat4.scale(Vec3(.85f,.85f,.85f))
@@ -530,22 +522,36 @@ final class PlayerRenderer
                 *Mat4.translation(Vec3(0,4.0f/16.0f,.5f/16.0f))
                 *Mat4.rotationX(-90*DEG_TO_RAD)
                 *Mat4.translation(grip)
+            : generated&&preserveGeneratedGrip
+            ? Mat4.translation(Vec3(-.5f,-.5f,-.5f))
+                *Mat4.rotationX(-90*DEG_TO_RAD)*Mat4.scale(Vec3(.55f,.55f,.55f))
+                *Mat4.translation(grip+Vec3(0,1.0f/16,3.0f/16))
             : generated
             ? Mat4.translation(Vec3(-0.5f,-0.5f,-0.5f))
-                *Mat4.rotationX(-90*DEG_TO_RAD)
                 *Mat4.scale(Vec3(0.55f,0.55f,0.55f))
-                *Mat4.translation(grip+Vec3(0,1.0f/16.0f,3.0f/16.0f))
+                *Mat4.translation(Vec3(0,3.0f/16.0f,1.0f/16.0f))
+                *Mat4.rotationX(-90*DEG_TO_RAD)
+                *Mat4.translation(grip)
             : Mat4.translation(Vec3(-0.5f,-0.5f,-0.5f))
                 *Mat4.rotationY((rightHand?45.0f:-45.0f)*DEG_TO_RAD)
-                *Mat4.rotationX(-15.0f*DEG_TO_RAD)
+                *Mat4.rotationX(75.0f*DEG_TO_RAD)
                 *Mat4.scale(Vec3(0.375f,0.375f,0.375f))
-                *Mat4.translation(center);
+                *Mat4.translation(Vec3(0,2.5f/16.0f,0))
+                *Mat4.rotationX(-90*DEG_TO_RAD)
+                *Mat4.translation(grip);
         const armPose=Mat4.translation(shoulder*-1.0f)
             *Mat4.rotationX(armX)*Mat4.rotationY(armY)*Mat4.rotationZ(armZ)
             *Mat4.translation(shoulder);
-        return itemPose*armPose
+        auto model=itemPose*armPose
             *Mat4.rotationY(bodyYawDegrees*DEG_TO_RAD)
             *Mat4.translation(position+rootOffset);
+        if(swimming)
+        {
+            const pivot=position+Vec3(0,.6f,0);
+            model=model*Mat4.translation(pivot*-1)
+                *Mat4.rotationX((-90-headPitchDegrees)*DEG_TO_RAD)*Mat4.translation(pivot);
+        }
+        return model;
     }
 
     Mat4 firstPersonLookSwayTransform(float pitchDifference,

@@ -47,6 +47,53 @@ unittest
     assert(graphics.uploads==initialUploads+2);
     assert(renderer.dirtyFluidSections.length==0);
 
+    const beforeLight=graphics.uploads;
+    world.setBlock(1,71,1,BlockId.fire);
+    foreach(_;0..20)renderer.queueLightRemesh(1,1);
+    renderer.flushLightRemeshes();
+    assert(graphics.uploads==beforeLight,"Queue flushing must not synchronously rebuild terrain");
+    renderer.syncChunkMeshes(position,0,1);
+    renderer.flushLightRemeshes();
+    assert(renderer.dirtyLightChunks.length>0,"Neighbors must wait for the complete batch");
+    foreach(_;0..8){renderer.syncChunkMeshes(position,0,1);renderer.flushLightRemeshes();}
+    assert(graphics.uploads==beforeLight+2,"Each affected column must upload only once");
+    foreach(coordinate,geometry;renderer.chunkMeshes)
+        assert(geometry.revision==world.chunkRevision(coordinate.x,coordinate.z));
+    assert(renderer.dirtyLightChunks.length==0);
+
+    // Geometry edits must not wait for the neighborhood lighting transaction.
+    // Use a merged surface: simply discarding single-block quads is insufficient.
+    world.setBlock(1,70,1,BlockId.stone);
+    world.setBlock(2,70,1,BlockId.stone);
+    renderer.syncChunkMeshes(position,0,16);
+    world.setBlock(1,70,1,BlockId.air);
+    renderer.queueLightRemesh(1,1);
+    renderer.queueFluidRemesh(1,70,1);
+    assert(renderer.flushFluidRemeshes(position));
+    assert(renderer.dirtyLightChunks.length>0);
+    const fresh=renderer.blocks.buildChunkRange(renderer.blockTextures,
+        ChunkCoordinate(0,0),70,71);
+    const patched=renderer.chunkMeshes[ChunkCoordinate(0,0)].sections[0].blocks;
+    assert(patched==fresh,"Broken merged faces must update before lighting completes");
+    foreach(_;0..16){renderer.syncChunkMeshes(position,0,1);renderer.flushLightRemeshes();}
+
+    renderer.itemMeshes[ItemId.stone]=renderer.blocks.buildItem(BlockId.stone,renderer.blockTextures);
+    const fog=FogSettings.distance(Vec3(1000,70,1000),32,64);
+    renderer.appendHeldBlock(ItemStack(ItemId.stone,1),Vec3(1000,70,1000),0,true,
+        0,0,0,false,0,false,Mat4.identity(),fog);
+    assert(renderer.frame.vertices.length>0);
+    foreach(vertex;renderer.frame.vertices)
+        assert(vertex.position[0]>998&&vertex.position[2]>998,
+            "Held fog coordinates must be world-space, not item-space");
+    foreach(draw;renderer.frame.draws)assert(draw.transform==Mat4.identity());
+    const sunColor=renderer.frame.vertices[0].color[0];
+    world.dimension=DimensionId.nether;renderer.frame.clear();
+    renderer.appendHeldBlock(ItemStack(ItemId.stone,1),Vec3(1000,70,1000),0,true,
+        0,0,0,false,0,false,Mat4.identity(),fog);
+    assert(renderer.frame.vertices[0].color[0]>0&&renderer.frame.vertices[0].color[0]<sunColor,
+        "Held blocks must respond to the same world light as the player");
+    world.dimension=DimensionId.overworld;
+
     // Replacing a column between frames must evict its old geometry even
     // when no meshing budget is available that frame.
     assert(world.installChunk(0,0,column.snapshot()));
@@ -1122,7 +1169,9 @@ final class GameRenderer
                 --creativeBreakCooldown;
             if (pressed || creativeBreakCooldown == 0)
             {
-                player.attack(true);
+                if(world.rayCast(player.eyePosition(1.0f),
+                    forwardFromYawPitch(player.yaw,player.pitch),5.0f).hit)
+                    player.attack(true);
                 creativeBreakCooldown = 6;
             }
             return;
@@ -1176,6 +1225,9 @@ final class GameRenderer
             && !isNetherPortal(oldBlock) && !isWater(oldBlock)
             && !isFire(oldBlock))
         {
+            // Hide individual faces immediately; merged faces and newly exposed
+            // neighbors are corrected by the prioritized section patch below.
+            discardCachedBlockFaces(x,y,z,oldBlock);
             queueFluidRemesh(x,y,z);
             sounds.playBreak(oldBlock, center);
             particles.spawnBlockBreak(x, y, z, oldBlock);
@@ -1191,6 +1243,10 @@ final class GameRenderer
             queueFluidRemesh(x,y,z);
         if(isFire(newBlock)&&!isFire(oldBlock))sounds.playFireIgnite(center);
         if(isFire(oldBlock)&&!isFire(newBlock))sounds.playFireExtinguish(center);
+        if(isOpaque(oldBlock)!=isOpaque(newBlock)||isLeaves(oldBlock)!=isLeaves(newBlock)
+            ||isWater(oldBlock)!=isWater(newBlock)||isFire(oldBlock)!=isFire(newBlock)
+            ||isNetherPortal(oldBlock)!=isNetherPortal(newBlock))
+            queueLightRemesh(x,z);
         // Render coalesces all changes received this tick into one revision
         // rebuild, avoiding a full remesh for every cell in a flowing front.
         if (mining && miningHit.x == x && miningHit.y == y && miningHit.z == z)
@@ -1242,6 +1298,7 @@ final class GameRenderer
             ? elapsedSeconds - previousElapsedSeconds : 0.0f;
         previousElapsedSeconds = elapsedSeconds;
         multiplayer.advanceDroppedItems(frameSeconds > 0.1f ? 0.1f : frameSeconds);
+        flushLightRemeshes();
         // Alternate with full streaming jobs under sustained edits so neither
         // arriving terrain nor nearby block patches can starve the other.
         const patchedTerrain=!patchedTerrainLastFrame
@@ -1250,6 +1307,7 @@ final class GameRenderer
         // Only one 16-block-high chunk section is meshed per presented frame.
         // This keeps procedural terrain work out of a single long frame.
         syncChunkMeshes(player.position,player.yaw,patchedTerrain?0:1);
+        flushLightRemeshes();
         const meshingFinished=monotonicSeconds();
         lastMeshMilliseconds=cast(float)((meshingFinished-renderStarted)*1000.0);
         frame.clear(player.dimension == DimensionId.nether
@@ -1317,6 +1375,9 @@ final class GameRenderer
             terrainFog.color=Color(0.02f,0.18f,0.24f,1.0f);
         }
         const cloudFog = FogSettings.distance(camera.position, 300.0f, 380.0f);
+        if(player.dimension==DimensionId.overworld&&!world.isPointInWater(camera.position))
+            frame.append(sky.buildHorizon(camera.position,terrainFog.color,frame.clearColor),
+                whiteTexture,viewProjection,DrawLayer.sky);
         if (player.dimension == DimensionId.overworld)
             frame.append(sky.buildSun(camera.position), sun.descriptorIndex,
                 viewProjection, DrawLayer.sky);
@@ -1407,6 +1468,21 @@ final class GameRenderer
         const portalTexture=portalFrames[0];
         const stillTexture=waterStillFrames[0],flowTexture=waterFlowFrames[0];
         const fire0Texture=fire0Frames[0],fire1Texture=fire1Frames[0];
+        // Cutout fire participates in depth before glass/water blend over it.
+        auto fireFog=terrainFog;fireFog.alphaCutoff=.1f;
+        foreach(coordinate;admittedRenderChunks)
+        {
+            auto geometry=coordinate in chunkMeshes;
+            if(geometry is null)continue;
+            foreach(section;geometry.sections)
+            {
+                if(RenderSectionKey(coordinate,section.minimumY) !in admittedRenderSections)continue;
+                appendResidentRange(geometry.mesh,section.fireLayer0Range,
+                    fire0Texture,viewProjection,DrawLayer.worldDoubleSided,fireFog);
+                appendResidentRange(geometry.mesh,section.fireLayer1Range,
+                    fire1Texture,viewProjection,DrawLayer.worldDoubleSided,fireFog);
+            }
+        }
 
         const targeted=world.rayCast(player.eyePosition(partialTick),
             forwardFromYawPitch(player.yaw,player.pitch),5.0f);
@@ -1543,7 +1619,8 @@ final class GameRenderer
                     remote.interpolatedWalkAnimationSpeed(partialTick),
                     remote.interpolatedAttackProgress(partialTick),remote.crouching,
                     elapsedSeconds*20.0f,remote.skinModel=="slim",
-                    viewProjection,terrainFog);
+                    viewProjection,terrainFog,remote.interpolatedPitch(),remote.swimming,
+                    remote.interpolatedDeathTime(partialTick));
         }
 
         if (perspective != CameraPerspective.firstPerson)
@@ -1583,15 +1660,14 @@ final class GameRenderer
                     player.interpolatedWalkAnimationSpeed(partialTick),
                     player.interpolatedAttackProgress(partialTick),player.crouching,
                     elapsedSeconds*20.0f,accountSkinModel=="slim",
-                    viewProjection,terrainFog);
+                    viewProjection,terrainFog,player.pitch,player.swimming,
+                    player.interpolatedDeathTime(partialTick));
             appendTranslucentWorld(camera,portalTexture,stillTexture,flowTexture,
-                fire0Texture,fire1Texture,
                 viewProjection,terrainFog);
         }
         else
         {
             appendTranslucentWorld(camera,portalTexture,stillTexture,flowTexture,
-                fire0Texture,fire1Texture,
                 viewProjection,terrainFog);
             const equipProgress = 1.0f - lerp(partialTick,
                 previousMainHandHeight, mainHandHeight);
@@ -1898,7 +1974,7 @@ private:
     }
 
     void appendTranslucentWorld(const Camera camera,uint portalTexture,
-        uint stillTexture,uint flowTexture,uint fire0Texture,uint fire1Texture,
+        uint stillTexture,uint flowTexture,
         Mat4 viewProjection,FogSettings fog)
     {
         // Chunk order is back-to-front for alpha blending; section order is
@@ -1924,10 +2000,6 @@ private:
                     stillTexture,viewProjection,DrawLayer.translucent,fog);
                 appendResidentRange(geometry.mesh,section.waterWallsRange,
                     flowTexture,viewProjection,DrawLayer.translucent,fog);
-                appendResidentRange(geometry.mesh,section.fireLayer0Range,
-                    fire0Texture,viewProjection,DrawLayer.translucent,fog);
-                appendResidentRange(geometry.mesh,section.fireLayer1Range,
-                    fire1Texture,viewProjection,DrawLayer.translucent,fog);
             }
         }
     }
@@ -2192,10 +2264,13 @@ private:
                 {
                     const expected=world.chunkRevision(coordinate.x,coordinate.z);
                     auto cached=coordinate in chunkMeshes;
-                    if(cached !is null&&cached.revision==expected)continue;
+                    if(auto staged=coordinate in stagedLightMeshes)
+                        if(staged.revision==expected)continue;
+                    if(cached !is null&&cached.revision==expected&&coordinate !in dirtyLightChunks)continue;
                     const dx=coordinate.x-centerX,dz=coordinate.z-centerZ;
                     int distance=dx*dx+dz*dz;
                     if(dx*meshFacing.x+dz*meshFacing.z<0)distance+=10_000;
+                    if(coordinate in dirtyLightChunks)distance-=100_000;
                     if(!found||distance<bestDistance)
                     {found=true;best=coordinate;bestDistance=distance;}
                 }
@@ -2207,9 +2282,13 @@ private:
                     RenderChunkGeometry empty;
                     empty.sourceChunk=cast(const(void)*)loaded;
                     empty.revision=world.chunkRevision(best.x,best.z);
-                    if(auto previous=best in chunkMeshes)
-                        graphics.releaseStaticMesh(previous.mesh);
-                    chunkMeshes[best]=empty;
+                    if(best in dirtyLightChunks)stagedLightMeshes[best]=empty;
+                    else
+                    {
+                        if(auto previous=best in chunkMeshes)
+                            graphics.releaseStaticMesh(previous.mesh);
+                        chunkMeshes[best]=empty;
+                    }
                     continue;
                 }
                 meshJobActive=true;
@@ -2247,9 +2326,18 @@ private:
                 {
                     meshJobGeometry.revision=meshJobRevision;
                     finalizeChunkGeometry(meshJobGeometry);
-                    if(auto previous=meshJobCoordinate in chunkMeshes)
-                        graphics.releaseStaticMesh(previous.mesh);
-                    chunkMeshes[meshJobCoordinate]=meshJobGeometry;
+                    if(meshJobCoordinate in dirtyLightChunks)
+                    {
+                        if(auto previous=meshJobCoordinate in stagedLightMeshes)
+                            graphics.releaseStaticMesh(previous.mesh);
+                        stagedLightMeshes[meshJobCoordinate]=meshJobGeometry;
+                    }
+                    else
+                    {
+                        if(auto previous=meshJobCoordinate in chunkMeshes)
+                            graphics.releaseStaticMesh(previous.mesh);
+                        chunkMeshes[meshJobCoordinate]=meshJobGeometry;
+                    }
                 }
                 meshJobActive=false;
             }
@@ -2312,6 +2400,10 @@ private:
         if(graphics !is null)
             foreach(coordinate,geometry;chunkMeshes)
                 graphics.releaseStaticMesh(geometry.mesh);
+        foreach(coordinate,geometry;stagedLightMeshes)
+            graphics.releaseStaticMesh(geometry.mesh);
+        stagedLightMeshes.clear();
+        dirtyLightChunks.clear();
         chunkMeshes.clear();
         admittedRenderChunks.length=0;
         admittedRenderSections.clear();
@@ -2332,17 +2424,28 @@ private:
     void appendHeldBlock(ItemStack stack,Vec3 position,float bodyYawDegrees,
         bool rightHand,float walkPosition,float walkSpeed,float attackProgress,
         bool crouching,float ageInTicks,bool slimArms,Mat4 viewProjection,
-        FogSettings fog)
+        FogSettings fog,float headPitch=0,bool swimming=false,float deathTicks=0)
     {
         auto heldMesh=stack.item in itemMeshes;
         if(heldMesh is null)return;
         const model=players.thirdPersonHeldItemTransform(
             placedBlock(stack.item)==BlockId.air,position,bodyYawDegrees,rightHand,
             walkPosition,walkSpeed,attackProgress,crouching,ageInTicks,
-            slimArms,toolKind(stack.item)>=0);
+            slimArms,toolKind(stack.item)>=0,headPitch,swimming,stack.item==ItemId.stick);
         foreach(textureIndex,geometry;*heldMesh)
-            frame.append(geometry,textureIndex,model*viewProjection,
+        {
+            auto posed=geometry.dup;
+            players.applyPosedLight(posed,model,blocks.lightAt(position+Vec3(0,1,0)),
+                placedBlock(stack.item)!=BlockId.air,false);
+            foreach(ref vertex;posed)
+            {
+                const point=model.transformPoint(Vec3(vertex.position[0],vertex.position[1],vertex.position[2]));
+                vertex.position=[point.x,point.y,point.z];
+            }
+            players.applyDeathPose(posed,position,bodyYawDegrees,deathTicks);
+            frame.append(posed,textureIndex,viewProjection,
                 stackLayer(stack.item,textureIndex),fog);
+        }
     }
 
     void discardCachedBlockFaces(int x,int y,int z,BlockId oldBlock)
@@ -2410,6 +2513,55 @@ private:
         }
     }
 
+
+    private bool[ChunkCoordinate] dirtyLightChunks;
+
+    void queueLightRemesh(int x,int z)
+    {
+        const cx=chunkCoordinate(x),cz=chunkCoordinate(z);
+        foreach(dz;-1..2)foreach(dx;-1..2)
+            dirtyLightChunks[ChunkCoordinate(cx+dx,cz+dz)]=true;
+    }
+
+    private RenderChunkGeometry[ChunkCoordinate] stagedLightMeshes;
+
+    void flushLightRemeshes()
+    {
+        // Build/upload incrementally; publish only when all affected visible
+        // columns are ready. Never rebuild the entire neighborhood here.
+        ChunkCoordinate[] stale;
+        foreach(coordinate,geometry;stagedLightMeshes)
+            if(geometry.sourceChunk!=cast(const(void)*)world.chunkAt(coordinate.x,coordinate.z)
+                ||geometry.revision!=world.chunkRevision(coordinate.x,coordinate.z))
+                stale~=coordinate;
+        foreach(coordinate;stale)
+        {
+            graphics.releaseStaticMesh(stagedLightMeshes[coordinate].mesh);
+            stagedLightMeshes.remove(coordinate);
+        }
+        stale.length=0;
+        foreach(coordinate,unused;dirtyLightChunks)
+            if(coordinate !in chunkMeshes||world.chunkAt(coordinate.x,coordinate.z) is null)
+                stale~=coordinate;
+        foreach(coordinate;stale)dirtyLightChunks.remove(coordinate);
+        foreach(coordinate,unused;dirtyLightChunks)
+            if(coordinate !in stagedLightMeshes)return;
+        foreach(coordinate,geometry;stagedLightMeshes)
+        {
+            if(auto cached=coordinate in chunkMeshes)
+            {
+                graphics.releaseStaticMesh(cached.mesh);
+                *cached=geometry;
+            }
+            else graphics.releaseStaticMesh(geometry.mesh);
+        }
+        DirtySection[] cleared;
+        foreach(dirty,present;dirtyFluidSections)
+            if(dirty.coordinate in dirtyLightChunks)cleared~=dirty;
+        foreach(dirty;cleared)dirtyFluidSections.remove(dirty);
+        stagedLightMeshes.clear();
+        dirtyLightChunks.clear();
+    }
 
     void queueFluidRemesh(int x,int y,int z)
     {
