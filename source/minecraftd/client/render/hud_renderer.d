@@ -4,7 +4,7 @@ import minecraftd.game.resources.languages : translatedItem;
 import core.stdc.math : ceilf;
 import std.conv : to;
 import minecraftd.client.render.block_renderer : BlockTextureSet, Face,
-    blockTexture;
+    blockTexture, vegetationTint;
 import minecraftd.client.render.font_renderer : FontRenderer;
 import minecraftd.client.render.mesh : Color, DrawLayer, FrameMesh, Vertex, appendQuad;
 import minecraftd.common.math3d : Mat4, Vec2, Vec3;
@@ -397,8 +397,8 @@ private:
         enum float middleY=7.21f;
         enum float outerBottomY=12.34f;
         enum float bottomY=15.87f;
-        const topShade=item==ItemId.grassBlock
-            ?Color(0.55f,0.82f,0.35f,1):Color(1,1,1,1);
+        const topShade=vegetationTint(placedBlock(item),Face.up);
+        const sideShade=vegetationTint(placedBlock(item),Face.north);
         const topUvs=[Vec2(0,1),Vec2(1,1),Vec2(1,0),Vec2(0,0)];
         const sideUvs=[Vec2(0,0),Vec2(1,0),Vec2(1,1),Vec2(0,1)];
         face(top,[Vec2(x+8,y+topY),Vec2(x+rightInset,y+shoulderY),
@@ -407,10 +407,10 @@ private:
         face(side,[Vec2(x+leftInset,y+shoulderY),
                 Vec2(x+8,y+middleY),Vec2(x+8,y+bottomY),
                 Vec2(x+leftInset,y+outerBottomY)],
-            sideUvs,Color(0.65f,0.65f,0.65f,1));
+            sideUvs,Color(sideShade.r*.65f,sideShade.g*.65f,sideShade.b*.65f,1));
         face(side,[Vec2(x+8,y+middleY),
                 Vec2(x+rightInset,y+shoulderY),
                 Vec2(x+rightInset,y+outerBottomY),Vec2(x+8,y+bottomY)],
-            sideUvs,Color(0.8f,0.8f,0.8f,1));
+            sideUvs,Color(sideShade.r*.8f,sideShade.g*.8f,sideShade.b*.8f,1));
     }
 }

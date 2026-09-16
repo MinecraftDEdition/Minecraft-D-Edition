@@ -24,6 +24,15 @@ private void initializeRecipes()
         add([p,p,N,p,p,N,N,N,N],ItemId.craftingTable);
         add([p,N,N,p,N,N,N,N,N],S,4);
     }
+    add([ItemId.oakLog,N,N,N,N,N,N,N,N],ItemId.oakPlanks,4);
+    add([ItemId.spruceLog,N,N,N,N,N,N,N,N],ItemId.sprucePlanks,4);
+    add([ItemId.birchLog,N,N,N,N,N,N,N,N],ItemId.birchPlanks,4);
+    add([ItemId.jungleLog,N,N,N,N,N,N,N,N],ItemId.junglePlanks,4);
+    add([ItemId.acaciaLog,N,N,N,N,N,N,N,N],ItemId.acaciaPlanks,4);
+    add([ItemId.darkOakLog,N,N,N,N,N,N,N,N],ItemId.darkOakPlanks,4);
+    add([ItemId.mangroveLog,N,N,N,N,N,N,N,N],ItemId.mangrovePlanks,4);
+    add([ItemId.cherryLog,N,N,N,N,N,N,N,N],ItemId.cherryPlanks,4);
+    add([ItemId.paleOakLog,N,N,N,N,N,N,N,N],ItemId.paleOakPlanks,4);
     const c=ItemId.cobblestone;
     add([c,c,c,c,N,c,c,c,c],ItemId.furnace);
     add([N,ItemId.book,N,ItemId.diamond,ItemId.obsidian,ItemId.diamond,

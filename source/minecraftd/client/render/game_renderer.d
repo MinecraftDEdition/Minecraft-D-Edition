@@ -104,7 +104,7 @@ import minecraftd.client.menu.inventory_menu:CreativeTab,InventoryMenuRenderer,
 import minecraftd.game.resources.resource_manager : ResourceManager;
 import minecraftd.client.render.texture_animation : decodeTextureAnimation;
 import minecraftd.client.render.texture_compatibility : compatibleTexture;
-import minecraftd.game.resources.languages : activeLanguage;
+import minecraftd.game.resources.languages : activeLanguage, tr;
 import minecraftd.client.render.unicode_font : buildUnicodeFont;
 import minecraftd.game.item.inventory : ItemId, ItemStack, placedBlock,
     firstCatalogItem, lastCatalogItem, sameHeldStack, lastItem, itemTextureName, toolKind;
@@ -115,7 +115,7 @@ import minecraftd.platform.desktop.vulkan.device : VulkanDevice;
 import minecraftd.platform.clock : monotonicSeconds;
 import minecraftd.world.block : BlockId, bareHandDestroyProgress,
     catalogBlockDefinition, firstCatalogBlock, isFire, isNetherPortal,
-    isOpaque, isWater, isWaterSource, lastCatalogBlock;
+    isOpaque, isWater, isWaterSource, lastCatalogBlock, isLeaves;
 import minecraftd.world.world : BlockHit, World;
 import minecraftd.world.chunk : Chunk, ChunkCoordinate, chunkCoordinate;
 import minecraftd.world.world_settings : GameMode;
@@ -271,6 +271,10 @@ final class GameRenderer
     private uint creativeBreakCooldown;
     private float previousElapsedSeconds;
     private ItemStack displayedMainHand;
+    private MultiplayerClient savingOwner;
+    private uint shownSaveSerial;
+    private double savingStarted=-100, savingUntil=-100;
+
     private ItemStack lastItemHighlight;
     private int itemHighlightTicks;
     private float mainHandHeight = 1.0f;
@@ -395,6 +399,8 @@ final class GameRenderer
                 definition.topTexture);
             blockTextures.catalogBottom[block] = loadCatalogTexture(
                 definition.bottomTexture);
+            if(isLeaves(block))
+                blockTextures.cutoutTextures[blockTextures.catalogSide[block]]=true;
         }
         blockTextures.craftingFront=load("textures/block/crafting_table_front.png");
         blockTextures.furnaceFront=load("textures/block/furnace_front.png");
@@ -534,7 +540,7 @@ final class GameRenderer
         ];
         inventoryTextures.creativeTabCubeIcons[1]=true;
         inventoryTextures.creativeTabCubeIcons[5]=true;
-        chatRenderer = new ChatRenderer(asciiImage, asciiTexture.descriptorIndex,
+        chatRenderer = new ChatRenderer(hudFont, fontTexture,
             solidTexture.descriptorIndex);
         itemMeshes[ItemId.grassBlock] = blocks.buildItem(BlockId.grass, blockTextures);
         itemMeshes[ItemId.dirt] = blocks.buildItem(BlockId.dirt, blockTextures);
@@ -562,7 +568,7 @@ final class GameRenderer
             blockTextures);
         itemMeshes[ItemId.flintAndSteel] = blocks.buildGeneratedItem(
             blockTextures.flintAndSteel,flintImage);
-        foreach(raw;cast(int)ItemId.woodenSword..cast(int)lastItem+1)
+        foreach(raw;cast(int)ItemId.woodenSword..cast(int)ItemId.zombieSpawnEgg+1)
         {
             const item=cast(ItemId)raw;
             const spritePath="textures/item/"~itemTextureName(item)~".png";
@@ -575,6 +581,11 @@ final class GameRenderer
         {
             const item = cast(ItemId)raw;
             itemMeshes[item] = blocks.buildItem(placedBlock(item), blockTextures);
+        }
+        foreach(raw;cast(int)ItemId.oakLog..cast(int)lastItem+1)
+        {
+            const item=cast(ItemId)raw;
+            itemMeshes[item]=blocks.buildItem(placedBlock(item),blockTextures);
         }
         uint[8] poofTextures;
         uint[8] portalTextures;
@@ -1720,6 +1731,7 @@ final class GameRenderer
             -meshingFinished)*1000.0);
         if(debugVisible)
             appendDebugOverlay(player,debugFps);
+        appendSavingIndicator(multiplayer);
         const graphicsStarted=monotonicSeconds();
         submitFrame();
         lastGraphicsMilliseconds=cast(float)((monotonicSeconds()
@@ -2088,6 +2100,27 @@ private:
             return adx*adx+adz*adz<bdx*bdx+bdz*bdz;
         })(result);
         return result;
+    }
+
+    void appendSavingIndicator(MultiplayerClient multiplayer)
+    {
+        const now=monotonicSeconds();
+        if(savingOwner !is multiplayer)
+        {savingOwner=multiplayer;shownSaveSerial=0;savingStarted=savingUntil=-100;}
+        if(multiplayer.saveSerial!=shownSaveSerial)
+        {shownSaveSerial=multiplayer.saveSerial;savingStarted=now;savingUntil=now+1.2;}
+        if(multiplayer.saveInProgress)savingUntil=now+1.2;
+        if(multiplayer.saveFailed)savingUntil=now+1.2;
+        const fadeIn=clamp(cast(float)((now-savingStarted)/.25),0f,1f);
+        const fadeOut=clamp(cast(float)((savingUntil-now)/.6),0f,1f);
+        const alpha=fadeIn*fadeOut;
+        if(alpha<=0)return;
+        int scale=1;while(scale<8&&width/(scale+1)>=320&&height/(scale+1)>=240)++scale;
+        const w=cast(float)width/scale,h=cast(float)height/scale;
+        const label=multiplayer.saveFailed?"Save failed":tr("menu.savingLevel","Saving World...");
+        const color=multiplayer.saveFailed?Color(1,.3f,.3f,alpha):Color(1,1,1,alpha);
+        frame.append(hudFont.buildText(label,cast(int)w-hudFont.width(label)-5,cast(int)h-14,w,h,color),
+            fontTexture,Mat4.identity(),DrawLayer.overlay);
     }
 
     void appendDebugOverlay(const LocalPlayer player,float fps)
@@ -2590,8 +2623,12 @@ private:
     {
         const tick=cast(ulong)(monotonicSeconds()*20.0);
         foreach(ref draw;frame.draws)
+        {
+            if(draw.textureIndex in blockTextures.cutoutTextures)
+                draw.fog.alphaCutoff=.45f;
             if(auto animation=draw.textureIndex in resourceAnimations)
                 draw.textureIndex=(*animation)[tick%animation.length];
+        }
         graphics.render(frame);
     }
 }

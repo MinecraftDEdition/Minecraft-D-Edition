@@ -1,6 +1,7 @@
 module minecraftd.world.world_settings;
 
 import std.algorithm : sort;
+import minecraftd.world.atomic_file : atomicWrite;
 import std.conv : to;
 import std.file : SpanMode, dirEntries, exists, isDir, mkdirRecurse,
     read, readText, rmdirRecurse, write;
@@ -63,12 +64,14 @@ struct WorldSettings
     string name = "New World";
     string folder;
     long seed;
+    uint generatorVersion = 2;
     GameMode gameMode = GameMode.survival;
     Difficulty difficulty = Difficulty.normal;
     WorldType worldType = WorldType.normal;
     bool hardcore;
     bool allowCommands;
     bool generateStructures = true;
+    bool generateTrees = true;
     bool generateCaves = true;
     bool generateRivers = true;
     bool generateOceans = true;
@@ -124,6 +127,7 @@ void saveWorldMetadata(string directory, const WorldSettings settings)
     cleanName = cleanName.replace("\r", " ").replace("\n", " ");
     const contents = "name=" ~ cleanName ~ "\n"
         ~ "folder=" ~ settings.folder ~ "\n"
+        ~ "generator=" ~ to!string(settings.generatorVersion) ~ "\n"
         ~ "seed=" ~ to!string(settings.seed) ~ "\n"
         ~ "gamemode=" ~ to!string(cast(ubyte) settings.gameMode) ~ "\n"
         ~ "difficulty=" ~ to!string(cast(ubyte) settings.difficulty) ~ "\n"
@@ -131,6 +135,7 @@ void saveWorldMetadata(string directory, const WorldSettings settings)
         ~ "hardcore=" ~ (settings.hardcore ? "1" : "0") ~ "\n"
         ~ "commands=" ~ (settings.allowCommands ? "1" : "0") ~ "\n"
         ~ "structures=" ~ (settings.generateStructures ? "1" : "0") ~ "\n"
+        ~ "trees=" ~ (settings.generateTrees ? "1" : "0") ~ "\n"
         ~ "caves=" ~ (settings.generateCaves ? "1" : "0") ~ "\n"
         ~ "rivers=" ~ (settings.generateRivers ? "1" : "0") ~ "\n"
         ~ "oceans=" ~ (settings.generateOceans ? "1" : "0") ~ "\n"
@@ -138,7 +143,7 @@ void saveWorldMetadata(string directory, const WorldSettings settings)
         ~ "spawnx=" ~ to!string(settings.spawn.x) ~ "\n"
         ~ "spawny=" ~ to!string(settings.spawn.y) ~ "\n"
         ~ "spawnz=" ~ to!string(settings.spawn.z) ~ "\n";
-    write(buildPath(directory, "level.dat"), contents);
+    atomicWrite(buildPath(directory, "level.dat"), contents);
 }
 
 WorldSettings loadWorldMetadata(string directory)
@@ -149,6 +154,7 @@ WorldSettings loadWorldMetadata(string directory)
     const path = buildPath(directory, "level.dat");
     if (!exists(path))
         return settings;
+    settings.generatorVersion = 1; // Missing field means the original terrain, including unexplored chunks.
     foreach (line; splitLines(readText(path)))
     {
         const separator = indexOf(line, '=');
@@ -161,6 +167,7 @@ WorldSettings loadWorldMetadata(string directory)
             {
                 case "name": settings.name = value; break;
                 case "folder": settings.folder = value; break;
+                case "generator": settings.generatorVersion = to!uint(value); break;
                 case "seed": settings.seed = to!long(value); break;
                 case "gamemode": settings.gameMode = cast(GameMode) to!ubyte(value); break;
                 case "difficulty": settings.difficulty = cast(Difficulty) to!ubyte(value); break;
@@ -168,6 +175,7 @@ WorldSettings loadWorldMetadata(string directory)
                 case "hardcore": settings.hardcore = value == "1"; break;
                 case "commands": settings.allowCommands = value == "1"; break;
                 case "structures": settings.generateStructures = value != "0"; break;
+                case "trees": settings.generateTrees = value != "0"; break;
                 case "caves": settings.generateCaves = value != "0"; break;
                 case "rivers": settings.generateRivers = value != "0"; break;
                 case "oceans": settings.generateOceans = value != "0"; break;

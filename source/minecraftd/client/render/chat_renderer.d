@@ -4,7 +4,6 @@ import core.stdc.math : powf;
 import minecraftd.client.chat.chat_state : ChatMessageKind, ChatState;
 import minecraftd.client.render.font_renderer : FontRenderer;
 import minecraftd.client.render.mesh : Color, DrawLayer, FrameMesh, Vertex, appendQuad;
-import minecraftd.client.render.texture_manager : ImageData;
 import minecraftd.common.math3d : Mat4, Vec2, Vec3, clamp;
 import minecraftd.client.menu.options_menu : OptionsMenuState;
 
@@ -21,9 +20,10 @@ final class ChatRenderer
     private uint fontTexture;
     private uint solidTexture;
 
-    this(const ImageData asciiAtlas, uint fontTexture, uint solidTexture)
+    this(FontRenderer font, uint fontTexture, uint solidTexture)
     {
-        font = new FontRenderer(asciiAtlas);
+        // Font metrics and UVs must match the uploaded, packed language atlas.
+        this.font = font;
         this.fontTexture = fontTexture;
         this.solidTexture = solidTexture;
     }

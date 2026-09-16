@@ -47,6 +47,7 @@ struct WindowContext {
     int resizeHeight = 0;
     bool running = true;
     bool captured = false;
+    bool resetMouseDelta = false;
     bool textInputActive = false;
     std::array<SDL_Cursor*, 4> cursors{};
 };
@@ -241,6 +242,7 @@ void mcdPlatformPump(void* value) {
                 if (event.text.text) context->text += event.text.text;
                 break;
             case SDL_EVENT_WINDOW_PIXEL_SIZE_CHANGED:
+                context->resetMouseDelta = true;
                 context->resizeWidth = event.window.data1;
                 context->resizeHeight = event.window.data2;
                 break;
@@ -331,6 +333,9 @@ void mcdPlatformMouseDelta(void* value, int* x, int* y) {
     float dx = 0.0f, dy = 0.0f;
     if (context && context->captured && mcdPlatformFocused(value))
         SDL_GetRelativeMouseState(&dx, &dy);
+    if (context && context->resetMouseDelta) {
+        context->resetMouseDelta = false; dx = dy = 0.0f;
+    }
     if (x) *x = static_cast<int>(dx);
     if (y) *y = static_cast<int>(dy);
 }
@@ -357,7 +362,11 @@ void mcdPlatformSetCursorVisible(void*, int visible) {
 
 void mcdPlatformSetFullscreen(void* value, int enabled) {
     auto* context = static_cast<WindowContext*>(value);
-    if (context) SDL_SetWindowFullscreen(context->window, enabled != 0);
+    if (context) {
+        context->resetMouseDelta = true;
+        SDL_GetRelativeMouseState(nullptr, nullptr);
+        SDL_SetWindowFullscreen(context->window, enabled != 0);
+    }
 }
 
 int mcdPlatformFullscreen(void* value) {

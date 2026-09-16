@@ -73,6 +73,9 @@ struct FogSettings
     float enabled = 0.0f;
     float startDistance = 0.0f;
     float endDistance = 1.0f;
+    // Cutout materials discard holes and write fully opaque surviving pixels.
+    // Stored in an existing spare constant: the native uniform ABI stays 112 bytes.
+    float alphaCutoff = 0.0f;
 
     static FogSettings disabled()
     {
@@ -104,7 +107,7 @@ struct FogSettings
         return [
             color.r, color.g, color.b, color.a,
             cameraPosition.x, cameraPosition.y, cameraPosition.z, enabled,
-            startDistance, endDistance, 0.0f, 0.0f,
+            startDistance, endDistance, alphaCutoff, 0.0f,
         ];
     }
 }

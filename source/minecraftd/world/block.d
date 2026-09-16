@@ -80,10 +80,11 @@ enum BlockId : ubyte
     limeTerracotta, greenTerracotta, cyanTerracotta, lightBlueTerracotta,
     blueTerracotta, purpleTerracotta, magentaTerracotta, pinkTerracotta,
     craftingTable, furnace, enchantingTable,
+    oakLog, spruceLog, birchLog, jungleLog, acaciaLog, darkOakLog, mangroveLog, cherryLog, paleOakLog, oakLeaves, spruceLeaves, birchLeaves, jungleLeaves, acaciaLeaves, darkOakLeaves, mangroveLeaves, cherryLeaves, paleOakLeaves, packedIce, blueIce,
 }
 
 enum BlockId firstCatalogBlock = BlockId.coarseDirt;
-enum BlockId lastCatalogBlock = BlockId.enchantingTable;
+enum BlockId lastCatalogBlock = BlockId.blueIce;
 static assert(cast(int)lastCatalogBlock <= ubyte.max,
     "Block registry exceeds the current save/network ID width");
 
@@ -286,7 +287,37 @@ immutable CatalogBlockDefinition[] catalogBlockDefinitions = [
     sided("Crafting Table", "crafting_table_side", "crafting_table_top", "oak_planks", "wood", 2.5f, true, true),
     sided("Furnace", "furnace_side", "furnace_top", "furnace_top", "stone", 3.5f, false),
     sided("Enchanting Table", "enchanting_table_side", "enchanting_table_top", "enchanting_table_bottom", "stone", 5f, false),
+    sided("Oak Log", "oak_log", "oak_log_top", "oak_log_top", "wood", 2f, true, true),
+    sided("Spruce Log", "spruce_log", "spruce_log_top", "spruce_log_top", "wood", 2f, true, true),
+    sided("Birch Log", "birch_log", "birch_log_top", "birch_log_top", "wood", 2f, true, true),
+    sided("Jungle Log", "jungle_log", "jungle_log_top", "jungle_log_top", "wood", 2f, true, true),
+    sided("Acacia Log", "acacia_log", "acacia_log_top", "acacia_log_top", "wood", 2f, true, true),
+    sided("Dark Oak Log", "dark_oak_log", "dark_oak_log_top", "dark_oak_log_top", "wood", 2f, true, true),
+    sided("Mangrove Log", "mangrove_log", "mangrove_log_top", "mangrove_log_top", "wood", 2f, true, true),
+    sided("Cherry Log", "cherry_log", "cherry_log_top", "cherry_log_top", "wood", 2f, true, true),
+    sided("Pale Oak Log", "pale_oak_log", "pale_oak_log_top", "pale_oak_log_top", "wood", 2f, true, true),
+    cube("Oak Leaves", "oak_leaves", "grass", .2f, true, true),
+    cube("Spruce Leaves", "spruce_leaves", "grass", .2f, true, true),
+    cube("Birch Leaves", "birch_leaves", "grass", .2f, true, true),
+    cube("Jungle Leaves", "jungle_leaves", "grass", .2f, true, true),
+    cube("Acacia Leaves", "acacia_leaves", "grass", .2f, true, true),
+    cube("Dark Oak Leaves", "dark_oak_leaves", "grass", .2f, true, true),
+    cube("Mangrove Leaves", "mangrove_leaves", "grass", .2f, true, true),
+    cube("Cherry Leaves", "cherry_leaves", "grass", .2f, true, true),
+    cube("Pale Oak Leaves", "pale_oak_leaves", "grass", .2f, true, true),
+    cube("Packed Ice", "packed_ice", "glass", .5f, true),
+    cube("Blue Ice", "blue_ice", "glass", 2.8f, true),
 ];
+
+bool isLeaves(BlockId block)
+{
+    return block>=BlockId.oakLeaves && block<=BlockId.paleOakLeaves;
+}
+
+bool isLog(BlockId block)
+{
+    return block>=BlockId.oakLog && block<=BlockId.paleOakLog;
+}
 
 bool isCatalogBlock(BlockId block)
 {
@@ -350,7 +381,7 @@ BlockSoundType soundType(BlockId block)
 
 bool isOpaque(BlockId block)
 {
-    if(block==BlockId.enchantingTable)return false;
+    if(block==BlockId.enchantingTable || isLeaves(block))return false;
     return isCatalogBlock(block) || (block != BlockId.air && block != BlockId.netherPortalX
         && block != BlockId.netherPortalZ && block != BlockId.glass
         && !isWater(block) && block != BlockId.fire);
@@ -358,7 +389,7 @@ bool isOpaque(BlockId block)
 
 bool isSolid(BlockId block)
 {
-    return isOpaque(block) || block == BlockId.glass || block==BlockId.enchantingTable;
+    return isOpaque(block) || isLeaves(block) || block == BlockId.glass || block==BlockId.enchantingTable;
 }
 
 bool isNetherPortal(BlockId block)

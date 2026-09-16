@@ -70,11 +70,12 @@ enum ItemId : ushort
     blueTerracotta, purpleTerracotta, magentaTerracotta, pinkTerracotta,
     craftingTable, furnace, enchantingTable,
 woodenSword, woodenAxe, woodenPickaxe, woodenShovel, woodenHoe, stoneSword, stoneAxe, stonePickaxe, stoneShovel, stoneHoe, copperSword, copperAxe, copperPickaxe, copperShovel, copperHoe, ironSword, ironAxe, ironPickaxe, ironShovel, ironHoe, goldenSword, goldenAxe, goldenPickaxe, goldenShovel, goldenHoe, diamondSword, diamondAxe, diamondPickaxe, diamondShovel, diamondHoe, netheriteSword, netheriteAxe, netheritePickaxe, netheriteShovel, netheriteHoe, beef, cookedBeef, porkchop, cookedPorkchop, chicken, cookedChicken, mutton, cookedMutton, rabbit, cookedRabbit, cod, cookedCod, apple, bread, stick, coal, ironIngot, copperIngot, goldIngot, diamond, lapisLazuli, rawIron, rawCopper, rawGold, wheat, flint, leather, paper, book, netheriteIngot, zombieSpawnEgg,
+    oakLog, spruceLog, birchLog, jungleLog, acaciaLog, darkOakLog, mangroveLog, cherryLog, paleOakLog, oakLeaves, spruceLeaves, birchLeaves, jungleLeaves, acaciaLeaves, darkOakLeaves, mangroveLeaves, cherryLeaves, paleOakLeaves, packedIce, blueIce,
 }
 
 enum ItemId firstCatalogItem = ItemId.coarseDirt;
 enum ItemId lastCatalogItem = ItemId.enchantingTable;
-enum ItemId lastItem = ItemId.zombieSpawnEgg;
+enum ItemId lastItem = ItemId.blueIce;
 static assert(cast(int)lastItem <= ushort.max);
 enum ItemId lastBlockItem = lastCatalogItem;
 static assert(cast(int)lastCatalogItem <= ubyte.max,
@@ -120,6 +121,8 @@ enum CreativeItemGroup : ubyte
 
 bool creativeItemInGroup(ItemId item, CreativeItemGroup group)
 {
+    if(item>=ItemId.oakLog && item<=lastItem)
+        return group==CreativeItemGroup.naturalBlocks || group==CreativeItemGroup.buildingBlocks;
     if(item==ItemId.zombieSpawnEgg)return group==CreativeItemGroup.spawnEggs;
     if(item>=ItemId.craftingTable&&item<=ItemId.enchantingTable)
         return group==CreativeItemGroup.functionalBlocks;
@@ -593,7 +596,7 @@ private:
 string itemName(ItemId item)
 {
     if(item==ItemId.zombieSpawnEgg)return "Spawn Zombie";
-    if(item>=ItemId.woodenSword&&item<=lastItem)
+    if(item>=ItemId.woodenSword&&item<=ItemId.netheriteIngot)
         return extraItemNames[cast(int)item-cast(int)ItemId.woodenSword];
     switch (item)
     {
@@ -629,7 +632,7 @@ immutable string[] extraItemTextures = ["wooden_sword","wooden_axe","wooden_pick
 string itemTextureName(ItemId item)
 {
     if(item==ItemId.zombieSpawnEgg)return "zombie_spawn_egg";
-    return item>=ItemId.woodenSword&&item<=lastItem
+    return item>=ItemId.woodenSword&&item<=ItemId.netheriteIngot
         ?extraItemTextures[cast(int)item-cast(int)ItemId.woodenSword]:"";
 }
 string itemIdentifier(ItemId item)
@@ -727,6 +730,8 @@ bool sameHeldStack(const ItemStack left, const ItemStack right)
 
 ItemId blockItem(BlockId block)
 {
+    if(block>=BlockId.oakLog && block<=lastCatalogBlock)
+        return cast(ItemId)(cast(int)ItemId.oakLog+cast(int)block-cast(int)BlockId.oakLog);
     switch (block)
     {
         case BlockId.air: return ItemId.none;
@@ -766,6 +771,8 @@ ItemId blockItem(BlockId block)
 
 BlockId placedBlock(ItemId item)
 {
+    if(item>=ItemId.oakLog && item<=lastItem)
+        return cast(BlockId)(cast(int)BlockId.oakLog+cast(int)item-cast(int)ItemId.oakLog);
     switch (item)
     {
         case ItemId.none: return BlockId.air;

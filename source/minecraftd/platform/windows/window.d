@@ -22,6 +22,7 @@ private __gshared int pendingClientHeight;
 private __gshared HCURSOR desiredCursor;
 private __gshared bool closeRequested;
 private __gshared bool focusLost;
+private __gshared bool mouseGeometryChanged;
 private __gshared bool[256] framePressed;
 private __gshared bool[256] frameRepeated;
 
@@ -83,7 +84,11 @@ extern (Windows) LRESULT windowProcedure(HWND window, UINT message, WPARAM wPara
             if (pendingCharacterCount < pendingCharacters.length)
                 pendingCharacters[pendingCharacterCount++] = cast(wchar) wParam;
             return 0;
+        case WM_MOVE:
+            mouseGeometryChanged=true;
+            return DefWindowProcW(window,message,wParam,lParam);
         case WM_SIZE:
+            mouseGeometryChanged=true;
             if (wParam != SIZE_MINIMIZED)
             {
                 pendingClientWidth = cast(ushort) (lParam & 0xFFFF);
@@ -327,6 +332,8 @@ final class GameWindow
         POINT current;
         GetCursorPos(&current);
         POINT delta = {current.x - center.x, current.y - center.y};
+        if(mouseGeometryChanged)delta=POINT(0,0);
+        mouseGeometryChanged=false;
         if (mouseCaptured && GetForegroundWindow() == handle)
             SetCursorPos(center.x, center.y);
         else
@@ -376,6 +383,7 @@ final class GameWindow
 
     void toggleFullscreen()
     {
+        mouseGeometryChanged=true;
         if (fullscreen)
             leaveFullscreen();
         else

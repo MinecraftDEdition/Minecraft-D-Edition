@@ -4,7 +4,7 @@ import core.stdc.math : floorf;
 import minecraftd.common.aabb : Aabb;
 import minecraftd.common.math3d : Vec3;
 import minecraftd.world.world : World;
-import minecraftd.world.block : isOpaque, isWater;
+import minecraftd.world.block : isOpaque, isWater, isLeaves;
 import minecraftd.world.world_settings : DimensionId;
 import minecraftd.world.chunk : chunkCoordinate;
 
@@ -87,7 +87,7 @@ bool seesSky(World world, Vec3 eye)
     for(int y=cast(int)floorf(eye.y);y<=world.maximumBuildY();++y)
     {
         const block=world.getBlock(x,y,z);
-        if(isOpaque(block)||isWater(block))return false;
+        if(isOpaque(block)||isWater(block)||isLeaves(block))return false;
     }
     return true;
 }

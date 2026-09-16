@@ -26,12 +26,14 @@ enum GamePacketType : ubyte
     chunkData,
     chunkUnload,
     interaction, // frame-driven clicks; never advances movement simulation
+    saveAndQuit, saveComplete, saveStatus,
 }
 
 enum uint maximumGamePacketBytes = 1024 * 1024;
 // 26 adds frame-driven interaction packets for responsive clicks.
 // Existing numeric IDs are preserved; older wire formats must be rejected.
-enum ushort gameProtocolVersion = 26;
+// 27 appends terrain blocks/items; older clients cannot render these IDs.
+enum ushort gameProtocolVersion = 28;
 
 enum ubyte chunkEncodingRaw = 0;
 enum ubyte chunkEncodingRle = 1;

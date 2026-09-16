@@ -78,6 +78,7 @@ void main()
     auto chunk=new Chunk();
     scope(exit)destroy(chunk);
     chunk.set(0,70,0,BlockId.stone);
+    chunk.set(1,71,0,BlockId.cherryLeaves);
     const data=chunk.snapshot();
     // Pause application polling while the receive threads accumulate a burst.
     // The final edits and unloads must not overtake deferred chunk snapshots.
@@ -103,6 +104,9 @@ void main()
         &&worlds[1].loadedChunkCoordinates().length==1
         &&worlds[0].getBlock(39*16,70,0)==BlockId.oakPlanks
         &&worlds[1].getBlock(39*16,70,0)==BlockId.oakPlanks);
+    foreach(world;worlds)
+        assert(world.getBlock(39*16+1,71,0)==BlockId.cherryLeaves,
+            "Appended foliage IDs must survive chunk replication");
 
     // A dimension change must discard old queued terrain. The new snapshot
     // uses identical coordinates but a different occupied height.

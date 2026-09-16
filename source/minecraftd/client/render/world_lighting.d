@@ -2,7 +2,7 @@ module minecraftd.client.render.world_lighting;
 
 import minecraftd.common.math3d : Vec3, clamp;
 import minecraftd.world.block : BlockId, isFire, isNetherPortal, isOpaque,
-    isWater;
+    isWater, isLeaves;
 import minecraftd.world.chunk : Chunk, ChunkCoordinate, chunkCoordinate;
 import minecraftd.world.world : World;
 import minecraftd.world.world_settings : DimensionId;
@@ -206,7 +206,8 @@ private:
                 {
                     const cell=world.getBlock(x,y,z);
                     if(isOpaque(cell))break;
-                    if(isWater(cell)&&level>0)--level;
+                    if(isLeaves(cell))level=cast(ubyte)(level>2?level-2:0);
+                    else if(isWater(cell)&&level>0)--level;
                     const index=result.indexOf(x,y,z);
                     result.sky[index]=level;
                     if(level>1)queue~=index;
@@ -325,7 +326,9 @@ private:
                 const nx=x+dx[side],ny=y+dy[side],nz=z+dz[side];
                 if(!grid.inside(nx,ny,nz)||isOpaque(world.getBlock(nx,ny,nz)))
                     continue;
-                const next=cast(ubyte)(current-1);
+                const cost=isLeaves(world.getBlock(nx,ny,nz))?2:1;
+                if(current<=cost)continue;
+                const next=cast(ubyte)(current-cost);
                 const neighbor=grid.indexOf(nx,ny,nz);
                 if(next<=levels[neighbor])continue;
                 levels[neighbor]=next;queue~=neighbor;

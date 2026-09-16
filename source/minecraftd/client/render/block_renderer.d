@@ -55,7 +55,7 @@ import minecraftd.client.render.mesh : Vertex, Color, appendQuad;
 import minecraftd.client.render.texture_manager : ImageData;
 import minecraftd.client.render.world_lighting : WorldLighting;
 import minecraftd.common.math3d : Vec2, Vec3;
-import minecraftd.world.block : BlockId, isFire, isOpaque, isWater, waterHeight;
+import minecraftd.world.block : isLeaves, BlockId, isFire, isOpaque, isWater, waterHeight;
 import minecraftd.world.chunk : Chunk, ChunkCoordinate;
 import minecraftd.world.world : World;
 import std.conv : to;
@@ -92,6 +92,7 @@ struct BlockTextureSet
     uint[BlockId] catalogSide;
     uint[BlockId] catalogTop;
     uint[BlockId] catalogBottom;
+    bool[uint] cutoutTextures;
     uint white;
     uint craftingFront;
     uint furnaceFront;
@@ -422,9 +423,7 @@ final class BlockRenderer
                 byTexture[texture] = [];
                 geometry = texture in byTexture;
             }
-            const tint = block == BlockId.grass && face == Face.up
-                ? Color(0.55f, 0.82f, 0.35f, 1.0f)
-                : Color(1, 1, 1, 1);
+            const tint = vegetationTint(block, face);
             appendBlockFace(*geometry, 0, 0, 0, face, tint, false,
                 block==BlockId.enchantingTable?.75f:1.0f);
         }
@@ -593,13 +592,12 @@ private:
                 appendBlockFace(byTexture[texture],x,y,z,face,Color(1,1,1,1),true,.75f);
                 continue;
             }
-            if(isOpaque(neighbor)
-                ||(block==BlockId.glass&&neighbor==BlockId.glass))continue;
+            if(!isLeaves(block) && (isOpaque(neighbor)
+                ||(block==BlockId.glass&&neighbor==BlockId.glass)))continue;
             ref cell=mask[cast(size_t)v*uCount+u];
             cell.visible=true;
             cell.texture=textureFor(block,face,textures);
-            const tint=block==BlockId.grass&&face==Face.up
-                ?Color(0.55f,0.82f,0.35f,1):Color(1,1,1,1);
+            const tint=vegetationTint(block,face);
             blockFaceColors(cell.colors,x,y,z,face,tint,true);
             cell.flat=equalColor(cell.colors[0],cell.colors[1])
                 &&equalColor(cell.colors[0],cell.colors[2])
@@ -1113,4 +1111,15 @@ private:
             +lighting.brightnessAt(baseX+ux+vx,baseY+uy+vy,
                 baseZ+uz+vz))*0.25f;
     }
+}
+
+// Shared by world and inventory meshes; colored cherry/pale textures remain untinted.
+Color vegetationTint(BlockId block, Face face)
+{
+    if(block==BlockId.grass && face==Face.up)return Color(.55f,.82f,.35f,1);
+    if(block==BlockId.spruceLeaves)return Color(.38f,.60f,.38f,1);
+    if(block==BlockId.birchLeaves)return Color(.50f,.65f,.33f,1);
+    if(isLeaves(block)&&block!=BlockId.cherryLeaves&&block!=BlockId.paleOakLeaves)
+        return Color(.40f,.70f,.25f,1);
+    return Color(1,1,1,1);
 }

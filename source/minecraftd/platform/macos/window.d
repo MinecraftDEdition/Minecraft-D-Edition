@@ -151,10 +151,13 @@ final class GameWindow
 
     void clearTextInput() { mcdPlatformClearText(context); }
 
+    private bool discardMouseDelta;
+
     Point mouseDelta()
     {
         Point result;
         mcdPlatformMouseDelta(context, &result.x, &result.y);
+        if(discardMouseDelta){discardMouseDelta=false;return Point(0,0);}
         return result;
     }
 
@@ -181,6 +184,7 @@ final class GameWindow
     void toggleFullscreen() { setFullscreen(!fullscreen); }
     void setFullscreen(bool enabled)
     {
+        discardMouseDelta=true;
         mcdPlatformSetFullscreen(context, enabled ? 1 : 0);
         fullscreen = mcdPlatformFullscreen(context) != 0;
         updateSize();

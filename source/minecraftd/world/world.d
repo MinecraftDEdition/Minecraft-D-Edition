@@ -16,6 +16,7 @@ unittest
 }
 
 import core.stdc.math : cosf, fabsf, floorf, sinf;
+import minecraftd.world.atomic_file : atomicWrite;
 import std.conv : to;
 import std.file : exists, mkdirRecurse, read, write;
 import std.path : buildPath;
@@ -233,6 +234,12 @@ private:
             foreach (chunkZ; -initialChunkRadius .. initialChunkRadius + 1)
             foreach (chunkX; -initialChunkRadius .. initialChunkRadius + 1)
                 loadOrGenerateChunk(chunkX, chunkZ);
+            const spawnX=chunkCoordinate(cast(int)floorf(settings.spawn.x));
+            const spawnZ=chunkCoordinate(cast(int)floorf(settings.spawn.z));
+            foreach(dz;-initialChunkRadius..initialChunkRadius+1)
+            foreach(dx;-initialChunkRadius..initialChunkRadius+1)
+                if(!hasChunk(spawnX+dx,spawnZ+dz))
+                    loadOrGenerateChunk(spawnX+dx,spawnZ+dz);
             if (progress !is null) progress(100);
         }
         else
@@ -268,7 +275,7 @@ public:
         saveWorldMetadata(saveDirectory, settings);
         mkdirRecurse(buildPath(saveDirectory, "chunks"));
         foreach (coordinate, loaded; chunks)
-            write(chunkPath(coordinate.x, coordinate.z), loaded.snapshot());
+            atomicWrite(chunkPath(coordinate.x, coordinate.z), loaded.snapshot());
         dirtyChunks.clear();
     }
 
@@ -279,7 +286,7 @@ public:
         mkdirRecurse(buildPath(saveDirectory,"chunks"));
         foreach(coordinate,dirty;dirtyChunks)
             if(auto loaded=coordinate in chunks)
-                write(chunkPath(coordinate.x,coordinate.z),(*loaded).snapshot());
+                atomicWrite(chunkPath(coordinate.x,coordinate.z),(*loaded).snapshot());
         dirtyChunks.clear();
     }
 
@@ -297,8 +304,13 @@ public:
             if (progress !is null)
                 progress(5 + ++generated * 85 / total);
         }
-        settings.spawn = chooseSpawn();
-        clearSpawn(settings.spawn);
+        if(settings.generatorVersion>=2 && settings.worldType==WorldType.normal)
+            settings.spawn = chooseNaturalSpawn();
+        else
+        {
+            settings.spawn = chooseSpawn();
+            clearSpawn(settings.spawn);
+        }
         ++revision;
         if (progress !is null) progress(100);
     }
@@ -439,7 +451,7 @@ public:
         if (persist && saveDirectory.length)
         {
             mkdirRecurse(buildPath(saveDirectory, "chunks"));
-            write(chunkPath(chunkX, chunkZ), (*loaded).snapshot());
+            atomicWrite(chunkPath(chunkX, chunkZ), (*loaded).snapshot());
         }
         destroy(*loaded);
         chunks.remove(coordinate);
@@ -1066,6 +1078,12 @@ private:
 
     void generateOverworldChunk(Chunk target)
     {
+        if(settings.generatorVersion>=2 && settings.worldType==WorldType.normal)
+        {
+            import minecraftd.world.generation.overworld : generateOverworld;
+            generateOverworld(target,settings);
+            return;
+        }
         enum int seaLevel = 63;
         const phase = cast(float)(settings.seed & 1023) * 0.0061359f;
         foreach (localZ; 0 .. Chunk.depth)
@@ -1186,6 +1204,45 @@ private:
         }
         return Vec3(0.5f,64.0f,0.5f);
     }
+
+    Vec3 chooseNaturalSpawn()
+    {
+        import minecraftd.world.generation.overworld : columnAt;
+        import minecraftd.world.generation.biomes : definition;
+        import minecraftd.world.block : isLeaves;
+        // Search cheap columns first, then generate only a candidate's local
+        // neighborhood. A seed may start in an ocean or dense canopy at 0,0.
+        foreach(radius;0..65)
+        foreach(gz;-radius..radius+1)foreach(gx;-radius..radius+1)
+        {
+            if(radius && gx!=-radius && gx!=radius && gz!=-radius && gz!=radius)continue;
+            const cx=gx*64,cz=gz*64;
+            const candidate=columnAt(cx,cz,settings);
+            if(candidate.water || candidate.height<65 || candidate.height>120
+                || definition(candidate.biome).surface!=BlockId.grass)continue;
+            foreach(dz;-1..2)foreach(dx;-1..2)
+                ensureChunk(chunkCoordinate(cx)+dx,chunkCoordinate(cz)+dz);
+            foreach(z;cz-8..cz+9)foreach(x;cx-8..cx+9)
+            {
+                const ground=columnAt(x,z,settings);
+                const y=ground.height;
+                if(ground.water || getBlock(x,y,z)!=BlockId.grass)continue;
+                if(getBlock(x,y+1,z)==BlockId.air && getBlock(x,y+2,z)==BlockId.air)
+                    return Vec3(x+.5f,y+1,z+.5f);
+            }
+        }
+        // Exceptionally hostile seeds still get a solid, dry fallback surface.
+        foreach(z;-16..32)foreach(x;-16..32)
+        {
+            const y=surfaceAt(x,z);
+            if(y>=seaLevelForSpawn && !isWater(getBlock(x,y+1,z)))
+                return Vec3(x+.5f,y+1,z+.5f);
+        }
+        const fallback=Vec3(.5f,65,.5f);
+        clearSpawn(fallback);
+        return fallback;
+    }
+    enum seaLevelForSpawn=63;
 
     Vec3 chooseSpawn() const
     {

@@ -76,6 +76,11 @@ float4 PSMain(PixelInput input) : SV_TARGET
 {
     float4 sampled = gTexture.Sample(gSampler, input.uv);
     clip(sampled.a - 0.02f);
+    if (gFogDistances.z > 0.0f)
+    {
+        clip(sampled.a - gFogDistances.z);
+        sampled.a = 1.0f;
+    }
     float4 color = sampled * input.color;
     float horizontalDistance = length(input.worldPosition.xz - gFogCameraAndEnabled.xz);
     float fogRange = max(gFogDistances.y - gFogDistances.x, 0.001f);

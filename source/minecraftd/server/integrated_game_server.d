@@ -1,5 +1,7 @@
 module minecraftd.server.integrated_game_server;
 
+import minecraftd.server.player_saves;
+import minecraftd.world.atomic_file : atomicWrite;
 import core.atomic : atomicLoad, atomicStore;
 import core.stdc.math : atan2f, cosf, floorf, sinf;
 import core.sync.mutex : Mutex;
@@ -114,6 +116,7 @@ private final class ServerPlayer
     uint id;
     string name;
     string accountId;
+    string saveIdentity;
     string skinVersion;
     string skinModel = "classic";
     bool host;
@@ -190,6 +193,9 @@ final class IntegratedGameServer
     private uint serverTick;
     private uint randomState = 0x9E3779B9u;
     private uint savedWorldRevision;
+    private shared bool saveRequested;
+    private uint saveSerial;
+    private MonoTime nextAutosave;
     private Inventory[string] furnaces;
     private uint savedNetherRevision;
     private ushort listeningPort;
@@ -241,13 +247,6 @@ private:
             netherWorld.dimension = DimensionId.nether;
             netherWorld.generateNether();
         }
-        if (world.settings.effectiveGameMode() == GameMode.creative
-            && !containsBlock(world, BlockId.obsidian))
-        {
-            const spawn = world.settings.spawn;
-            createTestPortalFrame(world, cast(int)spawn.x + 3,
-                cast(int)spawn.y, cast(int)spawn.z + 3, PortalAxis.x);
-        }
         savedNetherRevision = netherWorld.contentRevision;
         savedWorldRevision = world.contentRevision;
         loadFurnaces();
@@ -261,6 +260,7 @@ private:
         listener.bind(new InternetAddress("0.0.0.0", port));
         listeningPort = (cast(InternetAddress) listener.localAddress).port;
         listener.listen(32);
+        nextAutosave=MonoTime.currTime+30_000.msecs;
         atomicStore(running, true);
         acceptThread = new Thread({ acceptLoop(); });
         tickThread = new Thread({ tickLoop(); });
@@ -295,6 +295,8 @@ public:
         atomicStore(pauseRequested, value);
     }
 
+    void requestSave(){atomicStore(saveRequested,true);}
+
     bool canPause() const { return atomicLoad(pauseAllowed); }
 
     bool isPaused() const
@@ -326,7 +328,9 @@ public:
             generationJobs.length=0;
             generationQueued.clear();
         }
-        foreach (player; players){closeInventory(player);destroy(player);}
+        processInbound(); // Drain accepted input/logout packets after workers stop.
+        foreach(player;players){flushPlayerInputs(player);savePlayer(player);destroy(player);}
+        players.clear();
         world.save();
         saveFurnaces();
         saveZombies();
@@ -385,6 +389,60 @@ private:
         enqueue(InboundPacket(peer, GamePacketType.disconnect, null));
     }
 
+    void flushPlayerInputs(ServerPlayer p)
+    {
+        auto queued=p.queuedInputs;p.queuedInputs=null;
+        foreach(input;queued)simulateInput(p,input);
+    }
+
+    void savePlayer(ServerPlayer p)
+    {
+        writePlayerSave(world.saveDirectory,p.saveIdentity,networkState(p));
+    }
+
+    void restorePlayer(ServerPlayer p)
+    {
+        NetworkPlayerState s;
+        if(!readPlayerSave(world.saveDirectory,p.saveIdentity,s))return;
+        auto player=p.player;
+        player.position=player.previousPosition=s.position;
+        player.yaw=player.smoothedViewYaw=player.previousSmoothedViewYaw=s.yaw;
+        player.pitch=player.smoothedViewPitch=player.previousSmoothedViewPitch=s.pitch;
+        player.bodyYaw=player.previousBodyYaw=s.bodyYaw;
+        player.inventory=s.inventory;player.selectedSlot=s.selectedSlot;
+        player.gameMode=s.gameMode;player.flying=s.flying;
+        player.health=player.previousDisplayedHealth=s.health;
+        player.foodLevel=s.food;player.saturationLevel=s.saturation;
+        player.totalExperience=s.score;player.experienceLevel=s.experienceLevel;
+        player.experienceProgress=s.experienceProgress;player.deathTime=s.deathTime;
+        player.airSupply=s.airSupply;player.fireTicks=s.fireTicks;
+        player.dimension=p.dimension=s.dimension;p.deathMessage=s.deathMessage;
+    }
+
+    void saveAll()
+    {
+        world.saveDirtyChunks();netherWorld.saveDirtyChunks();
+        saveFurnaces();saveZombies();
+        foreach(p;players)savePlayer(p);
+    }
+
+    void maybeAutosave()
+    {
+        if(!world.saveDirectory.length)return;
+        if(!atomicLoad(saveRequested)&&MonoTime.currTime<nextAutosave)return;
+        atomicStore(saveRequested,false);
+        nextAutosave=MonoTime.currTime+30_000.msecs;
+        ++saveSerial;
+        void notify(bool busy,bool failed)
+        {
+            PacketWriter w;w.putU32(saveSerial);w.putBool(busy);w.putBool(failed);
+            broadcast(framePacket(GamePacketType.saveStatus,w.data));
+        }
+        notify(true,false);
+        try{saveAll();notify(false,false);}
+        catch(Exception e){notify(false,true);broadcastChat("World save failed: "~e.msg,true);}
+    }
+
     void tickLoop()
     {
         while (atomicLoad(running))
@@ -429,6 +487,7 @@ private:
                 serverPlayer.input.usePressed = false;
                 serverPlayer.input.attackPressed = false;
             }
+            maybeAutosave();
             if (serverTick % 40 == 0)
                 sendKeepAlives();
             broadcastSnapshots();
@@ -494,18 +553,7 @@ private:
                 broadcastBlockChange(change.x,change.y,change.z,change.oldBlock,
                     change.newBlock,0,DimensionId.nether);
         }
-        if (serverTick % 100 == 0
-            && world.contentRevision != savedWorldRevision)
-        {
-            world.saveDirtyChunks();
-            savedWorldRevision = world.contentRevision;
-        }
-        if (serverTick % 100 == 0
-            && netherWorld.contentRevision != savedNetherRevision)
-        {
-            netherWorld.saveDirtyChunks();
-            savedNetherRevision = netherWorld.contentRevision;
-        }
+        maybeAutosave();
         removeTimedOutPeers();
         if (serverTick % 40 == 0)
             sendKeepAlives();
@@ -696,6 +744,23 @@ private:
                 case GamePacketType.chunkData:
                 case GamePacketType.chunkUnload:
                     break;
+                case GamePacketType.saveAndQuit:
+                    if(auto found=packet.peer.playerId in players)
+                    {
+                        auto p=*found;flushPlayerInputs(p);
+                        auto r=PacketReader(packet.payload);
+                        const yaw=r.readF32(),pitch=r.readF32();
+                        import std.math : isFinite;
+                        if(r.valid&&isFinite(yaw)&&isFinite(pitch)&&pitch>=-90&&pitch<=90)
+                        {p.player.yaw=yaw;p.player.pitch=pitch;}
+                        PacketWriter reply;
+                        try{saveAll();reply.putBool(true);}
+                        catch(Exception e){reply.putBool(false);reply.putString(e.msg);}
+                        sendTo(packet.peer,framePacket(GamePacketType.saveComplete,reply.data));
+                    }
+                    break;
+                case GamePacketType.saveComplete, GamePacketType.saveStatus:
+                    break;
                 case GamePacketType.disconnect:
                     disconnectPeer(packet.peer);
                     break;
@@ -809,7 +874,7 @@ private:
 
     void acceptLogin(ServerPeer peer, const(ubyte)[] payload)
     {
-        if (peer.loggedIn)
+        if (peer.loggedIn || !atomicLoad(running))
             return;
         PacketReader reader = PacketReader(payload);
         const versionValue = reader.readU16();
@@ -857,6 +922,13 @@ private:
             world.settings.effectiveGameMode(), world.settings.hardcore);
         serverPlayer.accountId=accountId.idup;
         serverPlayer.host=recognizedHost;
+        serverPlayer.saveIdentity=recognizedHost?"host":accountId.length?"account:"~accountId:"offline:"~requested;
+        try{restorePlayer(serverPlayer);}
+        catch(Exception e)
+        {destroy(serverPlayer);disconnectWithReason(peer,"Could not load player save: "~e.msg);return;}
+        spawn=serverPlayer.player.position;
+        auto activeWorld=worldFor(serverPlayer.dimension);
+        activeWorld.ensureChunksAround(spawn,1,9);
         serverPlayer.skinVersion=skinVersion.idup;
         serverPlayer.skinModel=skinModel=="slim"?"slim":"classic";
         players[id] = serverPlayer;
@@ -866,10 +938,11 @@ private:
         PacketWriter response;
         response.putU16(gameProtocolVersion);
         response.putU32(id); response.putString(name); response.putVec3(spawn);
-        response.putU8(cast(ubyte) DimensionId.overworld);
+        response.putU8(cast(ubyte) serverPlayer.dimension);
+        response.putPlayer(networkState(serverPlayer));
         sendTo(peer, framePacket(GamePacketType.loginAccepted, response.data));
         peer.sentChunks.clear();
-        peer.sentDimension=DimensionId.overworld;
+        peer.sentDimension=serverPlayer.dimension;
         syncPeerChunks(peer,serverPlayer,9);
         // Opening an empty integrated world is not a multiplayer join event.
         // Once anybody is already present, broadcast to everyone (including
@@ -1037,7 +1110,7 @@ string furnaceKey(ServerPlayer p)
                 if(auto stored=furnaceKey(p) in furnaces)
                 {inv.work=stored.work;inv.burnTicks=stored.burnTicks;inv.cookTicks=stored.cookTicks;}
         }
-        if(serverTick%100==0)saveFurnaces();
+
     }
     void saveFurnaces()
     {
@@ -1051,8 +1124,7 @@ string furnaceKey(ServerPlayer p)
             output~="\n";
         }
         const path=buildPath(world.saveDirectory,"furnaces.tsv");
-        write(path~".tmp",output);
-        rename(path~".tmp",path);
+        atomicWrite(path,output);
     }
     void loadFurnaces()
     {
@@ -1145,7 +1217,7 @@ string furnaceKey(ServerPlayer p)
         writer.putU32(0x5A4F4D01);writer.putU16(cast(ushort)zombies.length);
         foreach(z;zombies)writer.putZombie(z);
         const path=buildPath(world.saveDirectory,"zombies.dat");
-        write(path~".tmp",writer.data);rename(path~".tmp",path);
+        atomicWrite(path,writer.data);
     }
 
     void loadZombies()
@@ -1191,7 +1263,7 @@ string furnaceKey(ServerPlayer p)
             if(zombie.deathTime<20)zombies[count++]=zombie;
         }
         zombies.length=count;
-        if(serverTick%100==0)saveZombies();
+
     }
 
     bool attackPlayer(ServerPlayer attacker)
@@ -2411,7 +2483,9 @@ bool executeGameplayCommand(ServerPeer peer,ServerPlayer sender,string message)
         string departedName;
         if (peer.playerId in players)
         {
-            closeInventory(players[peer.playerId]);
+            flushPlayerInputs(players[peer.playerId]);
+            try{savePlayer(players[peer.playerId]);}
+            catch(Exception e){broadcastChat("Could not save departing player: "~e.msg,true);}
             departedName = players[peer.playerId].name;
             destroy(players[peer.playerId]);
             players.remove(peer.playerId);

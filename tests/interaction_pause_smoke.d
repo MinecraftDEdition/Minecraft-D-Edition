@@ -52,9 +52,9 @@ void main()
     click(1); waitFor({return changes==1;});
     assert(ack==0 && state.position==position,"Click must not advance movement");
     PacketWriter inventory;inventory.putU8(cast(ubyte)PlayerActionType.creativeSetHotbar);
-    inventory.putU16(cast(ushort)ItemId.stone);inventory.putU8(0);
+    inventory.putU16(cast(ushort)ItemId.oakLog);inventory.putU8(0);
     a.send(GamePacketType.playerAction,inventory.data);
-    waitFor({return state.inventory.hotbar[0].item==ItemId.stone;});
+    waitFor({return state.inventory.hotbar[0].item==ItemId.oakLog;});
     click(2);waitFor({return changes==2;});
     assert(ack==0,"Placement must not synthesize a movement tick");
     server.setPaused(true);

@@ -895,6 +895,7 @@ final class GameClient
         {
             if (eosHostBridge !is null) destroy(eosHostBridge);
             multiplayer.requestDisconnect();
+            if(multiplayer.disconnectReason.length)renderer.setTitleNotice(multiplayer.disconnectReason);
             destroy(multiplayer);
             if (integratedServer !is null) destroy(integratedServer);
         }

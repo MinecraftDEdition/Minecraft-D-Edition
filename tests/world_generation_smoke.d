@@ -3,6 +3,7 @@ module world_generation_smoke;
 import std.file : exists, getcwd, rmdirRecurse;
 import std.path : buildPath;
 import std.stdio : writeln;
+import std.math : floor;
 import minecraftd.client.player.local_player : LocalPlayer;
 import minecraftd.common.math3d : Vec3;
 import minecraftd.world.block : BlockId;
@@ -27,7 +28,7 @@ void main()
     });
     assert(lastProgress == 100);
     const spawn = world.settings.spawn;
-    const sx = cast(int)spawn.x, sy = cast(int)spawn.y, sz = cast(int)spawn.z;
+    const sx = cast(int)floor(spawn.x), sy = cast(int)spawn.y, sz = cast(int)floor(spawn.z);
     assert(world.getBlock(sx,sy-1,sz) == BlockId.grass);
     assert(world.getBlock(sx,sy,sz) == BlockId.air);
     assert(world.getBlock(sx,sy+1,sz) == BlockId.air);
@@ -48,7 +49,9 @@ void main()
             if(world.getBlock(x,y,z)==BlockId.air) ++caveAir;
         assert(world.getBlock(x,world.minimumBuildY(),z)==BlockId.bedrock);
     }
-    assert(maximum-minimum >= 4);
+    // Broad plains need not change four blocks within the initial 48x48 area.
+    // Larger-scale relief and bank slopes are checked in overworld_v2_smoke.
+    assert(maximum>minimum);
     assert(caveAir > 0);
     world.save();
     const original = world.chunk.snapshot();
@@ -60,6 +63,20 @@ void main()
     assert(loaded.settings.spawn.x == spawn.x
         && loaded.settings.spawn.y == spawn.y
         && loaded.settings.spawn.z == spawn.z);
+    assert(loaded.getBlock(sx,sy-1,sz)==BlockId.grass,
+        "A distant natural spawn must be loaded when reopening the save");
+    const legacyDirectory=buildPath(directory,"legacy-generator");
+    auto legacySettings=settings;legacySettings.generatorVersion=1;
+    auto legacy=new World(legacySettings,legacyDirectory);
+    const originalLegacy=legacy.chunk.snapshot();
+    auto unexplored=legacy.buildDetachedChunk(17,-12);
+    const originalUnexplored=unexplored.snapshot();destroy(unexplored);destroy(legacy);
+    legacy=new World(settings,legacyDirectory);
+    assert(legacy.settings.generatorVersion==1&&legacy.chunk.snapshot()==originalLegacy);
+    unexplored=legacy.buildDetachedChunk(17,-12);
+    assert(unexplored.snapshot()==originalUnexplored,
+        "An old world's unexplored terrain must retain its original generator");
+    destroy(unexplored);destroy(legacy);
     assert(loaded.minimumBuildY()==-64&&loaded.maximumBuildY()==319
         &&loaded.voidDamageY()==-128
         &&loaded.horizontalBorder()==29_999_984);

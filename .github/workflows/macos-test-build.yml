@@ -45,6 +45,8 @@ jobs:
         run: |
           ldc2 -i -Isource tests/interaction_pause_smoke.d -of="$RUNNER_TEMP/interaction-pause"
           "$RUNNER_TEMP/interaction-pause"
+          ldc2 -i -Isource tests/player_persistence_smoke.d -of="$RUNNER_TEMP/player-persistence"
+          "$RUNNER_TEMP/player-persistence"
 
       - name: Prepare licensed EOS SDK
         env:
@@ -125,6 +127,14 @@ jobs:
           MDE_REQUIRE_EOS: 1
           MDE_REQUIRE_DISCORD: 1
         run: bash distribution/macos/build_macos.sh
+
+      - name: Verify overworld generation and save compatibility
+        run: |
+          mkdir -p test-output
+          ldc2 -i -O -Isource tests/overworld_v2_smoke.d -of="$RUNNER_TEMP/overworld-v2"
+          "$RUNNER_TEMP/overworld-v2"
+          ldc2 -i -Isource tests/world_generation_smoke.d -of="$RUNNER_TEMP/world-generation"
+          "$RUNNER_TEMP/world-generation"
 
       - name: Verify resource packs and MoltenVK reload recovery
         run: bash tests/Run-ResourcePackSmoke-macos.sh

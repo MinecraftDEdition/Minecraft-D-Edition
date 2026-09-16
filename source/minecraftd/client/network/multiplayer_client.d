@@ -428,6 +428,8 @@ final class MultiplayerClient
     bool localPauseActive;
     string localDeathMessage;
     string disconnectReason;
+    uint saveSerial;
+    bool saveInProgress,saveFailed;
 
     this(GameConnection connection, World world, LocalPlayer localPlayer)
     {
@@ -594,7 +596,27 @@ final class MultiplayerClient
 
     void requestDisconnect()
     {
-        if (connected()) connection.send(GamePacketType.disconnect);
+        if(!connected())return;
+        import core.thread : Thread;
+        import core.time : msecs;
+        PacketWriter writer;writer.putF32(localPlayer.yaw);writer.putF32(localPlayer.pitch);
+        connection.send(GamePacketType.saveAndQuit,writer.data);
+        // Ordered behind all movement/inventory packets. The server acknowledges
+        // only after committing the authoritative pose and inventory to disk.
+        bool acknowledged;
+        foreach(_;0..1500)
+        {
+            foreach(packet;connection.poll())if(packet.type==GamePacketType.saveComplete)
+            {
+                auto r=PacketReader(packet.payload);
+                if(!r.readBool())disconnectReason="Save failed: "~r.readString();
+                acknowledged=r.valid;
+            }
+            if(acknowledged||!connection.connected())break;
+            Thread.sleep(10.msecs);
+        }
+        if(!acknowledged)disconnectReason="Save confirmation was not received from the server.";
+        connection.send(GamePacketType.disconnect);
     }
 
     void poll(ChatState chat)
@@ -652,6 +674,15 @@ final class MultiplayerClient
                 case GamePacketType.chunkData:
                 case GamePacketType.chunkUnload:
                     if(!queueTerrain(packet))return;
+                    break;
+                case GamePacketType.saveStatus:
+                {
+                    auto r=PacketReader(packet.payload);
+                    const serial=r.readU32();const busy=r.readBool(),failed=r.readBool();
+                    if(r.valid){saveSerial=serial;saveInProgress=busy;saveFailed=failed;}
+                    break;
+                }
+                case GamePacketType.saveComplete,GamePacketType.saveAndQuit:
                     break;
                 case GamePacketType.disconnect:
                 {
@@ -836,6 +867,19 @@ private:
         localPlayer.totalExperience = 0;
         localDeathMessage = "";
         pendingInputs.length = 0;
+        if(reader.cursor<reader.data.length)
+        {
+            const restored=reader.readPlayer();
+            if(!reader.valid)return;
+            localPlayer.yaw=localPlayer.smoothedViewYaw=localPlayer.previousSmoothedViewYaw=restored.yaw;
+            localPlayer.pitch=localPlayer.smoothedViewPitch=localPlayer.previousSmoothedViewPitch=restored.pitch;
+            localPlayer.bodyYaw=localPlayer.previousBodyYaw=restored.bodyYaw;
+            localPlayer.selectedSlot=restored.selectedSlot;
+            localPlayer.inventory=restored.inventory;
+            localPlayer.gameMode=restored.gameMode;localPlayer.flying=restored.flying;
+            localPlayer.health=localPlayer.previousDisplayedHealth=restored.health;
+            reconcileLocal(restored,0);
+        }
         loginComplete = true;
     }
 
