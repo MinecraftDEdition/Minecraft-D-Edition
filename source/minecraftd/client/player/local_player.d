@@ -92,9 +92,15 @@ final class LocalPlayer : Player
         smoothedViewYaw += Player.wrapDegrees(yaw - smoothedViewYaw) * 0.5f;
         smoothedViewPitch += (pitch - smoothedViewPitch) * 0.5f;
 
+        const flightActive = gameMode == GameMode.spectator
+            || (gameMode == GameMode.creative && flying);
+
+        // Flight uses the crouch binding only for descent.
         // A player may always enter the smaller crouching pose, but may only
         // stand when the full 1.8-block box is clear.
-        if (crouchRequested)
+        if (flightActive)
+            crouching = false;
+        else if (crouchRequested)
             crouching = true;
         else if (crouching && world.isUnobstructed(standingBoundingBox()))
             crouching = false;
@@ -109,8 +115,6 @@ final class LocalPlayer : Player
         }
 
         const yawRadians = yaw * DEG_TO_RAD;
-        const flightActive = gameMode == GameMode.spectator
-            || (gameMode == GameMode.creative && flying);
         eyeInWater = world.isPointInWater(eyePosition(1.0f));
         inWater = world.intersectsWater(boundingBox());
         const speed = flightActive ? (sprinting ? 21.84f : 10.92f)
@@ -536,4 +540,22 @@ unittest
             false,true);
     assert(swimmer.health==18.0f&&swimmer.airSupply==0
         &&swimmer.drowningDamageDue);
+}
+
+unittest
+{
+    auto world = new World();
+    scope(exit) destroy(world);
+    foreach (mode; [GameMode.creative, GameMode.spectator])
+    {
+        auto player = new LocalPlayer();
+        scope(exit) destroy(player);
+        player.gameMode = mode;
+        player.flying = true;
+        player.crouching = true;
+        player.position = player.previousPosition = Vec3(8, 240, 3);
+        player.simulateTick(world, false, false, false, false, false, true, false);
+        assert(!player.crouching && player.position.y < 240 && player.velocity.y < 0,
+            "Flight descent must not activate the crouch pose");
+    }
 }

@@ -161,8 +161,7 @@ unittest
 unittest
 {
     // Adjacent flat faces with identical texture and baked lighting collapse
-    // into a repeating quad. The surrounding sides may retain individual AO,
-    // but the 2x2 top must no longer cost four separate quads.
+    // into a repeating surface with a subdivided, watertight perimeter.
     auto flatWorld=new World();
     scope(exit)destroy(flatWorld);
     foreach(y;1..3)foreach(z;0..Chunk.depth)foreach(x;0..Chunk.width)
@@ -176,7 +175,7 @@ unittest
     const geometry=renderer.buildChunkRange(textures,ChunkCoordinate(0,0),1,1);
     auto stone=42 in geometry;
     assert(stone !is null,"missing stone geometry");
-    assert(stone.length<72,"stone vertices: "~to!string(stone.length));
+    assert(stone.length<=72,"stone vertices: "~to!string(stone.length));
     bool repeats;
     foreach(vertex;*stone)
         if(vertex.uv[0]>1.5f||vertex.uv[1]>1.5f)repeats=true;
@@ -716,9 +715,43 @@ private:
                 repeatU=spanU;repeatV=spanV;break;
             }
         }
-        appendQuad(output,a,b,c,d,Vec2(0,repeatV),
-            Vec2(repeatU,repeatV),Vec2(repeatU,0),Vec2(0,0),
-            color,color,color,color);
+        appendSealedFace(output,a,b,c,d,cast(int)repeatU,cast(int)repeatV,color);
+    }
+
+    // Greedy rectangles must share unit-length boundary segments with every
+    // neighboring block, including other chunks and vertical mesh sections.
+    // Otherwise a short edge ends in the middle of a long rasterized edge:
+    // floating-point rounding can expose a pixel of sky at that T-junction.
+    static void appendSealedFace(ref Vertex[] output,Vec3 a,Vec3 b,Vec3 c,Vec3 d,
+        int width,int height,Color color)
+    {
+        if(width==1&&height==1)
+        {
+            appendQuad(output,a,b,c,d,Vec2(0,1),Vec2(1,1),Vec2(1,0),Vec2(0,0),
+                color,color,color,color);
+            return;
+        }
+        const center=Vertex((a+c)*.5f,Vec2(width*.5f,height*.5f),color);
+        const points=[a,b,c,d];
+        const uvs=[Vec2(0,height),Vec2(width,height),Vec2(width,0),Vec2(0,0)];
+        foreach(edge;0..4)
+        {
+            const steps=(edge&1)?height:width;
+            const next=(edge+1)%4;
+            const step=(points[next]-points[edge])/cast(float)steps;
+            const du=(uvs[next].x-uvs[edge].x)/steps;
+            const dv=(uvs[next].y-uvs[edge].y)/steps;
+            foreach(i;0..steps)
+            {
+                // Axis-aligned integer steps are exact, unlike interpolating
+                // the endpoints using i/steps. UVs still repeat per block.
+                output~=center;
+                output~=Vertex(points[edge]+step*i,
+                    Vec2(uvs[edge].x+du*i,uvs[edge].y+dv*i),color);
+                output~=Vertex(points[edge]+step*(i+1),
+                    Vec2(uvs[edge].x+du*(i+1),uvs[edge].y+dv*(i+1)),color);
+            }
+        }
     }
 
     static void appendFaceWithColors(ref Vertex[] output,int x,int y,int z,
@@ -1121,4 +1154,32 @@ Color vegetationTint(BlockId block, Face face)
     if(isLeaves(block)&&block!=BlockId.cherryLeaves&&block!=BlockId.paleOakLeaves)
         return Color(.40f,.70f,.25f,1);
     return Color(1,1,1,1);
+}
+
+
+unittest
+{
+    // All six windings and long, thin/large faces; verify exact unit edge
+    // segments and total area rather than merely counting generated vertices.
+    auto world=new World();scope(exit)destroy(world);
+    auto blocks=new BlockRenderer(world);scope(exit)destroy(blocks);
+    foreach(face;[Face.down,Face.up,Face.north,Face.south,Face.west,Face.east])
+    foreach(size;[1,2,7,16])
+    {
+        Vertex[] geometry;
+        blocks.appendMergedFace(geometry,ChunkCoordinate(-70,93),face,4,0,0,size,3,-48,Color(1,1,1,1));
+        float area=0;
+        foreach(i;0..geometry.length/3)
+        {
+            const a=Vec3(geometry[i*3].position[0],geometry[i*3].position[1],geometry[i*3].position[2]);
+            const b=Vec3(geometry[i*3+1].position[0],geometry[i*3+1].position[1],geometry[i*3+1].position[2]);
+            const c=Vec3(geometry[i*3+2].position[0],geometry[i*3+2].position[1],geometry[i*3+2].position[2]);
+            import minecraftd.common.math3d : cross,dot;
+            assert((c-b).lengthSquared()==1,"Every merged perimeter segment must span exactly one block");
+            const normal=cross(b-a,c-a);
+            assert(dot(normal,blocks.faceNormal(face))>0,"Sealing must preserve outward winding");
+            area+=normal.length()*.5f;
+        }
+        assert(area==size*3,"Sealed triangles must cover exactly the original face");
+    }
 }

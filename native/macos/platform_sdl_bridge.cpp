@@ -85,6 +85,8 @@ int keyFromScancode(SDL_Scancode scancode) {
     if (scancode >= SDL_SCANCODE_F1 && scancode <= SDL_SCANCODE_F12)
         return KeyF1 + static_cast<int>(scancode - SDL_SCANCODE_F1);
     switch (scancode) {
+        case SDL_SCANCODE_SLASH: return 0xBF;
+        case SDL_SCANCODE_KP_DIVIDE: return 0x6F;
         case SDL_SCANCODE_BACKSPACE: return KeyBackspace;
         case SDL_SCANCODE_TAB: return KeyTab;
         case SDL_SCANCODE_RETURN:

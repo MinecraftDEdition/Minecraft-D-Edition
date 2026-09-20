@@ -2634,17 +2634,17 @@ private:
         Vertex[] retained;
         retained.reserve(geometry.length);
         size_t offset;
-        for(;offset+6<=geometry.length;offset+=6)
+        for(;offset+3<=geometry.length;offset+=3)
         {
             bool belongs=true;
-            foreach(vertex;geometry[offset..offset+6])
+            foreach(vertex;geometry[offset..offset+3])
             {
                 const px=vertex.position[0],py=vertex.position[1],
                     pz=vertex.position[2];
                 if(px<x||px>x+1||py<y||py>y+1||pz<z||pz>z+1)
                 {belongs=false;break;}
             }
-            if(!belongs)retained~=geometry[offset..offset+6];
+            if(!belongs)retained~=geometry[offset..offset+3];
         }
         if(offset<geometry.length)retained~=geometry[offset..$];
         geometry=retained;

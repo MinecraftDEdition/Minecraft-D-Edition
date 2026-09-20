@@ -75,7 +75,7 @@ string[] suggestions;
         return true;
     }
 
-    void open()
+    void open(bool command = false)
     {
         suggestionInput="";suggestions=null;
         active = true;
@@ -83,6 +83,11 @@ string[] suggestions;
         cursor = draftCursor <= input.length ? draftCursor : input.length;
         selectionAnchor = draftSelectionAnchor <= input.length
             ? draftSelectionAnchor : cursor;
+        if (command)
+        {
+            input = "/";
+            cursor = selectionAnchor = 1;
+        }
         screenTicks = 0;
     }
 
@@ -270,4 +275,19 @@ unittest
     chat.close(true);
     chat.open();
     assert(chat.input == "wor" && chat.cursor == 3);
+}
+
+unittest
+{
+    auto chat = new ChatState();
+    chat.open();
+    chat.paste("unfinished message");
+    chat.close(true);
+    chat.open();
+    assert(chat.input == "unfinished message");
+    chat.close(true);
+    chat.open(true);
+    assert(chat.active && chat.input == "/" && chat.cursor == 1 && !chat.hasSelection);
+    chat.paste("help");
+    assert(chat.input == "/help");
 }

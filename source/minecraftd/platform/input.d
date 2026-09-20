@@ -28,6 +28,8 @@ enum int KEY_F5 = 0x74;
 enum int KEY_F11 = 0x7A;
 enum int KEY_LEFT_SHIFT = 0xA0;
 enum int KEY_RIGHT_SHIFT = 0xA1;
+enum int KEY_SLASH = 0xBF;
+enum int KEY_NUMPAD_DIVIDE = 0x6F;
 enum int KEY_OEM_PLUS = 0xBB;
 enum int KEY_NUMPAD_ADD = 0x6B;
 

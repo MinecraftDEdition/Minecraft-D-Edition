@@ -13,6 +13,7 @@ import std.utf : toUTF16, toUTF16z, toUTF8;
 
 import minecraftd.platform.desktop.gamepad : SdlGamepad;
 import minecraftd.platform.input : GamepadState;
+import minecraftd.platform.windows.input_state : WindowInputState;
 
 private __gshared int pendingWheelDelta;
 private __gshared wchar[256] pendingCharacters;
@@ -22,6 +23,34 @@ private __gshared int pendingClientHeight;
 private __gshared HCURSOR desiredCursor;
 private __gshared bool closeRequested;
 private __gshared bool focusLost;
+private __gshared WindowInputState deliveredInput;
+private __gshared bool controllerNeedsNeutral;
+
+private void resetWindowInput(bool suppressPhysical) nothrow
+{
+    deliveredInput.reset();
+    if(suppressPhysical)foreach(key;0..256)
+        deliveredInput.suppressHeld(key,(GetAsyncKeyState(key)&0x8000)!=0);
+    framePressed[]=false;frameRepeated[]=false;
+    pendingWheelDelta=0;pendingCharacterCount=0;
+    mouseGeometryChanged=true;
+    controllerNeedsNeutral=true;
+}
+
+private int sidedModifier(WPARAM key,LPARAM data) nothrow
+{
+    if(key==VK_SHIFT)return cast(int)MapVirtualKeyW(cast(UINT)((data>>16)&0xff),MAPVK_VSC_TO_VK_EX);
+    if(key==VK_CONTROL)return (data&(1L<<24))?VK_RCONTROL:VK_LCONTROL;
+    if(key==VK_MENU)return (data&(1L<<24))?VK_RMENU:VK_LMENU;
+    return cast(int)key;
+}
+
+private void mouseButton(HWND window,int key,bool pressed) nothrow
+{
+    if(!pressed){deliveredInput.release(key);return;}
+    if(GetForegroundWindow()==window&&GetFocus()==window&&deliveredInput.press(key))
+        framePressed[key]=true;
+}
 private __gshared bool mouseGeometryChanged;
 private __gshared bool[256] framePressed;
 private __gshared bool[256] frameRepeated;
@@ -40,33 +69,63 @@ extern (Windows) LRESULT windowProcedure(HWND window, UINT message, WPARAM wPara
     {
         case WM_KILLFOCUS:
             focusLost=true;
-            framePressed[]=false;
-            frameRepeated[]=false;
-            pendingWheelDelta=0;
-            pendingCharacterCount=0;
+            resetWindowInput(false);
             ReleaseCapture();
+            return DefWindowProcW(window,message,wParam,lParam);
+        case WM_SETFOCUS:
+            resetWindowInput(true);
+            return DefWindowProcW(window,message,wParam,lParam);
+        case WM_MOUSEACTIVATE:
+            // The click returning from Discord activates the game, not a block.
+            return MA_ACTIVATEANDEAT;
+        case WM_KEYUP:
+        case WM_SYSKEYUP:
+            deliveredInput.release(cast(int)wParam);
+            deliveredInput.release(sidedModifier(wParam,lParam));
             return DefWindowProcW(window,message,wParam,lParam);
         case WM_KEYDOWN:
         case WM_SYSKEYDOWN:
             // Bit 30 is set for auto-repeated key-down messages. `pressed`
             // represents a physical up-to-down edge, so latch only the first.
-            if (wParam < framePressed.length)
+            const repeat=(lParam & (1L << 30)) != 0;
+            if (GetForegroundWindow()==window && GetFocus()==window
+                && wParam < framePressed.length && deliveredInput.press(cast(int)wParam,repeat))
             {
-                if ((lParam & (1L << 30)) == 0)
+                const sided=sidedModifier(wParam,lParam);
+                if(sided!=wParam&&deliveredInput.press(sided,repeat))
+                {
+                    if(repeat)frameRepeated[sided]=true;
+                    else framePressed[sided]=true;
+                }
+                if (!repeat)
                     framePressed[cast(size_t) wParam] = true;
                 else
                     frameRepeated[cast(size_t) wParam] = true;
             }
             return DefWindowProcW(window, message, wParam, lParam);
+        case WM_LBUTTONUP:
+            mouseButton(window,VK_LBUTTON,false);
+            return DefWindowProcW(window,message,wParam,lParam);
         case WM_LBUTTONDOWN:
-            framePressed[VK_LBUTTON] = true;
+            mouseButton(window,VK_LBUTTON,true);
             return DefWindowProcW(window, message, wParam, lParam);
+        case WM_RBUTTONUP:
+            mouseButton(window,VK_RBUTTON,false);
+            return DefWindowProcW(window,message,wParam,lParam);
         case WM_RBUTTONDOWN:
-            framePressed[VK_RBUTTON] = true;
+            mouseButton(window,VK_RBUTTON,true);
             return DefWindowProcW(window, message, wParam, lParam);
+        case WM_MBUTTONUP:
+            mouseButton(window,VK_MBUTTON,false);
+            return DefWindowProcW(window,message,wParam,lParam);
         case WM_MBUTTONDOWN:
-            framePressed[VK_MBUTTON] = true;
+            mouseButton(window,VK_MBUTTON,true);
             return DefWindowProcW(window, message, wParam, lParam);
+        case WM_XBUTTONDOWN:
+        case WM_XBUTTONUP:
+            mouseButton(window,((wParam>>16)&0xffff)==XBUTTON1?VK_XBUTTON1:VK_XBUTTON2,
+                message==WM_XBUTTONDOWN);
+            return TRUE;
         case WM_CLOSE:
             // Let GameWindow's destructor persist placement/fullscreen state
             // while the HWND is still valid, then destroy it during teardown.
@@ -78,10 +137,12 @@ extern (Windows) LRESULT windowProcedure(HWND window, UINT message, WPARAM wPara
         case WM_ERASEBKGND:
             return 1;
         case WM_MOUSEWHEEL:
+            if(GetForegroundWindow()!=window||GetFocus()!=window)return 0;
             pendingWheelDelta += cast(short) ((wParam >> 16) & 0xFFFF);
             return 0;
         case WM_CHAR:
-            if (pendingCharacterCount < pendingCharacters.length)
+            if (GetForegroundWindow()==window&&GetFocus()==window
+                &&pendingCharacterCount < pendingCharacters.length)
                 pendingCharacters[pendingCharacterCount++] = cast(wchar) wParam;
             return 0;
         case WM_MOVE:
@@ -245,6 +306,10 @@ final class GameWindow
             closeRequested = false;
             running = false;
         }
+        // Physical state is used only to clear missed releases, never to
+        // synthesize keys that Discord (or another overlay) intercepted.
+        foreach(key;0..256)
+            if((GetAsyncKeyState(key)&0x8000)==0)deliveredInput.release(key);
         pollGamepad();
         if(focusLost)
         {
@@ -254,6 +319,7 @@ final class GameWindow
         applyMouseCapture(captureRequested&&focused());
         if(!focused())
         {
+            deliveredInput.reset();
             framePressed[]=false;
             frameRepeated[]=false;
             pendingWheelDelta=0;
@@ -261,11 +327,12 @@ final class GameWindow
         }
     }
 
-    bool focused() const { return GetForegroundWindow()==handle; }
+    bool focused() const
+    { return GetForegroundWindow()==handle&&GetFocus()==handle&&!IsIconic(cast(HWND)handle); }
 
     GamepadState gamepadState() const
     {
-        return focused()?gamepad:GamepadState.init;
+        return focused()&&!controllerNeedsNeutral?gamepad:GamepadState.init;
     }
 
     bool consumeResize(out int resizedWidth, out int resizedHeight)
@@ -282,7 +349,11 @@ final class GameWindow
 
     bool down(int virtualKey) const
     {
-        return focused()&&(GetAsyncKeyState(virtualKey) & 0x8000) != 0;
+        if(!focused())return false;
+        if(virtualKey==VK_SHIFT)return deliveredInput.down(VK_LSHIFT)||deliveredInput.down(VK_RSHIFT);
+        if(virtualKey==VK_CONTROL)return deliveredInput.down(VK_LCONTROL)||deliveredInput.down(VK_RCONTROL);
+        if(virtualKey==VK_MENU)return deliveredInput.down(VK_LMENU)||deliveredInput.down(VK_RMENU);
+        return deliveredInput.down(virtualKey);
     }
 
     bool pressed(int virtualKey) const
@@ -460,6 +531,7 @@ final class GameWindow
         if (mouseCaptured == capture && handle !is null)
             return;
         mouseCaptured = capture;
+        mouseGeometryChanged=true;
         if (capture)
         {
             SetCapture(handle);
@@ -482,6 +554,14 @@ private:
     {
         gamepad = gamepadBackend is null
             ? GamepadState.init : gamepadBackend.poll();
+        if(!focused())controllerNeedsNeutral=true;
+        else if(controllerNeedsNeutral && gamepad.buttons==0&&!gamepad.hasStickActivity()
+            &&gamepad.leftTrigger<0.1f&&gamepad.rightTrigger<0.1f)
+        {
+            controllerNeedsNeutral=false;
+            gamepad.pressedButtons=gamepad.releasedButtons=0;
+            gamepad.leftTriggerPressed=gamepad.rightTriggerPressed=false;
+        }
     }
 
     struct SavedState

@@ -7,6 +7,7 @@
 #include <string>
 
 #if defined(_WIN32)
+#include <windows.h>
 #define MCD_DISCORD_EXPORT __declspec(dllexport)
 #else
 #define MCD_DISCORD_EXPORT __attribute__((visibility("default")))
@@ -32,6 +33,11 @@ extern "C" MCD_DISCORD_EXPORT int mcdDiscordInitialize(std::uint64_t application
             return 1;
         client = std::make_unique<discordpp::Client>();
         client->SetApplicationId(applicationId);
+#if defined(_WIN32)
+        // Target the running game, including Admin Test, rather than a launcher.
+        // Discord still owns overlay availability and the user's enable toggle.
+        client->SetGameWindowPid(static_cast<std::int32_t>(GetCurrentProcessId()));
+#endif
         return 1;
     }
     catch (...)

@@ -1167,6 +1167,8 @@ final class GameClient
             if (multiplayer.consumeDimensionTravel())
                 renderer.applyDimensionTravel(player.dimension);
 
+            const openCommandPressed = window.pressed(KEY_SLASH)
+                || window.pressed(KEY_NUMPAD_DIVIDE);
             const openChatPressed = window.pressed(
                 options.key(OptionsAction.bindChat))
                 || gamepad.pressed(GamepadButton.dpadUp)
@@ -1546,9 +1548,9 @@ final class GameClient
                     }
                 }
             }
-            else if (!chat.active && openChatPressed)
+            else if (!chat.active && (openChatPressed || openCommandPressed))
             {
-                chat.open();
+                chat.open(openCommandPressed);
                 chatMouseSelecting = false;
                 window.clearTextInput();
                 window.setMouseCapture(false);

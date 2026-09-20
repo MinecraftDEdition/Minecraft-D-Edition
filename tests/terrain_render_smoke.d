@@ -147,6 +147,47 @@ void main()
             assert(sample.rgba[i+1]>245&&sample.rgba[i]<5,"Rear fire drew over nearer fire");
         }
         writeln(name," fire depth ordering passed");
+        // A closed room with stepped walls/ceiling spans chunk and section
+        // boundaries. Any magenta pixel is an actual raster hole, not texture.
+        auto sealedWorld=new World();sealedWorld.clearChunks();
+        scope(exit)destroy(sealedWorld);
+        foreach(z;-2..2)foreach(x;-2..2)sealedWorld.installDetachedChunk(new Chunk(x,z));
+        foreach(z;-18..19)foreach(x;-18..19)foreach(y;0..21)
+        {
+            const ceiling=17+((x+18)/3)%3;
+            if(x==-18||x==18||z==-18||z==18||y==0||y>=ceiling)
+                sealedWorld.setBlock(x,y,z,BlockId.stone);
+        }
+        auto sealedBlocks=new BlockRenderer(sealedWorld);scope(exit)destroy(sealedBlocks);
+        sealedBlocks.configure(false,0);
+        BlockTextureSet sealedTextures;sealedTextures.stone=greenTexture;
+        auto sealedGeometry=sealedBlocks.build(sealedTextures);
+        foreach(angle;0..24)
+        {
+            const roomEye=Vec3(.137f+angle*.021f,8.317f,-.193f);
+            const direction=forwardFromYawPitch(angle*15.0f+.37f,angle%2?37.3f:-29.7f);
+            const camera=lookToLH(roomEye,direction,Vec3(0,1,0))
+                *perspectiveFovLH(83*DEG_TO_RAD,960.0f/540,.05f,128);
+            frame.clear(Color(1,0,1,1));
+            foreach(texture,geometry;sealedGeometry)
+                frame.append(geometry,texture,camera,DrawLayer.world);
+            frame.append(quad,graphics.menuBlurTexture().descriptorIndex,Mat4.identity(),
+                DrawLayer.blurBackdrop,FogSettings.blur(960,540,.01f));
+            foreach(_;0..3)graphics.render(frame);
+            const sample=vulkan?(cast(VulkanDevice)graphics).readBlurPixels()
+                :(cast(Dx12Device)graphics).readBlurPixels();
+            size_t leaks;
+            foreach(i;0..sample.width*sample.height)
+                if(sample.rgba[i*4]>=16||sample.rgba[i*4+2]>=16)++leaks;
+            if(leaks)
+            {
+                ubyte[] pixelsRgb;foreach(i;0..sample.width*sample.height)pixelsRgb~=sample.rgba[i*4..i*4+3];
+                write("test-output/terrain/leaks.ppm",format("P6\n%s %s\n255\n",sample.width,sample.height)~cast(string)pixelsRgb);
+                writeln("Leaks: ",leaks," angle: ",angle);
+            }
+            assert(leaks==0,"Background leaked through closed terrain while moving the camera");
+        }
+        writeln(name," sealed terrain: 24 moving camera views, no background leaks");
         auto sky=new SkyRenderer(ImageData.init);
         const skyColor=Color(.48f,.70f,1,1),haze=FogSettings.init.color;
         const skyView=lookToLH(Vec3(0,0,0),Vec3(0,.25f,1).normalized(),Vec3(0,1,0))
